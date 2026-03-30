@@ -572,7 +572,8 @@ describe("MainAgent State Machine", () => {
 			mockCtx.shouldRunMemoryFlush.mockReturnValueOnce(false).mockReturnValue(true);
 			mockCtx.runMemoryFlush.mockRejectedValue(new Error("flush failed"));
 
-			await expect(agent.handleMessage("check status")).rejects.toThrow("flush failed");
+			// dispatchNext catches and recovers from errors internally
+			await agent.handleMessage("check status");
 			expect(agent.state).toBe("idle");
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "executing" });
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "idle" });
@@ -1067,10 +1068,67 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("MessageQueue drain adds [HUMAN] prefix", () => {
-		it("should add [HUMAN] prefix to all queued messages during EXECUTING", async () => {
-			// Messages queued during EXECUTING should all get [HUMAN] prefix.
-			// Agent event callbacks now go through AgentEventQueue, not MessageQueue.
+	describe("list_agent_tasks tool", () => {
+		it("returns empty message when no tasks and no pending events", async () => {
+			const agent = setupAgent([
+				toolCallResponse("list_agent_tasks", {}, "tc1"),
+				textResponse("No tasks running."),
+			]);
+
+			await agent.handleMessage("what agents are running?");
+
+			const calls = (mockCtx.addMessage as any).mock.calls;
+			const toolResultMsg = calls.find(
+				(c: any) =>
+					c[0].role === "tool" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("No active agent tasks"),
+			);
+			expect(toolResultMsg).toBeDefined();
+		});
+
+		it("returns active tasks when session monitor has tasks", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("list_agent_tasks", {}, "tc1"),
+					textResponse("Session A is waiting for input."),
+				],
+				{},
+				{ withMonitor: true },
+			);
+
+			// Inject a fake task directly via dispatch mock
+			const fakeTask = {
+				taskId: "task_1",
+				sessionId: "cliclaw-test-1",
+				status: "waiting_input" as const,
+				summary: "Implement login flow",
+				taskContext: "Implement login flow",
+				preHash: "abc123",
+				startedAt: Date.now() - 30000,
+				abortController: new AbortController(),
+			};
+			(agent as any).sessionMonitor.tasks.set("cliclaw-test-1", fakeTask);
+
+			await agent.handleMessage("check agents");
+
+			const calls = (mockCtx.addMessage as any).mock.calls;
+			const toolResultMsg = calls.find(
+				(c: any) =>
+					c[0].role === "tool" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("cliclaw-test-1"),
+			);
+			expect(toolResultMsg).toBeDefined();
+			expect(toolResultMsg[0].content).toContain("waiting_input");
+			expect(toolResultMsg[0].content).toContain("Implement login flow");
+		});
+	});
+
+	describe("messages queued during executing are processed after idle", () => {
+		it("should queue messages during executing and process them as separate turns after idle", async () => {
+			// Messages arriving during EXECUTING go into the unified WorkQueue
+			// and are processed as independent user turns after execution completes.
 			mockCtx = createMockContextManager();
 			mockRouter = createMockSignalRouter();
 			mockBroadcaster = createMockBroadcaster();
@@ -1081,23 +1139,22 @@ describe("MainAgent State Machine", () => {
 			const firstStreamGate = createDeferred();
 			let callCount = 0;
 
-			const responses: LLMStreamEvent[][] = [
-				// First call triggers exec_command to enter EXECUTING
-				toolCallResponse("exec_command", { command: "ls", summary: "check" }, "tc1"),
-				// Second call (after drain) returns text
-				textResponse("Got it."),
-			];
-
 			const mockLLM = {
 				stream: vi.fn().mockImplementation(() => {
 					const currentCall = callCount++;
-					const events = responses[currentCall] ?? [];
 
-					return (async function* () {
-						if (currentCall === 0) {
+					if (currentCall === 0) {
+						// First call: user message → tool call (enters executing)
+						return (async function* () {
 							await firstStreamGate.promise;
-						}
-						for (const event of events) {
+							for (const event of toolCallResponse("mark_complete", { summary: "Done" })) {
+								yield event;
+							}
+						})();
+					}
+					// Subsequent calls: process queued messages with text responses
+					return (async function* () {
+						for (const event of textResponse(`Reply to queued message ${currentCall}`)) {
 							yield event;
 						}
 					})();
@@ -1118,32 +1175,163 @@ describe("MainAgent State Machine", () => {
 			// Start the first message — it will block on the gate
 			const handlePromise = agent.handleMessage("do something");
 
-			// Wait a tick for the first message to start processing
+			// Wait a tick for the first message to start dispatching
 			await Promise.resolve();
 			await Promise.resolve();
 
-			// Queue human messages while executing
+			// Queue messages while executing — they go to WorkQueue
 			agent.handleMessage("Hey, how is it going?");
 			agent.handleMessage("Another message");
+
+			// Verify queued notification was broadcast
+			const systemMsgs = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "system" && c[0].message.includes("消息已排队"),
+			);
+			expect(systemMsgs.length).toBeGreaterThanOrEqual(1);
 
 			// Unblock the first LLM call
 			firstStreamGate.resolve();
 
 			await handlePromise;
 
-			// Find addMessage calls to check the prefix behavior
-			const addMessageCalls = mockCtx.addMessage.mock.calls;
+			// Give microtasks a chance to run (dispatchNext is triggered via queueMicrotask)
+			await new Promise((resolve) => setTimeout(resolve, 50));
 
-			// All queued human messages should have [HUMAN] prefix
-			const humanMsgs = addMessageCalls.filter(
+			// Queued messages should have been processed as regular user messages (no [HUMAN] prefix)
+			const userMsgs = mockCtx.addMessage.mock.calls.filter(
 				(c: any) =>
 					c[0].role === "user" &&
 					typeof c[0].content === "string" &&
-					c[0].content.includes("[HUMAN]"),
+					(c[0].content === "Hey, how is it going?" || c[0].content === "Another message"),
 			);
-			expect(humanMsgs.length).toBeGreaterThanOrEqual(2);
-			expect(humanMsgs.some((c: any) => c[0].content.includes("[HUMAN] Hey, how is it going?"))).toBe(true);
-			expect(humanMsgs.some((c: any) => c[0].content.includes("[HUMAN] Another message"))).toBe(true);
+			expect(userMsgs.length).toBe(2);
+		});
+	});
+
+	describe("agent event processing after drainPendingUserMessages", () => {
+		it("should process agent events that arrive during executeToolLoop", async () => {
+			// Scenario: user message triggers send_to_agent → sub-agent returns quickly
+			// while main agent is still in executeToolLoop → after returning to idle,
+			// the agent event in the queue should be processed.
+
+			mockCtx = createMockContextManager();
+			mockRouter = createMockSignalRouter();
+			mockBroadcaster = createMockBroadcaster();
+			mockAdapter = createMockAdapter();
+			mockBridge = createMockBridge();
+			mockDetector = createMockStateDetector();
+
+			let callCount = 0;
+			const mockLLM = {
+				stream: vi.fn().mockImplementation(() => {
+					const current = callCount++;
+					if (current === 0) {
+						// First call: user message → LLM returns send_to_agent tool call
+						return (async function* () {
+							yield {
+								type: "tool_call_delta" as const,
+								index: 0,
+								id: "tc_send",
+								name: "send_to_agent",
+								argumentsDelta: JSON.stringify({
+									prompt: "do something",
+									summary: "Asking agent to do something",
+								}),
+							};
+							yield {
+								type: "done" as const,
+								response: {
+									content: "",
+									contentBlocks: [],
+									usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+									stopReason: "tool_use",
+									model: "test",
+								},
+							};
+						})();
+					}
+					if (current === 1) {
+						// Second call: after send_to_agent result → LLM says text only (no more tools)
+						return (async function* () {
+							yield { type: "text_delta" as const, delta: "Task dispatched." };
+							yield {
+								type: "done" as const,
+								response: {
+									content: "Task dispatched.",
+									contentBlocks: [{ type: "text", text: "Task dispatched." }],
+									usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+									stopReason: "end_turn",
+									model: "test",
+								},
+							};
+						})();
+					}
+					// Third call: processing the agent event from the queue
+					return (async function* () {
+						yield { type: "text_delta" as const, delta: "Agent finished successfully." };
+						yield {
+							type: "done" as const,
+							response: {
+								content: "Agent finished successfully.",
+								contentBlocks: [{ type: "text", text: "Agent finished successfully." }],
+								usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+								stopReason: "end_turn",
+								model: "test",
+							},
+						};
+					})();
+				}),
+				complete: vi.fn(),
+			} as any;
+
+			const agent = new MainAgent({
+				contextManager: mockCtx,
+				signalRouter: mockRouter,
+				llmClient: mockLLM,
+				adapter: mockAdapter,
+				bridge: mockBridge,
+				stateDetector: mockDetector,
+				broadcaster: mockBroadcaster,
+			});
+			agent.setupSessionMonitor();
+
+			// Pre-register a session so send_to_agent can dispatch
+			agent.setPaneTarget("test-session:0.0", "cliclaw-test-1");
+
+			// Start handleMessage — this will enter drainPendingUserMessages
+			const handlePromise = agent.handleMessage("please run the task");
+
+			// Let the microtask queue flush so the LLM stream starts
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// The mock stateDetector resolves immediately with "completed",
+			// so SessionMonitor will automatically enqueue an agent event
+			// into the workQueue during the executeToolLoop.
+
+			// Wait for handleMessage to fully complete
+			await handlePromise;
+
+			// Give microtasks a chance to run (processAgentEvent is async)
+			await new Promise((resolve) => setTimeout(resolve, 50));
+
+			// The agent event should have been processed — LLM called at least 3 times:
+			// 1. User message → send_to_agent
+			// 2. Tool result → text only (back to idle)
+			// 3. Agent event → text response
+			expect(mockLLM.stream.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+			// Verify the agent event was added as a user message with [AGENT_EVENT] prefix
+			const agentEventMessages = mockCtx.addMessage.mock.calls.filter(
+				(c: any) =>
+					c[0].role === "user" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("[AGENT_EVENT"),
+			);
+			expect(agentEventMessages.length).toBe(1);
+
+			// Agent should be back to idle
+			expect(agent.state).toBe("idle");
 		});
 	});
 });

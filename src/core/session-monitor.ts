@@ -7,8 +7,8 @@ import type {
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
-import type { AgentEventQueue } from "./agent-event-queue.js";
 import type { SignalRouter } from "./signal-router.js";
+import type { WorkQueue } from "./work-queue.js";
 
 export interface TaskInfo {
 	taskId: string;
@@ -43,7 +43,7 @@ interface SessionMonitorOptions {
 	stateDetector: StateDetector;
 	bridge: TmuxBridge;
 	signalRouter: SignalRouter;
-	agentEventQueue: AgentEventQueue;
+	workQueue: WorkQueue;
 	onSettled?: (event: SettledEvent) => void;
 }
 
@@ -51,7 +51,7 @@ export class SessionMonitor {
 	private stateDetector: StateDetector;
 	private bridge: TmuxBridge;
 	private signalRouter: SignalRouter;
-	private agentEventQueue: AgentEventQueue;
+	private workQueue: WorkQueue;
 	private onSettled?: (event: SettledEvent) => void;
 
 	private tasks = new Map<string, TaskInfo>();
@@ -62,7 +62,7 @@ export class SessionMonitor {
 		this.stateDetector = opts.stateDetector;
 		this.bridge = opts.bridge;
 		this.signalRouter = opts.signalRouter;
-		this.agentEventQueue = opts.agentEventQueue;
+		this.workQueue = opts.workQueue;
 		this.onSettled = opts.onSettled;
 	}
 
@@ -223,7 +223,7 @@ export class SessionMonitor {
 	): void {
 		logger.info("session-monitor", `Task ${task.taskId} settled: ${status} (${durationSeconds}s)`);
 
-		this.agentEventQueue.enqueue({
+		this.workQueue.enqueueAgentEvent({
 			sessionId: task.sessionId,
 			taskId: task.taskId,
 			status: status as "waiting_input" | "completed" | "error" | "timeout" | "aborted",
@@ -232,7 +232,6 @@ export class SessionMonitor {
 			summary: task.summary,
 			durationSeconds,
 			timestamp: Date.now(),
-			retryCount: 0,
 		});
 	}
 

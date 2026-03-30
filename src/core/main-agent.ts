@@ -22,17 +22,16 @@ import type {
 	ExecutionVerificationEvidence,
 	ExecutionWorkspaceEvidence,
 } from "../server/execution-events.js";
-import { MessageQueue } from "../server/message-queue.js";
 import type { UiEvent, UiEventStore, UiEventType } from "../server/ui-events.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
-import { AgentEventQueue, type AgentEvent } from "./agent-event-queue.js";
 import type { ContextManager } from "./context-manager.js";
 import type { SettledEvent } from "./session-monitor.js";
 import { SessionMonitor } from "./session-monitor.js";
 import type { Signal, SignalRouter } from "./signal-router.js";
+import { WorkQueue, type AgentEvent } from "./work-queue.js";
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -334,6 +333,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			required: ["command", "summary"],
 		},
 	},
+	{
+		name: "list_agent_tasks",
+		description:
+			"List all active sub-agent tasks currently being monitored and any pending events in the agent event queue. Use this to get a real-time snapshot of sub-agent status before deciding whether to intervene.",
+		parameters: {
+			type: "object",
+			properties: {},
+			required: [],
+		},
+	},
 ];
 
 // ─── MainAgent ──────────────────────────────────────────
@@ -348,9 +357,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private broadcaster: ChatBroadcaster;
 	private executionEventStore: ExecutionEventStore | null = null;
 	private uiEventStore: UiEventStore | null = null;
-	private messageQueue = new MessageQueue();
-	private pendingUserMessages: string[] = [];
-	private isDrainingUserMessages = false;
+	private workQueue = new WorkQueue();
+	private isDispatching = false;
 	private sessions: Map<string, SessionEntry> = new Map();
 	private activeSessionId: string | null = null;
 	private memoryStore: MemoryStore | null = null;
@@ -361,8 +369,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
 	private sessionMonitor: SessionMonitor | null = null;
-	private agentEventQueue = new AgentEventQueue();
-	private isProcessingAgentEvent = false;
 	private globalDir: string;
 	private workspaceDir: string;
 	private searchConfig: HybridSearchConfig = {
@@ -427,14 +433,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			stateDetector: this.stateDetector,
 			bridge: this.bridge,
 			signalRouter: this.signalRouter,
-			agentEventQueue: this.agentEventQueue,
+			workQueue: this.workQueue,
 			onSettled: (event: SettledEvent) => {
 				this.emitExecutionEvent({ ...event, phase: "settled" });
 			},
 		});
 
-		this.agentEventQueue.on("event_available", () => {
-			this.tryProcessAgentEvent();
+		this.workQueue.on("item_available", () => {
+			if (this.state === "idle" && !this.isDispatching) {
+				queueMicrotask(() => this.dispatchNext());
+			}
 		});
 	}
 
@@ -494,7 +502,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			logger.info("main-agent", `State: ${newState}`);
 
 			if (newState === "idle") {
-				this.tryProcessAgentEvent();
+				queueMicrotask(() => this.dispatchNext());
 			}
 		}
 	}
@@ -502,14 +510,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// ─── handleMessage — main entry point ──────────────
 
 	async handleMessage(content: string): Promise<void> {
-		if (this.state === "executing") {
-			this.enqueueMessageForExecutingState(content);
-			return;
-		}
+		this.workQueue.enqueueUserMessage(content);
 
-		this.pendingUserMessages.push(content);
-
-		if (this.isDrainingUserMessages) {
+		if (this.state === "executing" || this.isDispatching) {
 			this.broadcaster.broadcast({
 				type: "system",
 				message: "消息已排队，将在当前操作完成后处理",
@@ -517,7 +520,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			return;
 		}
 
-		await this.drainPendingUserMessages();
+		await this.dispatchNext();
 	}
 
 	// ─── Streaming LLM Call ────────────────────────────
@@ -671,18 +674,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				return;
 			}
 
-			// 2. Drain MessageQueue (human messages only)
-			if (!this.messageQueue.isEmpty()) {
-				const queued = this.messageQueue.drain();
-				for (const msg of queued) {
-					this.contextManager.addMessage({
-						role: "user",
-						content: `[HUMAN] ${msg}`,
-					});
-				}
-			}
-
-			// 3. Check context thresholds
+			// 2. Check context thresholds
 			if (this.contextManager.shouldRunMemoryFlush()) {
 				await this.contextManager.runMemoryFlush();
 			}
@@ -745,149 +737,90 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		}
 	}
 
-	private async drainPendingUserMessages(): Promise<void> {
-		if (this.isDrainingUserMessages) return;
+	// ─── Unified Work Dispatch ────────────────────────
 
-		this.isDrainingUserMessages = true;
+	private async dispatchNext(): Promise<void> {
+		if (this.state !== "idle") return;
+		if (this.isDispatching) return;
+		if (this.workQueue.isEmpty()) return;
+
+		this.isDispatching = true;
 		try {
-			while (this.pendingUserMessages.length > 0) {
-				if (this.state === "executing") {
-					this.flushPendingMessagesToExecutionQueue();
-					return;
+			while (!this.workQueue.isEmpty() && this.state === "idle") {
+				const item = this.workQueue.dequeue()!;
+				if (item.kind === "user_message") {
+					await this.processUserMessage(item.content);
+				} else {
+					await this.processAgentEventItem(item.event);
 				}
-
-				const nextContent = this.pendingUserMessages.shift();
-				if (!nextContent) continue;
-
-				await this.processUserMessage(nextContent);
 			}
+		} catch (err: any) {
+			this.recoverFromExecutionError("dispatchNext", err);
 		} finally {
-			this.isDrainingUserMessages = false;
+			this.isDispatching = false;
+			// Re-schedule if items arrived while we were dispatching
+			// (item_available listener was blocked by isDispatching=true)
+			if (!this.workQueue.isEmpty() && this.state === "idle") {
+				queueMicrotask(() => this.dispatchNext());
+			}
 		}
 	}
 
 	private async processUserMessage(content: string): Promise<void> {
-		try {
-			// IDLE state — process immediately
-			this.contextManager.addMessage({ role: "user", content });
+		// IDLE state — process immediately
+		this.contextManager.addMessage({ role: "user", content });
 
-			// Stream LLM response
-			const { toolCalls, textContent } = await this.streamLLMResponse();
+		// Stream LLM response
+		const { toolCalls, textContent } = await this.streamLLMResponse();
 
-			if (toolCalls.length > 0) {
-				// LLM wants to use tools — enter EXECUTING state
-				this.setState("executing");
-				this.flushPendingMessagesToExecutionQueue();
+		if (toolCalls.length > 0) {
+			// LLM wants to use tools — enter EXECUTING state
+			this.setState("executing");
 
-				// Add assistant message to conversation
-				const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
-				this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
-				this.broadcaster.broadcast({ type: "assistant_done" });
+			// Add assistant message to conversation
+			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
+			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+			this.broadcaster.broadcast({ type: "assistant_done" });
 
-				// Execute tools and enter self-loop
-				await this.executeToolLoop(toolCalls);
-			} else {
-				// Pure text response — stay IDLE
+			// Execute tools and enter self-loop
+			await this.executeToolLoop(toolCalls);
+		} else {
+			// Pure text response — stay IDLE
+			this.contextManager.addMessage({ role: "assistant", content: textContent });
+			this.broadcaster.broadcast({ type: "assistant_done" });
+		}
+	}
+
+	private async processAgentEventItem(event: AgentEvent): Promise<void> {
+		// Format event as a structured message for the LLM
+		const lines = [
+			`[AGENT_EVENT session_id=${event.sessionId} task_id=${event.taskId} status=${event.status} duration=${event.durationSeconds}s]`,
+			`Original task: ${event.summary}`,
+			`Agent status: ${event.status} (${event.detail})`,
+		];
+		if (event.paneContent) {
+			lines.push("");
+			lines.push(event.paneContent);
+		}
+
+		this.contextManager.addMessage({ role: "user", content: lines.join("\n") });
+
+		const { toolCalls, textContent } = await this.streamLLMResponse();
+
+		if (toolCalls.length > 0) {
+			this.setState("executing");
+
+			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
+			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+			this.broadcaster.broadcast({ type: "assistant_done" });
+
+			await this.executeToolLoop(toolCalls);
+		} else {
+			if (textContent) {
 				this.contextManager.addMessage({ role: "assistant", content: textContent });
 				this.broadcaster.broadcast({ type: "assistant_done" });
 			}
-		} catch (err: any) {
-			this.recoverFromExecutionError("handleMessage", err);
-			throw err;
-		}
-	}
-
-	private enqueueMessageForExecutingState(content: string): void {
-		this.messageQueue.enqueue(content);
-		this.broadcaster.broadcast({
-			type: "system",
-			message: "消息已排队，将在当前操作完成后处理",
-		});
-	}
-
-	private flushPendingMessagesToExecutionQueue(): void {
-		if (this.pendingUserMessages.length === 0) return;
-
-		const pending = this.pendingUserMessages.splice(0);
-		for (const message of pending) {
-			this.messageQueue.enqueue(message);
-		}
-	}
-
-	// ─── Agent Event Queue Processing ─────────────────
-
-	private static MAX_AGENT_EVENT_RETRIES = 3;
-
-	private tryProcessAgentEvent(): void {
-		if (this.state !== "idle") return;
-		if (this.isProcessingAgentEvent) return;
-		if (this.pendingUserMessages.length > 0) return;
-		if (this.isDrainingUserMessages) return;
-		if (this.agentEventQueue.isEmpty()) return;
-
-		this.processAgentEvent().catch((err) => {
-			logger.error("main-agent", `processAgentEvent error: ${err.message}`);
-			this.isProcessingAgentEvent = false;
-		});
-	}
-
-	private async processAgentEvent(): Promise<void> {
-		this.isProcessingAgentEvent = true;
-		try {
-			const event = this.agentEventQueue.peek();
-			if (!event) return;
-
-			// Format event as a structured message for the LLM
-			const lines = [
-				`[AGENT_EVENT session_id=${event.sessionId} task_id=${event.taskId} status=${event.status} duration=${event.durationSeconds}s${event.retryCount > 0 ? ` retry=${event.retryCount}/${MainAgent.MAX_AGENT_EVENT_RETRIES}` : ""}]`,
-				`Original task: ${event.summary}`,
-				`Agent status: ${event.status} (${event.detail})`,
-			];
-			if (event.paneContent) {
-				lines.push("");
-				lines.push(event.paneContent);
-			}
-
-			this.contextManager.addMessage({ role: "user", content: lines.join("\n") });
-
-			const { toolCalls, textContent } = await this.streamLLMResponse();
-
-			if (toolCalls.length > 0) {
-				// LLM produced tool calls — event handled successfully, dequeue
-				this.agentEventQueue.dequeue();
-
-				this.setState("executing");
-				this.flushPendingMessagesToExecutionQueue();
-
-				const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
-				this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
-				this.broadcaster.broadcast({ type: "assistant_done" });
-
-				await this.executeToolLoop(toolCalls);
-			} else {
-				// LLM replied with pure text — not handled
-				if (textContent) {
-					this.contextManager.addMessage({ role: "assistant", content: textContent });
-					this.broadcaster.broadcast({ type: "assistant_done" });
-				}
-
-				event.retryCount++;
-
-				if (event.retryCount >= MainAgent.MAX_AGENT_EVENT_RETRIES) {
-					// Exceeded retry limit — escalate and dequeue
-					this.agentEventQueue.dequeue();
-					logger.warn(
-						"main-agent",
-						`Agent event ${event.taskId} exceeded ${MainAgent.MAX_AGENT_EVENT_RETRIES} retries, escalating to human`,
-					);
-					this.broadcaster.broadcast({
-						type: "system",
-						message: `子 agent (session=${event.sessionId}) 处于 ${event.status} 状态，自动处理失败（已重试 ${MainAgent.MAX_AGENT_EVENT_RETRIES} 次），请人工介入。`,
-					});
-				}
-			}
-		} finally {
-			this.isProcessingAgentEvent = false;
+			// dispatchNext loop naturally continues to next item
 		}
 	}
 
@@ -1657,7 +1590,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				// Remove session from registry and update activeSessionId
 				this.sessionMonitor?.cleanup(exitSessionId);
-				this.agentEventQueue.removeBySessionId(exitSessionId);
+				this.workQueue.removeAgentEventsBySessionId(exitSessionId);
 				this.sessions.delete(exitSessionId);
 				if (this.activeSessionId === exitSessionId) {
 					const remaining = [...this.sessions.keys()];
@@ -1685,7 +1618,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						}
 						for (const [id] of this.sessions) {
 							this.sessionMonitor?.cleanup(id);
-							this.agentEventQueue.removeBySessionId(id);
+							this.workQueue.removeAgentEventsBySessionId(id);
 						}
 						const killed: string[] = [];
 						for (const s of sessions) {
@@ -1715,7 +1648,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 					await this.bridge.killSession(targetName);
 					this.sessionMonitor?.cleanup(targetName);
-					this.agentEventQueue.removeBySessionId(targetName);
+					this.workQueue.removeAgentEventsBySessionId(targetName);
 					this.sessions.delete(targetName);
 					if (this.activeSessionId === targetName) {
 						const remaining = [...this.sessions.keys()];
@@ -1770,6 +1703,42 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 					return { output: `exec_command error: ${err.message}`, terminal: false };
 				}
+			}
+
+			case "list_agent_tasks": {
+				const activeTasks = this.sessionMonitor?.getAllTasks() ?? [];
+				const pendingEvents = this.workQueue.getAgentEvents();
+
+				const lines: string[] = [];
+
+				if (activeTasks.length > 0) {
+					lines.push("## Active Agent Tasks");
+					for (const task of activeTasks) {
+						const elapsedSeconds = Math.round((Date.now() - task.startedAt) / 1000);
+						lines.push(
+							`- session=${task.sessionId} task=${task.taskId} status=${task.status} elapsed=${elapsedSeconds}s`,
+						);
+						lines.push(`  summary: ${task.summary}`);
+					}
+				}
+
+				if (pendingEvents.length > 0) {
+					if (lines.length > 0) lines.push("");
+					lines.push("## Pending Events (WorkQueue)");
+					for (const evt of pendingEvents) {
+						lines.push(
+							`- session=${evt.sessionId} task=${evt.taskId} status=${evt.status} duration=${evt.durationSeconds}s`,
+						);
+						lines.push(`  summary: ${evt.summary}`);
+						lines.push(`  detail: ${evt.detail}`);
+					}
+				}
+
+				if (lines.length === 0) {
+					return { output: "No active agent tasks or pending events.", terminal: false };
+				}
+
+				return { output: lines.join("\n"), terminal: false };
 			}
 
 			default: {
