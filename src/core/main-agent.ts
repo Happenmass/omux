@@ -28,6 +28,7 @@ import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
+import { AgentEventQueue, type AgentEvent } from "./agent-event-queue.js";
 import type { ContextManager } from "./context-manager.js";
 import type { SettledEvent } from "./session-monitor.js";
 import { SessionMonitor } from "./session-monitor.js";
@@ -360,6 +361,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
 	private sessionMonitor: SessionMonitor | null = null;
+	private agentEventQueue = new AgentEventQueue();
+	private isProcessingAgentEvent = false;
 	private globalDir: string;
 	private workspaceDir: string;
 	private searchConfig: HybridSearchConfig = {
@@ -424,12 +427,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			stateDetector: this.stateDetector,
 			bridge: this.bridge,
 			signalRouter: this.signalRouter,
-			onCallback: (message: string) => {
-				this.handleMessage(message);
-			},
+			agentEventQueue: this.agentEventQueue,
 			onSettled: (event: SettledEvent) => {
 				this.emitExecutionEvent({ ...event, phase: "settled" });
 			},
+		});
+
+		this.agentEventQueue.on("event_available", () => {
+			this.tryProcessAgentEvent();
 		});
 	}
 
@@ -487,6 +492,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			this.broadcaster.broadcast({ type: "state", state: newState });
 			this.emit("state_change", newState);
 			logger.info("main-agent", `State: ${newState}`);
+
+			if (newState === "idle") {
+				this.tryProcessAgentEvent();
+			}
 		}
 	}
 
@@ -662,14 +671,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				return;
 			}
 
-			// 2. Drain MessageQueue
+			// 2. Drain MessageQueue (human messages only)
 			if (!this.messageQueue.isEmpty()) {
 				const queued = this.messageQueue.drain();
 				for (const msg of queued) {
-					const isCallback = msg.startsWith("[AGENT_CALLBACK");
 					this.contextManager.addMessage({
 						role: "user",
-						content: isCallback ? msg : `[HUMAN] ${msg}`,
+						content: `[HUMAN] ${msg}`,
 					});
 				}
 			}
@@ -803,6 +811,83 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		const pending = this.pendingUserMessages.splice(0);
 		for (const message of pending) {
 			this.messageQueue.enqueue(message);
+		}
+	}
+
+	// ─── Agent Event Queue Processing ─────────────────
+
+	private static MAX_AGENT_EVENT_RETRIES = 3;
+
+	private tryProcessAgentEvent(): void {
+		if (this.state !== "idle") return;
+		if (this.isProcessingAgentEvent) return;
+		if (this.pendingUserMessages.length > 0) return;
+		if (this.isDrainingUserMessages) return;
+		if (this.agentEventQueue.isEmpty()) return;
+
+		this.processAgentEvent().catch((err) => {
+			logger.error("main-agent", `processAgentEvent error: ${err.message}`);
+			this.isProcessingAgentEvent = false;
+		});
+	}
+
+	private async processAgentEvent(): Promise<void> {
+		this.isProcessingAgentEvent = true;
+		try {
+			const event = this.agentEventQueue.peek();
+			if (!event) return;
+
+			// Format event as a structured message for the LLM
+			const lines = [
+				`[AGENT_EVENT session_id=${event.sessionId} task_id=${event.taskId} status=${event.status} duration=${event.durationSeconds}s${event.retryCount > 0 ? ` retry=${event.retryCount}/${MainAgent.MAX_AGENT_EVENT_RETRIES}` : ""}]`,
+				`Original task: ${event.summary}`,
+				`Agent status: ${event.status} (${event.detail})`,
+			];
+			if (event.paneContent) {
+				lines.push("");
+				lines.push(event.paneContent);
+			}
+
+			this.contextManager.addMessage({ role: "user", content: lines.join("\n") });
+
+			const { toolCalls, textContent } = await this.streamLLMResponse();
+
+			if (toolCalls.length > 0) {
+				// LLM produced tool calls — event handled successfully, dequeue
+				this.agentEventQueue.dequeue();
+
+				this.setState("executing");
+				this.flushPendingMessagesToExecutionQueue();
+
+				const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
+				this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
+				this.broadcaster.broadcast({ type: "assistant_done" });
+
+				await this.executeToolLoop(toolCalls);
+			} else {
+				// LLM replied with pure text — not handled
+				if (textContent) {
+					this.contextManager.addMessage({ role: "assistant", content: textContent });
+					this.broadcaster.broadcast({ type: "assistant_done" });
+				}
+
+				event.retryCount++;
+
+				if (event.retryCount >= MainAgent.MAX_AGENT_EVENT_RETRIES) {
+					// Exceeded retry limit — escalate and dequeue
+					this.agentEventQueue.dequeue();
+					logger.warn(
+						"main-agent",
+						`Agent event ${event.taskId} exceeded ${MainAgent.MAX_AGENT_EVENT_RETRIES} retries, escalating to human`,
+					);
+					this.broadcaster.broadcast({
+						type: "system",
+						message: `子 agent (session=${event.sessionId}) 处于 ${event.status} 状态，自动处理失败（已重试 ${MainAgent.MAX_AGENT_EVENT_RETRIES} 次），请人工介入。`,
+					});
+				}
+			}
+		} finally {
+			this.isProcessingAgentEvent = false;
 		}
 	}
 
@@ -1196,6 +1281,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				await this.adapter.sendResponse(this.bridge, respondSession.paneTarget, value);
 
 				if (this.sessionMonitor) {
+					// Wait for agent to begin processing the response before capturing hash.
+					// Without this delay, captureHash may snapshot the pre-processing state,
+					// causing Phase 1 to never see a hash change (stuck until timeout).
+					await new Promise((resolve) => setTimeout(resolve, 500));
 					const newPreHash = await this.stateDetector.captureHash(respondSession.paneTarget);
 					const resumed = this.sessionMonitor.resumeTask(respondSessionId, newPreHash);
 					if (!resumed) {
@@ -1568,6 +1657,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				// Remove session from registry and update activeSessionId
 				this.sessionMonitor?.cleanup(exitSessionId);
+				this.agentEventQueue.removeBySessionId(exitSessionId);
 				this.sessions.delete(exitSessionId);
 				if (this.activeSessionId === exitSessionId) {
 					const remaining = [...this.sessions.keys()];
@@ -1595,6 +1685,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						}
 						for (const [id] of this.sessions) {
 							this.sessionMonitor?.cleanup(id);
+							this.agentEventQueue.removeBySessionId(id);
 						}
 						const killed: string[] = [];
 						for (const s of sessions) {
@@ -1624,6 +1715,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 					await this.bridge.killSession(targetName);
 					this.sessionMonitor?.cleanup(targetName);
+					this.agentEventQueue.removeBySessionId(targetName);
 					this.sessions.delete(targetName);
 					if (this.activeSessionId === targetName) {
 						const remaining = [...this.sessions.keys()];

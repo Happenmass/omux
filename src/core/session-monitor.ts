@@ -7,6 +7,7 @@ import type {
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
+import type { AgentEventQueue } from "./agent-event-queue.js";
 import type { SignalRouter } from "./signal-router.js";
 
 export interface TaskInfo {
@@ -42,7 +43,7 @@ interface SessionMonitorOptions {
 	stateDetector: StateDetector;
 	bridge: TmuxBridge;
 	signalRouter: SignalRouter;
-	onCallback: (message: string) => void;
+	agentEventQueue: AgentEventQueue;
 	onSettled?: (event: SettledEvent) => void;
 }
 
@@ -50,7 +51,7 @@ export class SessionMonitor {
 	private stateDetector: StateDetector;
 	private bridge: TmuxBridge;
 	private signalRouter: SignalRouter;
-	private onCallback: (message: string) => void;
+	private agentEventQueue: AgentEventQueue;
 	private onSettled?: (event: SettledEvent) => void;
 
 	private tasks = new Map<string, TaskInfo>();
@@ -61,7 +62,7 @@ export class SessionMonitor {
 		this.stateDetector = opts.stateDetector;
 		this.bridge = opts.bridge;
 		this.signalRouter = opts.signalRouter;
-		this.onCallback = opts.onCallback;
+		this.agentEventQueue = opts.agentEventQueue;
 		this.onSettled = opts.onSettled;
 	}
 
@@ -220,18 +221,19 @@ export class SessionMonitor {
 		durationSeconds: number,
 		paneContent?: string,
 	): void {
-		const lines = [
-			`[AGENT_CALLBACK session_id=${task.sessionId} task_id=${task.taskId} status=${status} duration=${durationSeconds}s]`,
-			`Original task: ${task.summary}`,
-			`Agent task settled with status: ${status} (${detail})`,
-		];
-		if (paneContent) {
-			lines.push("");
-			lines.push(paneContent);
-		}
-
 		logger.info("session-monitor", `Task ${task.taskId} settled: ${status} (${durationSeconds}s)`);
-		this.onCallback(lines.join("\n"));
+
+		this.agentEventQueue.enqueue({
+			sessionId: task.sessionId,
+			taskId: task.taskId,
+			status: status as "waiting_input" | "completed" | "error" | "timeout" | "aborted",
+			detail,
+			paneContent: paneContent ?? "",
+			summary: task.summary,
+			durationSeconds,
+			timestamp: Date.now(),
+			retryCount: 0,
+		});
 	}
 
 	private async capturePaneContent(paneTarget: string, lines = 100): Promise<string> {

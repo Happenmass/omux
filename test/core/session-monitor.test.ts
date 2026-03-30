@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionMonitor } from "../../src/core/session-monitor.js";
-import type { TaskInfo, SettledEvent } from "../../src/core/session-monitor.js";
+import type { SettledEvent } from "../../src/core/session-monitor.js";
+import { AgentEventQueue, type AgentEvent } from "../../src/core/agent-event-queue.js";
 import type { SettledResult, PaneAnalysis } from "../../src/tmux/state-detector.js";
 
 function createMockStateDetector() {
@@ -47,21 +48,21 @@ describe("SessionMonitor", () => {
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockSignalRouter: ReturnType<typeof createMockSignalRouter>;
-	let onCallback: ReturnType<typeof vi.fn>;
+	let agentEventQueue: AgentEventQueue;
 	let onSettled: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		mockDetector = createMockStateDetector();
 		mockBridge = createMockBridge();
 		mockSignalRouter = createMockSignalRouter();
-		onCallback = vi.fn();
+		agentEventQueue = new AgentEventQueue();
 		onSettled = vi.fn();
 
 		monitor = new SessionMonitor({
 			stateDetector: mockDetector as any,
 			bridge: mockBridge,
 			signalRouter: mockSignalRouter,
-			onCallback,
+			agentEventQueue,
 			onSettled,
 		});
 	});
@@ -192,7 +193,7 @@ describe("SessionMonitor", () => {
 	});
 
 	describe("background polling — completed", () => {
-		it("should fire onCallback with completed status", async () => {
+		it("should enqueue AgentEvent with completed status", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Fix the bug",
@@ -201,13 +202,17 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("completed", "Task finished successfully"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			expect(msg).toContain("[AGENT_CALLBACK session_id=session-1 task_id=task_1 status=completed");
-			expect(msg).toContain("Original task: Fix the bug");
-			expect(msg).toContain("Agent task settled with status: completed (Task finished successfully)");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.sessionId).toBe("session-1");
+			expect(event.taskId).toBe("task_1");
+			expect(event.status).toBe("completed");
+			expect(event.detail).toBe("Task finished successfully");
+			expect(event.summary).toBe("Fix the bug");
+			expect(event.retryCount).toBe(0);
+			expect(event.paneContent).toBe("pane content");
 
 			// Task should be cleaned up
 			expect(monitor.isBusy("session-1")).toBe(false);
@@ -215,7 +220,7 @@ describe("SessionMonitor", () => {
 	});
 
 	describe("background polling — error", () => {
-		it("should fire onCallback with error status", async () => {
+		it("should enqueue AgentEvent with error status", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Build project",
@@ -224,19 +229,19 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("error", "Build failed with exit code 1"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			expect(msg).toContain("status=error");
-			expect(msg).toContain("Build failed with exit code 1");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.status).toBe("error");
+			expect(event.detail).toBe("Build failed with exit code 1");
 
 			expect(monitor.isBusy("session-1")).toBe(false);
 		});
 	});
 
 	describe("background polling — timeout", () => {
-		it("should fire onCallback with timeout status", async () => {
+		it("should enqueue AgentEvent with timeout status", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Long running task",
@@ -245,17 +250,17 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("active", "Timeout after 1800000ms", true));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			expect(msg).toContain("status=timeout");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.status).toBe("timeout");
 			expect(monitor.isBusy("session-1")).toBe(false);
 		});
 	});
 
 	describe("background polling — waiting_input", () => {
-		it("should fire onCallback with waiting_input status and keep task in Map", async () => {
+		it("should enqueue AgentEvent with waiting_input status and keep task in Map", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Interactive task",
@@ -264,11 +269,11 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("waiting_input", "Agent needs user input"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			expect(msg).toContain("status=waiting_input");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.status).toBe("waiting_input");
 
 			// Task should remain in Map with updated status
 			expect(monitor.isBusy("session-1")).toBe(true);
@@ -278,7 +283,7 @@ describe("SessionMonitor", () => {
 	});
 
 	describe("background polling — exception", () => {
-		it("should fire onCallback with error status on exception", async () => {
+		it("should enqueue AgentEvent with error status on exception", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Crashing task",
@@ -287,13 +292,35 @@ describe("SessionMonitor", () => {
 			mockDetector._reject(new Error("Connection lost"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			expect(msg).toContain("status=error");
-			expect(msg).toContain("Exception: Connection lost");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.status).toBe("error");
+			expect(event.detail).toBe("Exception: Connection lost");
 			expect(monitor.isBusy("session-1")).toBe(false);
+		});
+	});
+
+	describe("background polling — emits event_available signal", () => {
+		it("should emit event_available when fireCallback enqueues", async () => {
+			const handler = vi.fn();
+			agentEventQueue.on("event_available", handler);
+
+			monitor.dispatch("session-1", "session-1:0.0", {
+				preHash: "abc123",
+				summary: "Signal test",
+			});
+
+			mockDetector._resolve(settledResult("completed", "Done"));
+
+			await vi.waitFor(() => {
+				expect(handler).toHaveBeenCalledOnce();
+			});
+
+			const event = handler.mock.calls[0][0] as AgentEvent;
+			expect(event.status).toBe("completed");
+			expect(event.sessionId).toBe("session-1");
 		});
 	});
 
@@ -353,7 +380,7 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("waiting_input", "Need input"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
 			expect(onSettled).not.toHaveBeenCalled();
@@ -369,7 +396,6 @@ describe("SessionMonitor", () => {
 			monitor.cleanup("session-1");
 
 			// The waitForSettled will resolve but abort check should prevent settled event
-			// Since cleanup already removed, just verify no settled event
 			await new Promise((r) => setTimeout(r, 50));
 			expect(onSettled).not.toHaveBeenCalled();
 		});
@@ -379,7 +405,7 @@ describe("SessionMonitor", () => {
 				stateDetector: mockDetector as any,
 				bridge: mockBridge,
 				signalRouter: mockSignalRouter,
-				onCallback,
+				agentEventQueue,
 			});
 
 			monitorNoSettled.dispatch("session-1", "session-1:0.0", {
@@ -390,15 +416,15 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("completed", "Done"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
 			// Should not throw even without onSettled
 		});
 	});
 
-	describe("pane content in callback message", () => {
-		it("should include captured pane content in callback", async () => {
+	describe("pane content in AgentEvent", () => {
+		it("should include captured pane content in event", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Check pane content",
@@ -407,18 +433,17 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("completed", "Done"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			// Should include pane content from bridge.capturePane mock
-			expect(msg).toContain("pane content");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.paneContent).toBe("pane content");
 			expect(mockBridge.capturePane).toHaveBeenCalled();
 		});
 	});
 
-	describe("duration in callback message", () => {
-		it("should include duration in seconds", async () => {
+	describe("duration in AgentEvent", () => {
+		it("should include durationSeconds", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Timed task",
@@ -427,12 +452,11 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("completed", "Done"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[0][0] as string;
-			// Duration should be a number followed by 's'
-			expect(msg).toMatch(/duration=\d+s/);
+			const event = agentEventQueue.dequeue()!;
+			expect(event.durationSeconds).toBeGreaterThanOrEqual(0);
 		});
 	});
 
@@ -447,10 +471,11 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("waiting_input", "Need input"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(1);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
 			expect(monitor.getTask("session-1")!.status).toBe("waiting_input");
+			agentEventQueue.dequeue(); // consume the event
 
 			// Resume with new preHash
 			const resumed = monitor.resumeTask("session-1", "newhash456");
@@ -465,11 +490,11 @@ describe("SessionMonitor", () => {
 			mockDetector._resolve(settledResult("completed", "All done"));
 
 			await vi.waitFor(() => {
-				expect(onCallback).toHaveBeenCalledTimes(2);
+				expect(agentEventQueue.size()).toBe(1);
 			});
 
-			const msg = onCallback.mock.calls[1][0] as string;
-			expect(msg).toContain("status=completed");
+			const event = agentEventQueue.dequeue()!;
+			expect(event.status).toBe("completed");
 			expect(monitor.isBusy("session-1")).toBe(false);
 		});
 

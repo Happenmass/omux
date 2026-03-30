@@ -1067,10 +1067,10 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("AGENT_CALLBACK prefix detection in drain", () => {
-		it("should not add [HUMAN] prefix to messages starting with [AGENT_CALLBACK", async () => {
-			// We need a scenario where messages are queued during EXECUTING and then drained.
-			// Use a deferred gate on the first LLM call to inject a queued message mid-execution.
+	describe("MessageQueue drain adds [HUMAN] prefix", () => {
+		it("should add [HUMAN] prefix to all queued messages during EXECUTING", async () => {
+			// Messages queued during EXECUTING should all get [HUMAN] prefix.
+			// Agent event callbacks now go through AgentEventQueue, not MessageQueue.
 			mockCtx = createMockContextManager();
 			mockRouter = createMockSignalRouter();
 			mockBroadcaster = createMockBroadcaster();
@@ -1085,7 +1085,7 @@ describe("MainAgent State Machine", () => {
 				// First call triggers exec_command to enter EXECUTING
 				toolCallResponse("exec_command", { command: "ls", summary: "check" }, "tc1"),
 				// Second call (after drain) returns text
-				textResponse("Callback handled."),
+				textResponse("Got it."),
 			];
 
 			const mockLLM = {
@@ -1122,9 +1122,9 @@ describe("MainAgent State Machine", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 
-			// Queue both a callback message and a human message while executing
-			agent.handleMessage("[AGENT_CALLBACK task-1] Agent completed successfully");
+			// Queue human messages while executing
 			agent.handleMessage("Hey, how is it going?");
+			agent.handleMessage("Another message");
 
 			// Unblock the first LLM call
 			firstStreamGate.resolve();
@@ -1134,26 +1134,16 @@ describe("MainAgent State Machine", () => {
 			// Find addMessage calls to check the prefix behavior
 			const addMessageCalls = mockCtx.addMessage.mock.calls;
 
-			// The callback message should NOT have [HUMAN] prefix
-			const callbackMsg = addMessageCalls.find(
-				(c: any) =>
-					c[0].role === "user" &&
-					typeof c[0].content === "string" &&
-					c[0].content.includes("[AGENT_CALLBACK"),
-			);
-			expect(callbackMsg).toBeTruthy();
-			expect(callbackMsg![0].content).not.toContain("[HUMAN]");
-			expect(callbackMsg![0].content).toContain("[AGENT_CALLBACK task-1]");
-
-			// The human message SHOULD have [HUMAN] prefix
-			const humanMsg = addMessageCalls.find(
+			// All queued human messages should have [HUMAN] prefix
+			const humanMsgs = addMessageCalls.filter(
 				(c: any) =>
 					c[0].role === "user" &&
 					typeof c[0].content === "string" &&
 					c[0].content.includes("[HUMAN]"),
 			);
-			expect(humanMsg).toBeTruthy();
-			expect(humanMsg![0].content).toContain("[HUMAN] Hey, how is it going?");
+			expect(humanMsgs.length).toBeGreaterThanOrEqual(2);
+			expect(humanMsgs.some((c: any) => c[0].content.includes("[HUMAN] Hey, how is it going?"))).toBe(true);
+			expect(humanMsgs.some((c: any) => c[0].content.includes("[HUMAN] Another message"))).toBe(true);
 		});
 	});
 });
