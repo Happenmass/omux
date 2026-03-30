@@ -108,7 +108,13 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://api.x.ai/v1",
 		apiKeyEnvVar: "XAI_API_KEY",
 		defaultModel: "grok-4-1-fast-reasoning",
-		models: ["grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning", "grok-4-fast-reasoning", "grok-3", "grok-3-mini"],
+		models: [
+			"grok-4-1-fast-reasoning",
+			"grok-4-1-fast-non-reasoning",
+			"grok-4-fast-reasoning",
+			"grok-3",
+			"grok-3-mini",
+		],
 	},
 
 	// ─── Google Gemini (OpenAI compat) ───────────────────
@@ -130,7 +136,13 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
 		baseUrl: "https://api.mistral.ai/v1",
 		apiKeyEnvVar: "MISTRAL_API_KEY",
 		defaultModel: "mistral-large-latest",
-		models: ["mistral-large-latest", "mistral-small-latest", "codestral-latest", "magistral-medium-latest", "devstral-2-25-12"],
+		models: [
+			"mistral-large-latest",
+			"mistral-small-latest",
+			"codestral-latest",
+			"magistral-medium-latest",
+			"devstral-2-25-12",
+		],
 	},
 
 	// ─── Ollama (local) ──────────────────────────────────

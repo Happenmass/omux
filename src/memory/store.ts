@@ -135,7 +135,10 @@ export class MemoryStore {
 			this.vecAvailable = this.loadVecExtension(config.vectorExtensionPath);
 		}
 
-		logger.info("memory-store", `Initialized: project=${this.projectId}, vec=${this.vecAvailable}, fts=${this.ftsAvailable}`);
+		logger.info(
+			"memory-store",
+			`Initialized: project=${this.projectId}, vec=${this.vecAvailable}, fts=${this.ftsAvailable}`,
+		);
 	}
 
 	// ─── Public Accessors ─────────────────────────────────
@@ -299,7 +302,9 @@ export class MemoryStore {
 		if (this.vecAvailable && this.vecTableName) {
 			try {
 				const vecBlob = vectorToBlob(params.embedding);
-				this.db.prepare(`INSERT OR REPLACE INTO ${this.vecTableName} (id, embedding) VALUES (?, ?)`).run(params.id, vecBlob);
+				this.db
+					.prepare(`INSERT OR REPLACE INTO ${this.vecTableName} (id, embedding) VALUES (?, ?)`)
+					.run(params.id, vecBlob);
 			} catch (err: any) {
 				logger.warn("memory-store", `Failed to insert vec for ${params.id}: ${err.message}`);
 			}

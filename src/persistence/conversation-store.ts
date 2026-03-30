@@ -66,7 +66,8 @@ export class ConversationStore {
 			if (row.tool_call_id) {
 				msg.toolCallId = row.tool_call_id;
 			}
-			const createdAt = row.created_at > 0 && row.created_at < 1_000_000_000_000 ? row.created_at * 1000 : row.created_at;
+			const createdAt =
+				row.created_at > 0 && row.created_at < 1_000_000_000_000 ? row.created_at * 1000 : row.created_at;
 			return {
 				...msg,
 				createdAt,
@@ -78,9 +79,7 @@ export class ConversationStore {
 	 * Save a key-value pair to chat_context_state (upsert).
 	 */
 	saveContextState(key: string, value: string): void {
-		this.db
-			.prepare("INSERT OR REPLACE INTO chat_context_state (key, value) VALUES (?, ?)")
-			.run(key, value);
+		this.db.prepare("INSERT OR REPLACE INTO chat_context_state (key, value) VALUES (?, ?)").run(key, value);
 	}
 
 	/**
@@ -88,9 +87,9 @@ export class ConversationStore {
 	 * Returns undefined if key not found.
 	 */
 	loadContextState(key: string): string | undefined {
-		const row = this.db
-			.prepare("SELECT value FROM chat_context_state WHERE key = ?")
-			.get(key) as { value: string } | undefined;
+		const row = this.db.prepare("SELECT value FROM chat_context_state WHERE key = ?").get(key) as
+			| { value: string }
+			| undefined;
 		return row?.value;
 	}
 

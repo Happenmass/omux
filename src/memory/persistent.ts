@@ -208,9 +208,7 @@ function applySectionUpdate(
 		}
 		case "remove": {
 			const beforeLen = target.contentLines.length;
-			target.contentLines = target.contentLines.filter(
-				(line) => !(line.startsWith("- ") && line.includes(content)),
-			);
+			target.contentLines = target.contentLines.filter((line) => !(line.startsWith("- ") && line.includes(content)));
 			if (target.contentLines.length === beforeLen) {
 				throw new Error(`No entry matching "${content}" found in ## ${sectionTitle}`);
 			}
