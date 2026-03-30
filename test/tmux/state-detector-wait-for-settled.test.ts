@@ -292,7 +292,7 @@ describe("StateDetector.waitForSettled", () => {
 		const { bridge, setContent } = createMockBridge("initial content");
 		const detector = new StateDetector(bridge, llm, {
 			pollIntervalMs: 50,
-			stableThresholdMs: 2000,
+			stableThresholdMs: 200, // short for test speed
 			captureLines: 50,
 		}, promptLoader);
 		detector.setCharacteristics(characteristics);
@@ -305,18 +305,16 @@ describe("StateDetector.waitForSettled", () => {
 		setTimeout(() => setContent("Running tests...\n核心流程全部测试通过！"), 80);
 		setTimeout(() => setContent("Running tests...\n核心流程全部测试通过！\nWhat files were changed?\n❯ "), 160);
 
-		const startTime = Date.now();
 		const result = await detector.waitForSettled("test:0.0", "test task", {
 			preHash,
 			timeoutMs: 10000,
 		});
-		const elapsed = Date.now() - startTime;
 
 		expect(result.timedOut).toBe(false);
 		// Must be "completed" — the ❯ idle prompt means the agent is done
 		expect(result.analysis.status).toBe("completed");
-		// Should fast escape, not wait for stableThresholdMs
-		expect(elapsed).toBeLessThan(1000);
+		// completed now waits for stableThresholdMs before reporting (no fast escape),
+		// so we only assert correctness, not timing
 	});
 
 	// Verify that "?" in output does NOT trigger false waiting_input

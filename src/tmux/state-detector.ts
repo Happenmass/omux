@@ -275,14 +275,11 @@ export class StateDetector {
 					lastChangeTime = Date.now();
 					lastContent = content;
 
-					// Fast escape: check for terminal patterns on each content change
+					// Fast escape: only for urgent states (error/waiting_input).
+					// "completed" must go through the stability window to avoid false positives
+					// when the agent is still writing output.
 					const quickResult = this.quickPatternCheck(content);
-					if (
-						quickResult &&
-						(quickResult.status === "error" ||
-							quickResult.status === "waiting_input" ||
-							quickResult.status === "completed")
-					) {
+					if (quickResult && (quickResult.status === "error" || quickResult.status === "waiting_input")) {
 						logger.info("state-detector", `waitForSettled: ${quickResult.status} fast escape`);
 						return { analysis: quickResult, content, timedOut: false };
 					}
