@@ -12,6 +12,11 @@ let sendBtn;
 let statusDot;
 let statusText;
 let dropdownEl;
+let terminalViewEl;
+let evidenceViewEl;
+let sessionTabsEl;
+let terminalContentEl;
+let terminalEmptyEl;
 
 let ws = null;
 let currentAssistantEl = null;
@@ -25,6 +30,9 @@ let executionPanelHidden = false;
 let lastExecutionPanelWidth = 420;
 const executionRuns = new Map();
 const collapsedExecutionRuns = new Set();
+let activePanelTab = "terminal";
+const sessionTerminals = new Map();
+let activeSessionTab = null;
 const EXECUTION_PANEL_DEFAULT_WIDTH = 420;
 const EXECUTION_PANEL_MIN_WIDTH = 320;
 const EXECUTION_PANEL_HIDE_THRESHOLD = 180;
@@ -178,7 +186,6 @@ export function mergeExecutionEventSnapshot(existing, event) {
 	next.phase = event.phase;
 	next.summary = event.summary ?? next.summary;
 	next.workspace = event.workspace ?? next.workspace;
-	next.pane = event.pane ?? next.pane;
 	next.persistence = event.persistence
 		? {
 			memoryWrites: event.persistence.memoryWrites ?? [],
@@ -244,20 +251,6 @@ function renderPersistence(snapshot) {
 	`;
 }
 
-function renderPane(snapshot) {
-	if (!snapshot.pane) return "";
-	const paneHtml = snapshot.pane.ansiContent
-		? renderAnsiToHtml(snapshot.pane.ansiContent)
-		: escapeHtml(stripAnsi(snapshot.pane.content)).replace(/\n/g, "<br>");
-
-	return `
-		<section class="execution-section">
-			<h3>最近一次 Pane 片段</h3>
-			<pre class="execution-pane">${paneHtml}</pre>
-		</section>
-	`;
-}
-
 export function buildExecutionCardMarkup(snapshot, collapsed = collapsedExecutionRuns.has(snapshot.runId)) {
 	const workspace = snapshot.workspace;
 	const changedFiles = workspace
@@ -299,7 +292,6 @@ export function buildExecutionCardMarkup(snapshot, collapsed = collapsedExecutio
 				</section>
 				${diffSummary ? `<section class="execution-section"><h3>Diff 摘要</h3>${diffSummary}</section>` : ""}
 				${renderPersistence(snapshot)}
-				${renderPane(snapshot)}
 			</div>
 		`;
 
@@ -486,6 +478,7 @@ function connect() {
 		setConnectionStatus("connected");
 		loadHistory();
 		loadExecutionEvents();
+		loadSessionTerminals();
 		fetchCommands();
 	};
 
@@ -650,6 +643,10 @@ function handleServerMessage(data) {
 			scrollToBottom();
 			break;
 
+		case "session_terminals":
+			handleSessionTerminals(data.sessions);
+			break;
+
 		case "clear":
 			messagesEl.innerHTML = "";
 			currentAssistantEl = null;
@@ -800,12 +797,150 @@ function initDomReferences() {
 	statusDot = document.getElementById("status-dot");
 	statusText = document.getElementById("status-text");
 	dropdownEl = document.getElementById("command-dropdown");
+	terminalViewEl = document.getElementById("terminal-view");
+	evidenceViewEl = document.getElementById("evidence-view");
+	sessionTabsEl = document.getElementById("session-tabs");
+	terminalContentEl = document.getElementById("terminal-content");
+	terminalEmptyEl = document.getElementById("terminal-empty");
+}
+
+function loadSessionTerminals() {
+	fetch("/api/sessions/terminals")
+		.then(function (res) { return res.json(); })
+		.then(function (sessions) {
+			handleSessionTerminals(sessions);
+		})
+		.catch(function () {
+			// Silently fail — terminals are optional
+		});
+}
+
+function handleSessionTerminals(sessions) {
+	const previousIds = new Set(sessionTerminals.keys());
+	const incomingIds = new Set();
+
+	for (const s of sessions) {
+		incomingIds.add(s.sessionId);
+		sessionTerminals.set(s.sessionId, {
+			name: s.sessionName,
+			status: s.status,
+			paneContent: s.paneContent,
+		});
+	}
+
+	// Remove sessions that disappeared
+	for (const id of previousIds) {
+		if (!incomingIds.has(id)) {
+			sessionTerminals.delete(id);
+		}
+	}
+
+	// Detect new sessions — auto-switch to the last new one
+	let newSessionId = null;
+	for (const id of incomingIds) {
+		if (!previousIds.has(id)) {
+			newSessionId = id;
+		}
+	}
+	if (newSessionId) {
+		activeSessionTab = newSessionId;
+	}
+
+	// If active tab gone, switch to first remaining
+	if (activeSessionTab && !sessionTerminals.has(activeSessionTab)) {
+		const first = sessionTerminals.keys().next().value;
+		activeSessionTab = first || null;
+	}
+
+	// If nothing selected but sessions exist, pick first
+	if (!activeSessionTab && sessionTerminals.size > 0) {
+		activeSessionTab = sessionTerminals.keys().next().value;
+	}
+
+	renderSessionTabs();
+	renderTerminalContent();
+}
+
+function renderSessionTabs() {
+	if (!sessionTabsEl) return;
+	if (sessionTerminals.size === 0) {
+		sessionTabsEl.innerHTML = "";
+		sessionTabsEl.style.display = "none";
+		if (terminalContentEl) terminalContentEl.style.display = "none";
+		if (terminalEmptyEl) terminalEmptyEl.classList.add("visible");
+		return;
+	}
+
+	sessionTabsEl.style.display = "flex";
+	if (terminalContentEl) terminalContentEl.style.display = "";
+	if (terminalEmptyEl) terminalEmptyEl.classList.remove("visible");
+
+	sessionTabsEl.innerHTML = "";
+	for (const [id, data] of sessionTerminals) {
+		const btn = document.createElement("button");
+		btn.className = "session-tab" + (id === activeSessionTab ? " active" : "");
+		btn.dataset.sessionId = id;
+
+		const dot = document.createElement("span");
+		dot.className = "session-tab-dot status-" + data.status;
+
+		const label = document.createElement("span");
+		// Strip cliclaw- prefix for display
+		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
+		label.textContent = displayName;
+
+		btn.appendChild(dot);
+		btn.appendChild(label);
+		btn.addEventListener("click", function () {
+			activeSessionTab = this.dataset.sessionId;
+			renderSessionTabs();
+			renderTerminalContent();
+		});
+		sessionTabsEl.appendChild(btn);
+	}
+}
+
+function renderTerminalContent() {
+	if (!terminalContentEl) return;
+	if (!activeSessionTab || !sessionTerminals.has(activeSessionTab)) {
+		terminalContentEl.innerHTML = "";
+		return;
+	}
+
+	const data = sessionTerminals.get(activeSessionTab);
+	// Smart scroll: only auto-scroll if user is at bottom
+	const el = terminalContentEl;
+	const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+
+	el.innerHTML = renderAnsiToHtml(data.paneContent);
+
+	if (isAtBottom) {
+		el.scrollTop = el.scrollHeight;
+	}
+}
+
+function switchPanelTab(tab) {
+	activePanelTab = tab;
+	const tabs = document.querySelectorAll(".panel-tab");
+	for (const t of tabs) {
+		t.classList.toggle("active", t.dataset.panel === tab);
+	}
+	if (terminalViewEl) terminalViewEl.classList.toggle("active", tab === "terminal");
+	if (evidenceViewEl) evidenceViewEl.classList.toggle("active", tab === "evidence");
 }
 
 function initApp() {
 	initDomReferences();
 	renderExecutionCards();
 	syncExecutionPanelWidth();
+
+	// Panel tab switching
+	const panelTabs = document.querySelectorAll(".panel-tab");
+	for (const tab of panelTabs) {
+		tab.addEventListener("click", function () {
+			switchPanelTab(this.dataset.panel);
+		});
+	}
 
 	executionCardsEl.addEventListener("click", function (event) {
 		const target = event.target instanceof Element ? event.target.closest(".execution-toggle") : null;
