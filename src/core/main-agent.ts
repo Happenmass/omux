@@ -1099,34 +1099,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			throw new Error("Memory store not available.");
 		}
 
-		const normalizedPath = rawPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-		if (normalizedPath.startsWith("memory/")) {
-			return {
-				storageDir: this.memoryStore.getStorageDir(),
-				relativePath: normalizedPath,
-			};
-		}
+		let normalizedPath = rawPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 
+		// Strip legacy projectId prefix (e.g. "clipilot-c64d2d/memory/core.md" → "memory/core.md")
 		const slashIdx = normalizedPath.indexOf("/");
-		if (slashIdx <= 0) {
-			return {
-				storageDir: this.memoryStore.getStorageDir(),
-				relativePath: normalizedPath,
-			};
-		}
-
-		const projectId = normalizedPath.slice(0, slashIdx);
-		const relativePath = normalizedPath.slice(slashIdx + 1);
-		if (!relativePath.startsWith("memory/")) {
-			return {
-				storageDir: this.memoryStore.getStorageDir(),
-				relativePath,
-			};
+		if (slashIdx > 0) {
+			const afterSlash = normalizedPath.slice(slashIdx + 1);
+			if (afterSlash.startsWith("memory/")) {
+				normalizedPath = afterSlash;
+			}
 		}
 
 		return {
-			storageDir: join(dirname(this.memoryStore.getStorageDir()), projectId),
-			relativePath,
+			storageDir: this.memoryStore.getStorageDir(),
+			relativePath: normalizedPath,
 		};
 	}
 

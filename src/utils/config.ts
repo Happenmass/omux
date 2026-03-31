@@ -228,22 +228,33 @@ export async function getLogsDir(): Promise<string> {
 }
 
 /**
- * Generate a deterministic project identifier.
+ * Generate a deterministic project identifier from a directory path.
+ * Used only for legacy migration — new code uses GLOBAL_PROJECT_ID.
  * Format: {basename}-{first 6 chars of sha256(absolutePath)}
  */
-export function getProjectId(projectDir: string): string {
+export function getLegacyProjectId(projectDir: string): string {
 	const absPath = resolve(projectDir);
 	const name = basename(absPath).toLowerCase();
 	const hash = createHash("sha256").update(absPath).digest("hex").slice(0, 6);
 	return `${name}-${hash}`;
 }
 
+/** Fixed project identifier — memory is global, not per-project. */
+export const GLOBAL_PROJECT_ID = "global";
+
 /**
- * Generate a deterministic project storage directory path.
- * Format: {basename}-{first 6 chars of sha256(absolutePath)}
+ * Get the global storage directory (memory files live here).
+ * Layout: ~/.cliclaw/ (storageDir) → ~/.cliclaw/memory/*.md
  */
-export function getProjectStorageDir(projectDir: string): string {
-	return join(CONFIG_DIR, "projects", getProjectId(projectDir));
+export function getGlobalStorageDir(): string {
+	return CONFIG_DIR;
+}
+
+/**
+ * Legacy: get the per-project storage directory path (for migration).
+ */
+export function getLegacyProjectStorageDir(projectDir: string): string {
+	return join(CONFIG_DIR, "projects", getLegacyProjectId(projectDir));
 }
 
 /**
@@ -254,10 +265,10 @@ export function getGlobalDbPath(): string {
 }
 
 /**
- * Ensure the project storage directory exists and return its path.
+ * Ensure the global storage directory and memory subdirectory exist.
  */
-export async function ensureProjectStorageDir(projectDir: string): Promise<string> {
-	const dir = getProjectStorageDir(projectDir);
-	await mkdir(dir, { recursive: true });
+export async function ensureGlobalStorageDir(): Promise<string> {
+	const dir = getGlobalStorageDir();
+	await mkdir(join(dir, "memory"), { recursive: true });
 	return dir;
 }

@@ -67,7 +67,7 @@ function createMockMemoryStore(workspaceDir: string) {
 	return {
 		getWorkspaceDir: vi.fn().mockReturnValue(workspaceDir),
 		getStorageDir: vi.fn().mockReturnValue(workspaceDir),
-		getProjectId: vi.fn().mockReturnValue("test-abc123"),
+		getProjectId: vi.fn().mockReturnValue("global"),
 		getTrackedFilePaths: vi.fn().mockReturnValue([]),
 		isFtsAvailable: vi.fn().mockReturnValue(true),
 		write: vi.fn().mockResolvedValue({ success: true, path: "memory/core.md" }),
@@ -196,25 +196,22 @@ describe("MainAgent memory tools", () => {
 			expect(result.terminal).toBe(false);
 		});
 
-		it("should read project-prefixed paths from the matching project storage directory", async () => {
-			const currentProjectDir = join(tmpDir, "current-proj");
-			const otherProjectDir = join(tmpDir, "other-proj");
-			await mkdir(join(currentProjectDir, "memory"), { recursive: true });
-			await mkdir(join(otherProjectDir, "memory"), { recursive: true });
-			await writeFile(join(currentProjectDir, "memory", "core.md"), "current project memory");
-			await writeFile(join(otherProjectDir, "memory", "core.md"), "other project memory");
+		it("should strip legacy project-id prefix and read from global memory", async () => {
+			await mkdir(join(tmpDir, "memory"), { recursive: true });
+			await writeFile(join(tmpDir, "memory", "core.md"), "global memory content");
 
-			const mockStore = createMockMemoryStore(currentProjectDir);
+			const mockStore = createMockMemoryStore(tmpDir);
 			const agent = createAgent({ memoryStore: mockStore });
 
+			// Legacy path format: "projectId/memory/core.md" → should resolve to "memory/core.md"
 			const result = await (agent as any).executeTool({
 				type: "tool_call",
 				id: "tc1",
 				name: "memory_get",
-				arguments: { path: "other-proj/memory/core.md" },
+				arguments: { path: "clipilot-c64d2d/memory/core.md" },
 			});
 
-			expect(result.output).toBe("other project memory");
+			expect(result.output).toBe("global memory content");
 			expect(result.terminal).toBe(false);
 		});
 
