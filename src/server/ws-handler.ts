@@ -1,9 +1,9 @@
 import type { WebSocket } from "ws";
 import type { MainAgent } from "../core/main-agent.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
+import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRouter } from "./command-router.js";
-import { logger } from "../utils/logger.js";
 
 /**
  * Handles a single WebSocket connection:

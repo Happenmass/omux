@@ -58,8 +58,7 @@ Emits events: `state_change`, `log`. 14 built-in tools:
 - `read_skill` — read full SKILL.md content on demand
 - `create_session` — create a `cliclaw-` prefixed tmux session and launch agent
 - `list_cliclaw_sessions` — list all `cliclaw-` prefixed sessions
-- `exit_agent` — exit the current coding agent process, returns captured output and optional session id for resume
-- `kill_session` — forcefully destroy a tmux session (supports "all" to kill all cliclaw sessions)
+- `kill_session` — gracefully exit agent, destroy tmux session, and clean up registry; returns session id for resume; supports "all"
 - `exec_command` — execute read-only bash commands for reconnaissance
 
 ### Server Layer (`src/server/`)

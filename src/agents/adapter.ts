@@ -12,7 +12,7 @@ export interface LaunchOptions {
 	sessionName: string;
 	windowName?: string;
 	env?: Record<string, string>;
-	/** Claude Code session id for --resume, obtained from exit_agent */
+	/** Claude Code session id for --resume, obtained from kill_session */
 	resumeSessionId?: string;
 }
 

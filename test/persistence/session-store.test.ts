@@ -142,7 +142,7 @@ describe("SessionStore", () => {
 
 			expect(store.loadSessions()).toHaveLength(1);
 
-			// Simulate exit_agent deleting
+			// Simulate kill_session deleting
 			store.deleteSession("cliclaw-work");
 
 			expect(store.loadSessions()).toHaveLength(0);

@@ -593,29 +593,31 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("exit_agent tool", () => {
-		it("should call adapter.exitAgent and return content with session id", async () => {
+	describe("kill_session tool", () => {
+		it("should call adapter.exitAgent then kill tmux and return session id", async () => {
 			const agent = setupAgent([
-				toolCallResponse("exit_agent", { summary: "Exiting to save session" }),
+				toolCallResponse("kill_session", { summary: "Exiting to save session" }),
 				textResponse("Agent exited successfully."),
 			]);
 			agent.setPaneTarget("test:0.0");
 
-			// Add exitAgent to mock adapter
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
 				content: "Resume this session with:\nclaude --resume abc-123",
 				sessionId: "abc-123",
 			});
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit agent");
 
 			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "test:0.0");
+			expect(mockBridge.killSession).toHaveBeenCalled();
 			expect(agent.state).toBe("idle");
 		});
 
 		it("should broadcast persisted execution evidence with session id", async () => {
 			const agent = setupAgent([
-				toolCallResponse("exit_agent", { summary: "Exiting to save session" }),
+				toolCallResponse("kill_session", { summary: "Exiting to save session" }),
 				textResponse("Agent exited successfully."),
 			]);
 			agent.setPaneTarget("test:0.0");
@@ -624,6 +626,8 @@ describe("MainAgent State Machine", () => {
 				content: "Resume this session with:\nclaude --resume abc-123",
 				sessionId: "abc-123",
 			});
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit agent");
 
@@ -631,7 +635,7 @@ describe("MainAgent State Machine", () => {
 				expect.objectContaining({
 					type: "execution_event",
 					event: expect.objectContaining({
-						toolName: "exit_agent",
+						toolName: "kill_session",
 						phase: "persisted",
 						persistence: expect.objectContaining({
 							sessionResumeId: "abc-123",
@@ -644,7 +648,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should return error when no active session", async () => {
 			const agent = setupAgent([
-				toolCallResponse("exit_agent", { summary: "Exiting" }),
+				toolCallResponse("kill_session", { summary: "Exiting" }),
 				textResponse("No session."),
 			]);
 			// Do NOT set paneTarget
@@ -655,18 +659,38 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 		});
 
-		it("should return error when adapter does not support exitAgent", async () => {
+		it("should succeed without exitAgent by falling back to tmux kill", async () => {
 			const agent = setupAgent([
-				toolCallResponse("exit_agent", { summary: "Exiting" }),
-				textResponse("Not supported."),
+				toolCallResponse("kill_session", { summary: "Exiting" }),
+				textResponse("Killed."),
 			]);
 			agent.setPaneTarget("test:0.0");
 
 			// Ensure no exitAgent on adapter
 			delete mockAdapter.exitAgent;
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit agent");
 
+			expect(mockBridge.killSession).toHaveBeenCalled();
+			expect(agent.state).toBe("idle");
+		});
+
+		it("should succeed even if exitAgent throws", async () => {
+			const agent = setupAgent([
+				toolCallResponse("kill_session", { summary: "Exiting" }),
+				textResponse("Killed."),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			mockAdapter.exitAgent = vi.fn().mockRejectedValue(new Error("agent crashed"));
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
+
+			await agent.handleMessage("exit agent");
+
+			expect(mockBridge.killSession).toHaveBeenCalled();
 			expect(agent.state).toBe("idle");
 		});
 	});
@@ -965,13 +989,13 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("should remove session from registry on exit_agent", async () => {
+		it("should remove session from registry on kill_session", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-					toolCallResponse("exit_agent", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
-					// After exit, send to remaining session without session_id
+					toolCallResponse("kill_session", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
+					// After kill, send to remaining session without session_id
 					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 					textResponse("Done."),
 				],
@@ -983,20 +1007,23 @@ describe("MainAgent State Machine", () => {
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
 				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			// create_session x2 checks hasSession (false), then kill_session checks (true)
+			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit and continue");
 
-			// exit_agent should have been called on frontend's pane
 			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "cliclaw-frontend:0.0");
+			expect(mockBridge.killSession).toHaveBeenCalledWith("cliclaw-frontend");
 			// send_to_agent should route to backend (the remaining session)
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "continue");
 		});
 
-		it("should set activeSessionId to null when last session is exited", async () => {
+		it("should set activeSessionId to null when last session is killed", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "only" }, "tc1"),
-					toolCallResponse("exit_agent", { summary: "exit only" }, "tc2"),
+					toolCallResponse("kill_session", { summary: "exit only" }, "tc2"),
 					// Now try send_to_agent — should fail with no active session
 					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc3"),
 					textResponse("Done."),
@@ -1006,6 +1033,8 @@ describe("MainAgent State Machine", () => {
 			);
 
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit all");
 
@@ -1013,13 +1042,13 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("should not change activeSessionId when exiting a non-active session", async () => {
+		it("should not change activeSessionId when killing a non-active session", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
 					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-					// frontend is now active; exit backend
-					toolCallResponse("exit_agent", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
+					// frontend is now active; kill backend
+					toolCallResponse("kill_session", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
 					// send without session_id should still go to frontend (still active)
 					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 					textResponse("Done."),
@@ -1032,6 +1061,9 @@ describe("MainAgent State Machine", () => {
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
 				.mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			// create_session x2 (false), kill_session (true)
+			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit non-active");
 
@@ -1337,27 +1369,30 @@ describe("MainAgent State Machine", () => {
 			expect(callback).toHaveBeenCalledTimes(1);
 		});
 
-		it("should call onSessionChange after exit_agent", async () => {
+		it("should call onSessionChange after kill_session (with exitAgent)", async () => {
 			const callback = vi.fn();
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("exit_agent", { summary: "exit" }, "tc2"),
+					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
 				{},
 				{ withMonitor: true },
 			);
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			// create_session (false), kill_session (true)
+			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 			agent.setOnSessionChange(callback);
 
 			await agent.handleMessage("create and exit");
 
-			// Called twice: once for create_session, once for exit_agent
+			// Called twice: once for create_session, once for kill_session
 			expect(callback).toHaveBeenCalledTimes(2);
 		});
 
-		it("should call onSessionChange after kill_session", async () => {
+		it("should call onSessionChange after kill_session (explicit session_id)", async () => {
 			const callback = vi.fn();
 			const agent = setupAgent(
 				[
@@ -1368,8 +1403,7 @@ describe("MainAgent State Machine", () => {
 				{},
 				{ withMonitor: true },
 			);
-			// First call: create_session checks existence (false = doesn't exist yet)
-			// Second call: kill_session checks existence (true = exists now)
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 			agent.setOnSessionChange(callback);
@@ -1542,25 +1576,28 @@ describe("MainAgent State Machine", () => {
 			});
 		});
 
-		it("should call sessionStore.deleteSession on exit_agent", async () => {
+		it("should call sessionStore.deleteSession on kill_session", async () => {
 			const mockSessionStore = createMockSessionStore();
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("exit_agent", { summary: "exit" }, "tc2"),
+					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
 				{ sessionStore: mockSessionStore },
 				{ withMonitor: true },
 			);
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			// create_session (false), kill_session (true)
+			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create and exit");
 
 			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-test");
 		});
 
-		it("should call sessionStore.deleteSession on kill_session (single)", async () => {
+		it("should call sessionStore.deleteSession on kill_session (explicit session_id)", async () => {
 			const mockSessionStore = createMockSessionStore();
 			const agent = setupAgent(
 				[
@@ -1571,6 +1608,7 @@ describe("MainAgent State Machine", () => {
 				{ sessionStore: mockSessionStore },
 				{ withMonitor: true },
 			);
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
@@ -1590,6 +1628,7 @@ describe("MainAgent State Machine", () => {
 				],
 				{ sessionStore: mockSessionStore },
 			);
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
 			mockBridge.listCliclawSessions.mockResolvedValue([{ name: "cliclaw-s1", windows: 1, attached: false }, { name: "cliclaw-s2", windows: 1, attached: false }]);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
@@ -1730,17 +1769,19 @@ describe("MainAgent State Machine", () => {
 			expect(sessions[0].paneTarget).toBe("test-session:0.0");
 		});
 
-		it("should remove from real SQLite on exit_agent", async () => {
+		it("should remove from real SQLite on kill_session", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_session", { session_name: "real-exit" }, "tc1"),
-					toolCallResponse("exit_agent", { summary: "exit" }, "tc2"),
+					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
 				{ sessionStore: realSessionStore },
 				{ withMonitor: true },
 			);
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockBridge.hasSession.mockResolvedValue(true);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create and exit");
 

@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
 
 const require = createRequire(import.meta.url);
+
 import { sha256 } from "./store.js";
 import type {
 	EmbeddingProvider,

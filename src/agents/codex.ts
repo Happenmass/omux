@@ -146,14 +146,16 @@ export class CodexAdapter implements AgentAdapter {
 	async exitAgent(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult> {
 		logger.info("codex", "Exiting agent with single Ctrl+C");
 
-		// Single Ctrl+C to exit Codex (unlike Claude Code which needs double)
+		// Single Ctrl+C to exit Codex
 		await bridge.sendKeys(paneTarget, "C-c");
 
-		// Wait for agent to fully exit and print session id
-		await sleep(1000);
-
-		const capture = await bridge.capturePane(paneTarget);
-		const content = capture.content;
+		// Poll for exit pattern instead of fixed sleep
+		const exitPatterns = [
+			/codex\s+resume\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+			/\$\s*$/m,
+			/❯\s*$/m,
+		];
+		const content = await pollForExit(bridge, paneTarget, exitPatterns);
 
 		// Extract session id from "codex resume <uuid>" pattern
 		const match = content.match(/codex\s+resume\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/);
@@ -196,6 +198,25 @@ export class CodexAdapter implements AgentAdapter {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Poll tmux pane until an exit pattern matches or timeout (5s). */
+async function pollForExit(
+	bridge: TmuxBridge,
+	paneTarget: string,
+	patterns: RegExp[],
+	intervalMs = 200,
+	timeoutMs = 5000,
+): Promise<string> {
+	const deadline = Date.now() + timeoutMs;
+	let content = "";
+	while (Date.now() < deadline) {
+		await sleep(intervalMs);
+		const capture = await bridge.capturePane(paneTarget);
+		content = capture.content;
+		if (patterns.some((p) => p.test(content))) break;
+	}
+	return content;
 }
 
 /** Map a named key to tmux send-keys argument */

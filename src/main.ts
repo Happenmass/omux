@@ -23,8 +23,8 @@ import { syncMemoryFiles } from "./memory/sync.js";
 import { ConversationStore } from "./persistence/conversation-store.js";
 import { SessionStore } from "./persistence/session-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
-import { ExecutionEventStore } from "./server/execution-events.js";
 import { CommandRegistry } from "./server/command-registry.js";
+import { ExecutionEventStore } from "./server/execution-events.js";
 import { startServer } from "./server/index.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
@@ -37,16 +37,16 @@ import { runConfigTUI } from "./tui/config-app.js";
 import {
 	clearServerRuntimeState,
 	ensureConfigDir,
-	getConfigDir,
-	getLogsDir,
 	ensureProjectStorageDir,
+	getConfigDir,
 	getGlobalDbPath,
+	getLogsDir,
 	getProjectId,
 	getProjectStorageDir,
-	loadServerRuntimeState,
 	loadConfig,
-	saveServerRuntimeState,
+	loadServerRuntimeState,
 	type ServerRuntimeState,
+	saveServerRuntimeState,
 } from "./utils/config.js";
 import { logger } from "./utils/logger.js";
 

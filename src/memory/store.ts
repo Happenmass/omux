@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { logger } from "../utils/logger.js";
 
 const require = createRequire(import.meta.url);
+
 import type { FileEntry } from "./types.js";
 
 // ─── Schema SQL ─────────────────────────────────────────

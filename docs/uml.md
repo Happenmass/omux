@@ -121,7 +121,7 @@ Cliclaw 架构深度分析（Chat-Driven MainAgent）
    │         │            │  │  tool="send_to_agent" ─────────────────────▶│            │               │           │  │
    │         │            │  │  tool="respond_to_agent" ──────────────────▶│ sendResp() │               │           │  │
    │         │            │  │  tool="fetch_more" ────────────────────────────────────▶│               │           │  │
-   │         │            │  │  tool="exit_agent" ────────────────────────▶│ exitAgent()│               │           │  │
+   │         │            │  │  tool="kill_session" ───────────────────────▶│ exitAgent()│               │           │  │
    │         │            │  │  tool="create_session" ────────────────────────────────▶│ createSession │           │  │
    │         │            │  │  tool="list_cliclaw_sessions" ────────────────────────▶│ listSessions  │           │  │
    │         │            │  │  tool="exec_command" ──▶ childProcess.exec()│            │               │           │  │
@@ -187,8 +187,8 @@ MainAgent 14 个 Tool 一览
 │ fetch_more         │    否     │ 从 tmux pane 抓取更多行内容               │
 │                    │           │ → bridge.capturePane({startLine: -N})     │
 ├────────────────────┼───────────┼───────────────────────────────────────────┤
-│ exit_agent         │    否     │ 退出当前 Agent 进程                       │
-│                    │           │ → adapter.exitAgent() → 返回输出+sessionId│
+│ kill_session       │    否     │ 优雅退出 Agent 并销毁 tmux 会话            │
+│                    │           │ → adapter.exitAgent() → killSession()    │
 ├────────────────────┼───────────┼───────────────────────────────────────────┤
 │ create_session     │    否     │ 创建 cliclaw- 前缀 tmux 会话并启动 Agent │
 │                    │           │ → bridge.createSession() + adapter.launch()│
@@ -459,7 +459,7 @@ MainAgent 状态机
 │   │   MainAgent ──send_to_agent──▶ tmux pane ──▶ Claude Code  │         │
 │   │   MainAgent ◀─fetch_more─── tmux pane ◀── Claude Code     │         │
 │   │   MainAgent ──respond_to_agent──▶ tmux pane (交互回应)     │         │
-│   │   MainAgent ──exit_agent──▶ 退出 Agent 进程                │         │
+│   │   MainAgent ──kill_session──▶ 退出 Agent + 销毁 tmux       │         │
 │   │                                                            │         │
 │   │   Agent 本身不知道自己被编排                                 │         │
 │   └────────────────────────────────────────────────────────────┘         │

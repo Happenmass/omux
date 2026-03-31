@@ -13,6 +13,7 @@ import { loadPersistentMemory, readPersistentMemory, updatePersistentMemory } fr
 import { searchMemory } from "../memory/search.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
+import type { SessionStore } from "../persistence/session-store.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
 import type {
 	ExecutionEvent,
@@ -23,7 +24,6 @@ import type {
 	ExecutionWorkspaceEvidence,
 } from "../server/execution-events.js";
 import type { UiEvent, UiEventStore, UiEventType } from "../server/ui-events.js";
-import type { SessionStore } from "../persistence/session-store.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
@@ -238,43 +238,23 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "exit_agent",
+		name: "kill_session",
 		description:
-			"Exit a coding agent process. Returns the captured tmux output and a session id (if available) that can be used to resume the agent later with --resume. Use this when you need to terminate the agent cleanly. If session_id is omitted, exits the active session.",
+			'Gracefully exit a coding agent and destroy its tmux session. Returns captured output and a session id (if available) for resuming later with --resume. If session_id is omitted, targets the active session. Set session_id to "all" to kill all cliclaw sessions.',
 		parameters: {
 			type: "object",
 			properties: {
-				summary: {
-					type: "string",
-					description:
-						"A brief human-readable summary of why the agent is being exited (e.g., 'Exiting agent to save session for later')",
-				},
 				session_id: {
 					type: "string",
-					description: "Target session name to exit. If omitted, exits the active session.",
+					description:
+						'Target session name (e.g. "cliclaw-chat-1"). Omit to target the active session. Set to "all" to kill all cliclaw sessions.',
+				},
+				summary: {
+					type: "string",
+					description: "A brief human-readable summary (e.g., 'Cleaning up session after task complete')",
 				},
 			},
 			required: ["summary"],
-		},
-	},
-	{
-		name: "kill_session",
-		description:
-			"Kill and remove a tmux session entirely. Use this to clean up sessions that are no longer needed. Unlike exit_agent (which gracefully exits the agent process), this forcefully destroys the entire tmux session. Can kill any cliclaw- prefixed session by name, or kill all cliclaw sessions at once.",
-		parameters: {
-			type: "object",
-			properties: {
-				session_id: {
-					type: "string",
-					description:
-						'The session name to kill (e.g. "cliclaw-chat-1"). If set to "all", kills all cliclaw- prefixed sessions.',
-				},
-				summary: {
-					type: "string",
-					description: "A brief human-readable summary for the chat interface (e.g., 'Cleaning up idle session')",
-				},
-			},
-			required: ["session_id", "summary"],
 		},
 	},
 	{
@@ -574,6 +554,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			};
 		}
 		return { entry, id };
+	}
+
+	/** Remove a session from all registries. Caller is responsible for onSessionChange(). */
+	private cleanupSession(id: string): void {
+		this.sessionMonitor?.cleanup(id);
+		this.workQueue.removeAgentEventsBySessionId(id);
+		this.sessions.delete(id);
+		this.sessionStore?.deleteSession(id);
+		if (this.activeSessionId === id) {
+			const remaining = [...this.sessions.keys()];
+			this.activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+		}
 	}
 
 	async waitForIdle(): Promise<void> {
@@ -1614,129 +1606,131 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 			}
 
-			case "exit_agent": {
-				const resolved = this.resolveSession(args.session_id as string | undefined);
-				if ("error" in resolved) {
-					return { output: `Error: ${resolved.error}`, terminal: false };
-				}
-				const { entry: exitSession, id: exitSessionId } = resolved;
-
-				const exitSummary = args.summary as string;
-				const runId = this.createExecutionRunId(name);
-				this.emitUiEvent("agent_update", exitSummary);
-				this.emitExecutionEvent({
-					runId,
-					phase: "planned",
-					toolName: name,
-					summary: exitSummary,
-					workspace: {
-						workingDir: exitSession.workingDir,
-						available: false,
-						changedFiles: [],
-					},
-				});
-
-				if (!this.adapter.exitAgent) {
-					return { output: "Error: Current adapter does not support exitAgent.", terminal: false };
-				}
-
-				const exitResult = await this.adapter.exitAgent(this.bridge, exitSession.paneTarget);
-				const workspace = await this.collectWorkspaceEvidence(exitSession.workingDir);
-				const test = this.extractTestEvidence(exitResult.content);
-				this.emitExecutionEvent({
-					runId,
-					phase: "settled",
-					toolName: name,
-					summary: exitSummary,
-					workspace,
-					test,
-					verification: this.buildVerificationEvidence(test),
-				});
-				this.emitExecutionEvent({
-					runId,
-					phase: "persisted",
-					toolName: name,
-					summary: exitSummary,
-					workspace,
-					persistence: this.createPersistenceEvidence({
-						sessionResumeId: exitResult.sessionId,
-						sessionResumable: Boolean(exitResult.sessionId),
-					}),
-				});
-
-				// Remove session from registry and update activeSessionId
-				this.sessionMonitor?.cleanup(exitSessionId);
-				this.workQueue.removeAgentEventsBySessionId(exitSessionId);
-				this.sessions.delete(exitSessionId);
-				this.sessionStore?.deleteSession(exitSessionId);
-				if (this.activeSessionId === exitSessionId) {
-					const remaining = [...this.sessions.keys()];
-					this.activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
-				}
-
-				this.onSessionChange?.();
-				const parts = [`[Agent exited]\n${exitResult.content}`];
-				if (exitResult.sessionId) {
-					parts.push(`\nSession ID: ${exitResult.sessionId}`);
-					parts.push(`Working directory: ${exitSession.workingDir}`);
-				}
-				return { output: parts.join("\n"), terminal: false };
-			}
-
 			case "kill_session": {
-				const killSessionId = args.session_id as string;
+				const killSessionId = args.session_id as string | undefined;
 				const killSummary = args.summary as string;
 				this.emitUiEvent("agent_update", killSummary);
 
 				try {
+					// ── Kill all sessions ──
 					if (killSessionId === "all") {
-						const sessions = await this.bridge.listCliclawSessions();
-						if (sessions.length === 0) {
+						const tmuxSessions = await this.bridge.listCliclawSessions();
+						if (tmuxSessions.length === 0 && this.sessions.size === 0) {
 							return { output: "No cliclaw sessions to kill.", terminal: false };
 						}
-						for (const [id] of this.sessions) {
-							this.sessionMonitor?.cleanup(id);
-							this.workQueue.removeAgentEventsBySessionId(id);
-						}
-						const killed: string[] = [];
-						for (const s of sessions) {
+
+						// Gracefully exit each registered agent (best-effort)
+						const sessionIds: string[] = [];
+						for (const [id, entry] of this.sessions) {
 							try {
-								await this.bridge.killSession(s.name);
-								killed.push(s.name);
-								this.sessions.delete(s.name);
-								this.sessionStore?.deleteSession(s.name);
+								if (this.adapter.exitAgent) {
+									const result = await this.adapter.exitAgent(this.bridge, entry.paneTarget);
+									if (result.sessionId) sessionIds.push(`${id}: ${result.sessionId}`);
+								}
 							} catch {
 								/* best-effort */
 							}
 						}
+
+						// Kill all tmux sessions
+						const killed: string[] = [];
+						for (const s of tmuxSessions) {
+							try {
+								await this.bridge.killSession(s.name);
+								killed.push(s.name);
+							} catch {
+								/* best-effort */
+							}
+						}
+
+						// Cleanup all registered sessions
+						const registeredIds = [...this.sessions.keys()];
+						for (const id of registeredIds) {
+							this.cleanupSession(id);
+						}
 						this.activeSessionId = null;
 						this.onSessionChange?.();
-						return {
-							output: `Killed ${killed.length} session(s): ${killed.join(", ")}`,
-							terminal: false,
-						};
+
+						const parts = [`Killed ${killed.length} session(s): ${killed.join(", ")}`];
+						if (sessionIds.length > 0) {
+							parts.push(`\nSession IDs:\n${sessionIds.join("\n")}`);
+						}
+						return { output: parts.join("\n"), terminal: false };
 					}
 
-					// Single session
-					const targetName = killSessionId.startsWith("cliclaw-") ? killSessionId : `cliclaw-${killSessionId}`;
-					const exists = await this.bridge.hasSession(targetName);
-					if (!exists) {
-						return {
-							output: `Session "${targetName}" not found. Use list_cliclaw_sessions to see available sessions.`,
-							terminal: false,
-						};
+					// ── Kill single session ──
+					const resolved = this.resolveSession(killSessionId);
+					if ("error" in resolved) {
+						return { output: `Error: ${resolved.error}`, terminal: false };
 					}
-					await this.bridge.killSession(targetName);
-					this.sessionMonitor?.cleanup(targetName);
-					this.workQueue.removeAgentEventsBySessionId(targetName);
-					this.sessions.delete(targetName);
-					this.sessionStore?.deleteSession(targetName);
-					if (this.activeSessionId === targetName) {
-						const remaining = [...this.sessions.keys()];
-						this.activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+					const { entry: session, id: sessionId } = resolved;
+
+					const runId = this.createExecutionRunId(name);
+					this.emitExecutionEvent({
+						runId,
+						phase: "planned",
+						toolName: name,
+						summary: killSummary,
+						workspace: {
+							workingDir: session.workingDir,
+							available: false,
+							changedFiles: [],
+						},
+					});
+
+					// Gracefully exit agent to capture session id (best-effort)
+					let agentContent = "";
+					let resumeSessionId: string | undefined;
+					if (this.adapter.exitAgent) {
+						try {
+							const exitResult = await this.adapter.exitAgent(this.bridge, session.paneTarget);
+							agentContent = exitResult.content;
+							resumeSessionId = exitResult.sessionId;
+						} catch (err: any) {
+							logger.warn("main-agent", `exitAgent failed (will still kill tmux): ${err.message}`);
+						}
 					}
+
+					// Kill tmux session
+					const exists = await this.bridge.hasSession(sessionId);
+					if (exists) {
+						await this.bridge.killSession(sessionId);
+					}
+
+					// Emit evidence
+					const workspace = await this.collectWorkspaceEvidence(session.workingDir);
+					const test = this.extractTestEvidence(agentContent);
+					this.emitExecutionEvent({
+						runId,
+						phase: "settled",
+						toolName: name,
+						summary: killSummary,
+						workspace,
+						test,
+						verification: this.buildVerificationEvidence(test),
+					});
+					this.emitExecutionEvent({
+						runId,
+						phase: "persisted",
+						toolName: name,
+						summary: killSummary,
+						workspace,
+						persistence: this.createPersistenceEvidence({
+							sessionResumeId: resumeSessionId,
+							sessionResumable: Boolean(resumeSessionId),
+						}),
+					});
+
+					// Cleanup session registry
+					this.cleanupSession(sessionId);
 					this.onSessionChange?.();
-					return { output: `Session "${targetName}" killed.`, terminal: false };
+
+					const parts = [`[Session killed]\n${agentContent}`];
+					if (resumeSessionId) {
+						parts.push(`\nSession ID: ${resumeSessionId}`);
+						parts.push(`Working directory: ${session.workingDir}`);
+					}
+					return { output: parts.join("\n"), terminal: false };
 				} catch (err: any) {
 					return { output: `Failed to kill session: ${err.message}`, terminal: false };
 				}

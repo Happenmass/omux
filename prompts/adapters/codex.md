@@ -9,15 +9,15 @@ The coding agent you control is **Codex**, an OpenAI CLI-based AI coding assista
 
 ## Interaction Commands
 
-### Exit Agent (Ctrl+C)
+### Session Termination
 
-To terminate the running Codex agent, call the `exit_agent` tool. This sends a single Ctrl+C to the agent, which exits cleanly and outputs a **session id** in the format:
+To terminate the running Codex agent and its tmux session, call the `kill_session` tool. The agent exits cleanly and outputs a **session id** in the format:
 
 ```
 To continue this session, run codex resume <session-id>
 ```
 
-After calling `exit_agent`, if the result contains a `sessionId`:
+After calling `kill_session`, if the result contains a `Session ID`:
 1. Call `memory_write({ path: "memory/sessions.md", content: "- <working_dir>: <sessionId>\n" })` to persist it.
 2. This allows resuming the Codex conversation later with `codex resume`.
 

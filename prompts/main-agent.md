@@ -204,7 +204,7 @@ For these cases, use the standard Reconnoiter → Command → Observe → Iterat
 
 You can manage multiple concurrent tmux sessions. Each session has a unique session name (returned as `Session ID` by `create_session`).
 
-- **`session_id` parameter**: `send_to_agent`, `respond_to_agent`, `inspect_session`, and `exit_agent` accept an optional `session_id` parameter. When provided, the tool routes to that specific session. When omitted, it routes to the most recently used session.
+- **`session_id` parameter**: `send_to_agent`, `respond_to_agent`, `inspect_session`, and `kill_session` accept an optional `session_id` parameter. When provided, the tool routes to that specific session. When omitted, it routes to the most recently used session.
 - **Always remember session names**: After `create_session`, note the Session ID in the response. When working with multiple sessions, always pass the correct `session_id` to target the right agent.
 - **When unsure which sessions exist**: Call `list_cliclaw_sessions` to see all active sessions before sending commands.
 
@@ -248,12 +248,12 @@ Before sending prompts to the coding agent, ensure a tmux session exists:
 6. After session creation, use `send_to_agent` to send your first instruction with the user's task description and any relevant context.
 7. The session persists across tasks — do not call `create_session` again unless the session was lost. Use `list_cliclaw_sessions` to check.
 
-### Agent Exit and Session Persistence
+### Session Termination and Persistence
 
 When you need to terminate the coding agent (e.g., switching projects, freeing resources, or ending a work session):
 
-1. Call `exit_agent` with a summary of why the agent is being exited. For multi-session setups, pass `session_id` to target a specific session.
-2. If the result contains a `sessionId`, persist it by calling `memory_write({ path: "memory/sessions.md", content: "- <working_dir>: <session_id>\n" })`.
+1. Call `kill_session` with a summary of why the session is being terminated. For multi-session setups, pass `session_id` to target a specific session. Use `session_id: "all"` to terminate all sessions.
+2. If the result contains a `Session ID`, persist it by calling `memory_write({ path: "memory/sessions.md", content: "- <working_dir>: <session_id>\n" })`.
 3. The saved session id allows resuming the agent's conversation later, preserving its full context.
 
 ## Autonomous Decision Guidelines
