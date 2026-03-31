@@ -17,7 +17,6 @@ import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
 import type {
 	ExecutionEvent,
 	ExecutionEventStore,
-	ExecutionPaneSnippet,
 	ExecutionPersistenceEvidence,
 	ExecutionTestEvidence,
 	ExecutionVerificationEvidence,
@@ -32,7 +31,7 @@ import type { ContextManager } from "./context-manager.js";
 import type { SettledEvent } from "./session-monitor.js";
 import { SessionMonitor } from "./session-monitor.js";
 import type { Signal, SignalRouter } from "./signal-router.js";
-import { WorkQueue, type AgentEvent } from "./work-queue.js";
+import { type AgentEvent, WorkQueue } from "./work-queue.js";
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -432,6 +431,31 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	/** Replace the skill registry at runtime (used by /reset). */
 	setSkillRegistry(registry: SkillRegistry): void {
 		this.skillRegistry = registry;
+	}
+
+	private onSessionChange: (() => void) | null = null;
+
+	/** Register a callback invoked whenever sessions are created/exited/killed. */
+	setOnSessionChange(cb: () => void): void {
+		this.onSessionChange = cb;
+	}
+
+	/** Return all active sessions with their current status. */
+	getActiveSessions(): Array<{ sessionName: string; sessionId: string; paneTarget: string; status: string }> {
+		const result: Array<{ sessionName: string; sessionId: string; paneTarget: string; status: string }> = [];
+		for (const [id, entry] of this.sessions) {
+			const task = this.sessionMonitor?.getTask(id);
+			let status: string;
+			if (task?.status === "running") {
+				status = "active";
+			} else if (task?.status === "waiting_input") {
+				status = "waiting_input";
+			} else {
+				status = "idle";
+			}
+			result.push({ sessionName: id, sessionId: id, paneTarget: entry.paneTarget, status });
+		}
+		return result;
 	}
 
 	setupSessionMonitor(): void {
@@ -862,44 +886,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 	private createExecutionRunId(toolName: string): string {
 		return `${toolName}-${randomUUID()}`;
-	}
-
-	private buildPaneSnippet(
-		content: string,
-		ansiContent?: string,
-		maxLines = 40,
-		maxChars = 4000,
-	): ExecutionPaneSnippet {
-		const plainLines = content.split("\n");
-		const paneContent = plainLines.slice(-maxLines).join("\n").slice(-maxChars);
-		const snippet: ExecutionPaneSnippet = {
-			content: paneContent,
-			lines: Math.min(plainLines.length, maxLines),
-			capturedAt: Date.now(),
-		};
-
-		if (ansiContent) {
-			const ansiLines = ansiContent.split("\n");
-			snippet.ansiContent = ansiLines.slice(-maxLines).join("\n").slice(-maxChars);
-		}
-
-		return snippet;
-	}
-
-	private async captureAnsiPaneContent(paneTarget?: string, maxLines = 40): Promise<string | undefined> {
-		const target = paneTarget ?? this.getPaneTarget();
-		if (!target) return undefined;
-
-		try {
-			const capture = await this.bridge.capturePane(target, {
-				startLine: -maxLines,
-				escapeSequences: true,
-			});
-			return capture.content;
-		} catch (err: any) {
-			logger.warn("main-agent", `Failed to capture ANSI pane content: ${err.message}`);
-			return undefined;
-		}
 	}
 
 	private async collectWorkspaceEvidence(workingDir: string): Promise<ExecutionWorkspaceEvidence> {
@@ -1535,6 +1521,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						persistence: this.createPersistenceEvidence(),
 					});
 					logger.info("main-agent", `Session created: ${sessionName}, pane: ${paneTarget}, cwd: ${workingDir}`);
+					this.onSessionChange?.();
 					return {
 						output: `Session "${sessionName}" created in ${workingDir}. Session ID: "${sessionName}". Agent launched in ${paneTarget}. You can now use send_to_agent.`,
 						terminal: false,
@@ -1586,8 +1573,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 
 				const exitResult = await this.adapter.exitAgent(this.bridge, exitSession.paneTarget);
-				const ansiContent = await this.captureAnsiPaneContent(exitSession.paneTarget);
-				const pane = this.buildPaneSnippet(exitResult.content, ansiContent);
 				const workspace = await this.collectWorkspaceEvidence(exitSession.workingDir);
 				const test = this.extractTestEvidence(exitResult.content);
 				this.emitExecutionEvent({
@@ -1595,7 +1580,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					phase: "settled",
 					toolName: name,
 					summary: exitSummary,
-					pane,
 					workspace,
 					test,
 					verification: this.buildVerificationEvidence(test),
@@ -1621,6 +1605,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					this.activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
 				}
 
+				this.onSessionChange?.();
 				const parts = [`[Agent exited]\n${exitResult.content}`];
 				if (exitResult.sessionId) {
 					parts.push(`\nSession ID: ${exitResult.sessionId}`);
@@ -1655,6 +1640,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							}
 						}
 						this.activeSessionId = null;
+						this.onSessionChange?.();
 						return {
 							output: `Killed ${killed.length} session(s): ${killed.join(", ")}`,
 							terminal: false,
@@ -1678,6 +1664,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						const remaining = [...this.sessions.keys()];
 						this.activeSessionId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
 					}
+					this.onSessionChange?.();
 					return { output: `Session "${targetName}" killed.`, terminal: false };
 				} catch (err: any) {
 					return { output: `Failed to kill session: ${err.message}`, terminal: false };
