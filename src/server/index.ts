@@ -2,11 +2,12 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { WebSocketServer, type WebSocket } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import type { ContextManager } from "../core/context-manager.js";
 import type { MainAgent } from "../core/main-agent.js";
 import type { SignalRouter } from "../core/signal-router.js";
 import type { ConversationStore } from "../persistence/conversation-store.js";
+import type { TmuxBridge } from "../tmux/bridge.js";
 import { logger } from "../utils/logger.js";
 import { buildAuthCookie, createServerAuthToken, isAuthorized } from "./auth.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
@@ -24,6 +25,7 @@ export interface ServerOptions {
 	contextManager: ContextManager;
 	conversationStore: ConversationStore;
 	broadcaster: ChatBroadcaster;
+	bridge: TmuxBridge;
 	commandRegistry: CommandRegistry;
 	executionEventStore: ExecutionEventStore;
 	uiEventStore?: UiEventStore;
@@ -47,6 +49,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		contextManager,
 		conversationStore,
 		broadcaster,
+		bridge,
 		commandRegistry,
 		executionEventStore,
 		uiEventStore = new UiEventStore(),
@@ -110,6 +113,73 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		res.json(uiEventStore.listRecent(limit));
 	});
 
+	// ─── Session terminal snapshot helper ───────────────
+	async function collectSessionTerminals() {
+		const activeSessions = mainAgent.getActiveSessions();
+		const sessions: Array<{
+			sessionName: string;
+			sessionId: string;
+			status: string;
+			paneContent: string;
+		}> = [];
+		for (const s of activeSessions) {
+			let paneContent = "";
+			try {
+				const capture = await bridge.capturePane(s.paneTarget, {
+					escapeSequences: true,
+					startLine: -100,
+				});
+				paneContent = capture.content;
+			} catch {
+				// tmux pane may have been destroyed — return empty content
+			}
+			sessions.push({
+				sessionName: s.sessionName,
+				sessionId: s.sessionId,
+				status: s.status,
+				paneContent,
+			});
+		}
+		return sessions;
+	}
+
+	function broadcastSessionTerminals() {
+		collectSessionTerminals()
+			.then((sessions) => {
+				broadcaster.broadcast({ type: "session_terminals", sessions });
+			})
+			.catch((err) => {
+				logger.warn("server", `Terminal broadcast failed: ${err.message}`);
+			});
+	}
+
+	// ─── Terminal broadcast timer ───────────────────────
+	let lastBroadcastSessionCount = 0;
+	const terminalBroadcastInterval = setInterval(() => {
+		if (broadcaster.getClientCount() === 0) return;
+		const activeSessions = mainAgent.getActiveSessions();
+		if (activeSessions.length === 0 && lastBroadcastSessionCount === 0) return;
+		lastBroadcastSessionCount = activeSessions.length;
+		broadcastSessionTerminals();
+	}, 1000);
+
+	// Register session change callback for immediate broadcast
+	mainAgent.setOnSessionChange(() => {
+		if (broadcaster.getClientCount() === 0) return;
+		lastBroadcastSessionCount = mainAgent.getActiveSessions().length;
+		broadcastSessionTerminals();
+	});
+
+	app.get("/api/sessions/terminals", async (_req, res) => {
+		try {
+			const sessions = await collectSessionTerminals();
+			res.json(sessions);
+		} catch (err: any) {
+			logger.error("server", `Failed to collect session terminals: ${err.message}`);
+			res.json([]);
+		}
+	});
+
 	// ─── HTTP server ────────────────────────────────────
 	const server = createServer(app);
 
@@ -155,6 +225,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			resolve({
 				port: actualPort,
 				close: async () => {
+					clearInterval(terminalBroadcastInterval);
 					// Close all WebSocket connections
 					for (const client of wss.clients) {
 						client.close();

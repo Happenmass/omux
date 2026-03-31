@@ -894,6 +894,7 @@ async function main(): Promise<void> {
 		contextManager,
 		conversationStore,
 		broadcaster,
+		bridge,
 		commandRegistry,
 		executionEventStore,
 		uiEventStore,
