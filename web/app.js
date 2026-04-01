@@ -14,7 +14,7 @@ let statusText;
 let dropdownEl;
 let terminalViewEl;
 let evidenceViewEl;
-let sessionTabsEl;
+let agentTabsEl;
 let terminalContentEl;
 let terminalEmptyEl;
 let terminalInputBarEl;
@@ -33,9 +33,10 @@ let lastExecutionPanelWidth = 420;
 const executionRuns = new Map();
 const collapsedExecutionRuns = new Set();
 let activePanelTab = "terminal";
-const sessionTerminals = new Map();
-let activeSessionTab = null;
+const agentTerminals = new Map();
+let activeAgentTab = null;
 let terminalMoreLoading = false;
+let lastRenderedTerminalContent = "";
 const EXECUTION_PANEL_DEFAULT_WIDTH = 420;
 const EXECUTION_PANEL_MIN_WIDTH = 320;
 const EXECUTION_PANEL_HIDE_THRESHOLD = 180;
@@ -192,8 +193,8 @@ export function mergeExecutionEventSnapshot(existing, event) {
 	next.persistence = event.persistence
 		? {
 			memoryWrites: event.persistence.memoryWrites ?? [],
-			sessionResumeId: event.persistence.sessionResumeId,
-			sessionResumable: event.persistence.sessionResumable,
+			agentResumeId: event.persistence.agentResumeId,
+			agentResumable: event.persistence.agentResumable,
 			conversationPersisted: event.persistence.conversationPersisted !== false,
 		}
 		: next.persistence;
@@ -236,10 +237,10 @@ function renderPersistence(snapshot) {
 		parts.push(`写入 memory: ${snapshot.persistence.memoryWrites.join(", ")}`);
 	}
 
-	if (snapshot.persistence.sessionResumable !== undefined) {
+	if (snapshot.persistence.agentResumable !== undefined) {
 		parts.push(
-			snapshot.persistence.sessionResumable && snapshot.persistence.sessionResumeId
-				? `会话可恢复: ${snapshot.persistence.sessionResumeId}`
+			snapshot.persistence.agentResumable && snapshot.persistence.agentResumeId
+				? `会话可恢复: ${snapshot.persistence.agentResumeId}`
 				: "会话恢复信息不可用",
 		);
 	}
@@ -481,7 +482,7 @@ function connect() {
 		setConnectionStatus("connected");
 		loadHistory();
 		loadExecutionEvents();
-		loadSessionTerminals();
+		loadAgentTerminals();
 		fetchCommands();
 	};
 
@@ -652,8 +653,8 @@ function handleServerMessage(data) {
 			scrollToBottom();
 			break;
 
-		case "session_terminals":
-			handleSessionTerminals(data.sessions);
+		case "agent_terminals":
+			handleAgentTerminals(data.sessions);
 			break;
 
 		case "clear":
@@ -824,96 +825,96 @@ function initDomReferences() {
 	dropdownEl = document.getElementById("command-dropdown");
 	terminalViewEl = document.getElementById("terminal-view");
 	evidenceViewEl = document.getElementById("evidence-view");
-	sessionTabsEl = document.getElementById("session-tabs");
+	agentTabsEl = document.getElementById("agent-tabs");
 	terminalContentEl = document.getElementById("terminal-content");
 	terminalEmptyEl = document.getElementById("terminal-empty");
 	terminalInputBarEl = document.getElementById("terminal-input-bar");
 	terminalInputEl = document.getElementById("terminal-input");
 }
 
-function loadSessionTerminals() {
-	fetch("/api/sessions/terminals")
+function loadAgentTerminals() {
+	fetch("/api/agents/terminals")
 		.then(function (res) { return res.json(); })
 		.then(function (sessions) {
-			handleSessionTerminals(sessions);
+			handleAgentTerminals(sessions);
 		})
 		.catch(function () {
 			// Silently fail — terminals are optional
 		});
 }
 
-function handleSessionTerminals(sessions) {
-	const previousIds = new Set(sessionTerminals.keys());
+function handleAgentTerminals(sessions) {
+	const previousIds = new Set(agentTerminals.keys());
 	const incomingIds = new Set();
 
 	for (const s of sessions) {
-		incomingIds.add(s.sessionId);
-		sessionTerminals.set(s.sessionId, {
-			name: s.sessionName,
+		incomingIds.add(s.agentId);
+		agentTerminals.set(s.agentId, {
+			name: s.agentName,
 			status: s.status,
 			paneContent: s.paneContent,
 			takenOver: s.takenOver || false,
 		});
 	}
 
-	// Remove sessions that disappeared
+	// Remove agents that disappeared
 	for (const id of previousIds) {
 		if (!incomingIds.has(id)) {
-			sessionTerminals.delete(id);
+			agentTerminals.delete(id);
 		}
 	}
 
-	// Detect new sessions — auto-switch to the last new one
-	let newSessionId = null;
+	// Detect new agents — auto-switch to the last new one
+	let newAgentId = null;
 	for (const id of incomingIds) {
 		if (!previousIds.has(id)) {
-			newSessionId = id;
+			newAgentId = id;
 		}
 	}
-	if (newSessionId) {
-		activeSessionTab = newSessionId;
+	if (newAgentId) {
+		activeAgentTab = newAgentId;
 	}
 
 	// If active tab gone, switch to first remaining
-	if (activeSessionTab && !sessionTerminals.has(activeSessionTab)) {
-		const first = sessionTerminals.keys().next().value;
-		activeSessionTab = first || null;
+	if (activeAgentTab && !agentTerminals.has(activeAgentTab)) {
+		const first = agentTerminals.keys().next().value;
+		activeAgentTab = first || null;
 	}
 
-	// If nothing selected but sessions exist, pick first
-	if (!activeSessionTab && sessionTerminals.size > 0) {
-		activeSessionTab = sessionTerminals.keys().next().value;
+	// If nothing selected but agents exist, pick first
+	if (!activeAgentTab && agentTerminals.size > 0) {
+		activeAgentTab = agentTerminals.keys().next().value;
 	}
 
-	renderSessionTabs();
+	renderAgentTabs();
 	renderTerminalContent();
 }
 
-function renderSessionTabs() {
-	if (!sessionTabsEl) return;
-	if (sessionTerminals.size === 0) {
-		sessionTabsEl.innerHTML = "";
-		sessionTabsEl.style.display = "none";
+function renderAgentTabs() {
+	if (!agentTabsEl) return;
+	if (agentTerminals.size === 0) {
+		agentTabsEl.innerHTML = "";
+		agentTabsEl.style.display = "none";
 		if (terminalContentEl) terminalContentEl.style.display = "none";
 		if (terminalEmptyEl) terminalEmptyEl.classList.add("visible");
 		return;
 	}
 
-	sessionTabsEl.style.display = "flex";
+	agentTabsEl.style.display = "flex";
 	if (terminalContentEl) terminalContentEl.style.display = "";
 	if (terminalEmptyEl) terminalEmptyEl.classList.remove("visible");
 
-	sessionTabsEl.innerHTML = "";
-	for (const [id, data] of sessionTerminals) {
+	agentTabsEl.innerHTML = "";
+	for (const [id, data] of agentTerminals) {
 		const btn = document.createElement("button");
-		btn.className = "session-tab" + (id === activeSessionTab ? " active" : "");
-		btn.dataset.sessionId = id;
+		btn.className = "agent-tab" + (id === activeAgentTab ? " active" : "");
+		btn.dataset.agentId = id;
 
 		const dot = document.createElement("span");
-		dot.className = "session-tab-dot status-" + (data.takenOver ? "taken_over" : data.status);
+		dot.className = "agent-tab-dot status-" + (data.takenOver ? "taken_over" : data.status);
 
 		const label = document.createElement("span");
-		label.className = "session-tab-label";
+		label.className = "agent-tab-label";
 		// Strip cliclaw- prefix for display
 		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
 		label.textContent = displayName;
@@ -935,31 +936,45 @@ function renderSessionTabs() {
 		actionBtn.addEventListener("click", function (e) {
 			e.stopPropagation();
 			if (ws && ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: data.takenOver ? "release" : "takeover", sessionId: id }));
+				ws.send(JSON.stringify({ type: data.takenOver ? "release" : "takeover", agentId: id }));
 			}
 		});
 		btn.appendChild(actionBtn);
 
 		btn.addEventListener("click", function () {
-			activeSessionTab = this.dataset.sessionId;
-			renderSessionTabs();
+			activeAgentTab = this.dataset.agentId;
+			lastRenderedTerminalContent = "";
+			renderAgentTabs();
 			renderTerminalContent();
 		});
-		sessionTabsEl.appendChild(btn);
+		agentTabsEl.appendChild(btn);
 	}
 }
 
 function renderTerminalContent() {
 	if (!terminalContentEl) return;
-	if (!activeSessionTab || !sessionTerminals.has(activeSessionTab)) {
+	if (!activeAgentTab || !agentTerminals.has(activeAgentTab)) {
 		terminalContentEl.innerHTML = "";
 		terminalContentEl.classList.remove("takeover-active");
 		if (terminalInputBarEl) terminalInputBarEl.style.display = "none";
 		return;
 	}
 
-	const data = sessionTerminals.get(activeSessionTab);
+	const data = agentTerminals.get(activeAgentTab);
 	const el = terminalContentEl;
+
+	// Skip DOM update when content is unchanged — avoids breaking text selection / copy
+	if (data.paneContent === lastRenderedTerminalContent) {
+		// Still update takeover state (lightweight, no innerHTML rewrite)
+		const isTakenOver = data.takenOver || false;
+		el.classList.toggle("takeover-active", isTakenOver);
+		if (terminalInputBarEl) {
+			terminalInputBarEl.style.display = isTakenOver ? "flex" : "none";
+		}
+		return;
+	}
+	lastRenderedTerminalContent = data.paneContent;
+
 	const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
 	const prevScrollHeight = el.scrollHeight;
 	const prevScrollTop = el.scrollTop;
@@ -1021,10 +1036,10 @@ function initApp() {
 	if (terminalContentEl) {
 		terminalContentEl.addEventListener("scroll", function () {
 			if (this.scrollTop > 0) return;
-			if (!activeSessionTab || terminalMoreLoading) return;
+			if (!activeAgentTab || terminalMoreLoading) return;
 			if (!ws || ws.readyState !== WebSocket.OPEN) return;
 			terminalMoreLoading = true;
-			ws.send(JSON.stringify({ type: "terminal_more", sessionId: activeSessionTab }));
+			ws.send(JSON.stringify({ type: "terminal_more", agentId: activeAgentTab }));
 		});
 	}
 
@@ -1113,8 +1128,8 @@ function initApp() {
 
 	// ─── Terminal input for takeover mode ──────────────
 	function sendTerminalInput(inputType, data) {
-		if (!ws || ws.readyState !== WebSocket.OPEN || !activeSessionTab) return;
-		ws.send(JSON.stringify({ type: "terminal_input", sessionId: activeSessionTab, inputType, data: data || "" }));
+		if (!ws || ws.readyState !== WebSocket.OPEN || !activeAgentTab) return;
+		ws.send(JSON.stringify({ type: "terminal_input", agentId: activeAgentTab, inputType, data: data || "" }));
 	}
 
 	if (terminalInputEl) {
@@ -1141,8 +1156,8 @@ function initApp() {
 	if (terminalContentEl) {
 		terminalContentEl.setAttribute("tabindex", "0");
 		terminalContentEl.addEventListener("keydown", function (e) {
-			if (!activeSessionTab) return;
-			const data = sessionTerminals.get(activeSessionTab);
+			if (!activeAgentTab) return;
+			const data = agentTerminals.get(activeAgentTab);
 			if (!data || !data.takenOver) return;
 
 			e.preventDefault();

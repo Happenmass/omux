@@ -56,9 +56,9 @@ Emits events: `state_change`, `log`. 14 built-in tools:
 - `escalate_to_human` — terminal: request human intervention
 - `memory_search` / `memory_get` / `memory_write` — hybrid search, read, and persist memories
 - `read_skill` — read full SKILL.md content on demand
-- `create_session` — create a `cliclaw-` prefixed tmux session and launch agent
-- `list_cliclaw_sessions` — list all `cliclaw-` prefixed sessions
-- `kill_session` — gracefully exit agent, destroy tmux session, and clean up registry; returns session id for resume; supports "all"
+- `create_agent` — create a `cliclaw-` prefixed tmux session and launch agent
+- `list_agents` — list all `cliclaw-` prefixed agents
+- `kill_agent` — gracefully exit agent, destroy tmux session, and clean up registry; returns resume id; supports "all"
 - `exec_command` — execute read-only bash commands for reconnaissance
 
 ### Server Layer (`src/server/`)
@@ -131,7 +131,7 @@ Extensible capability system allowing agents to contribute domain-specific tools
 
 ### Prompts (`prompts/`)
 Markdown templates with `{{variable}}` placeholders:
-- `main-agent.md` — MainAgent system prompt (chat-mode autonomous decision guidelines, execution paths, memory recall, session management, skill usage)
+- `main-agent.md` — MainAgent system prompt (chat-mode autonomous decision guidelines, execution paths, memory recall, agent management, skill usage)
 - `state-analyzer.md` — ambiguous state classification
 - `history-compressor.md` — conversation compression
 - `memory-flush.md` — extract decisions/preferences/knowledge from conversation for persistence
@@ -149,8 +149,8 @@ Minimal vanilla HTML/CSS/JS chat interface served by Express as static files.
 - `claude-code.ts` — `ClaudeCodeAdapter`: concrete implementation for Claude Code agent.
 
 ### Other Components
-- `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listCliclawSessions()`)
-- `Session` (`src/core/session.ts`) — session lifecycle management
+- `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listCliclawAgents()`)
+- `AgentRun` (`src/core/agent-run.ts`) — agent lifecycle management
 - `AppTUI` (`src/tui/app.ts`) — legacy TUI dashboard (still compiles but not used as primary interface)
 
 ## Testing
@@ -195,5 +195,5 @@ Server → Client:
 - `{ type: "tool_activity", summary: string }` — exec_command execution summary (throttled: every 3rd call)
 - `{ type: "state", state: "idle" | "executing" }` — state change
 - `{ type: "system", message: string }` — system notification
-- `{ type: "session_terminals", sessions: Array<{ sessionName, sessionId, status, paneContent }> }` — real-time terminal content for all active sessions (pushed every 1s)
+- `{ type: "agent_terminals", sessions: Array<{ sessionName, sessionId, status, paneContent }> }` — real-time terminal content for all active agents (pushed every 1s)
 - `{ type: "clear" }` — clear chat history on frontend

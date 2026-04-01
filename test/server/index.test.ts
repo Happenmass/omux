@@ -11,8 +11,8 @@ function createMainAgentMock() {
 		handleMessage: async () => undefined,
 		handleResume: async () => undefined,
 		waitForIdle: async () => undefined,
-		setOnSessionChange: () => undefined,
-		getActiveSessions: () => [],
+		setOnAgentChange: () => undefined,
+		getActiveAgents: () => [],
 	} as any;
 }
 
@@ -184,10 +184,10 @@ describe("startServer", () => {
 		]);
 	});
 
-	it("should return session terminals from the API", async () => {
+	it("should return agent terminals from the API", async () => {
 		const mainAgent = createMainAgentMock();
-		mainAgent.getActiveSessions = () => [
-			{ sessionName: "cliclaw-auth", sessionId: "cliclaw-auth", paneTarget: "auth:0.0", status: "active" },
+		mainAgent.getActiveAgents = () => [
+			{ agentName: "cliclaw-auth", agentId: "cliclaw-auth", paneTarget: "auth:0.0", status: "active" },
 		];
 
 		const bridge = createBridgeMock();
@@ -208,7 +208,7 @@ describe("startServer", () => {
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
 		const cookie = getCookieHeader(landing);
-		const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/terminals`, {
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/agents/terminals`, {
 			headers: { Cookie: cookie },
 		});
 
@@ -216,14 +216,14 @@ describe("startServer", () => {
 		const sessions = await response.json();
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0]).toEqual({
-			sessionName: "cliclaw-auth",
-			sessionId: "cliclaw-auth",
+			agentName: "cliclaw-auth",
+			agentId: "cliclaw-auth",
 			status: "active",
 			paneContent: "$ claude\n> Working...\n",
 		});
 	});
 
-	it("should return empty array when no active sessions", async () => {
+	it("should return empty array when no active agents", async () => {
 		server = await startServer({
 			host: "127.0.0.1",
 			port: 0,
@@ -239,7 +239,7 @@ describe("startServer", () => {
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
 		const cookie = getCookieHeader(landing);
-		const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/terminals`, {
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/agents/terminals`, {
 			headers: { Cookie: cookie },
 		});
 
@@ -247,11 +247,11 @@ describe("startServer", () => {
 		expect(await response.json()).toEqual([]);
 	});
 
-	it("should handle capturePane failure gracefully in session terminals", async () => {
+	it("should handle capturePane failure gracefully in agent terminals", async () => {
 		const mainAgent = createMainAgentMock();
-		mainAgent.getActiveSessions = () => [
-			{ sessionName: "cliclaw-broken", sessionId: "cliclaw-broken", paneTarget: "broken:0.0", status: "active" },
-			{ sessionName: "cliclaw-ok", sessionId: "cliclaw-ok", paneTarget: "ok:0.0", status: "idle" },
+		mainAgent.getActiveAgents = () => [
+			{ agentName: "cliclaw-broken", agentId: "cliclaw-broken", paneTarget: "broken:0.0", status: "active" },
+			{ agentName: "cliclaw-ok", agentId: "cliclaw-ok", paneTarget: "ok:0.0", status: "idle" },
 		];
 
 		const bridge = createBridgeMock();
@@ -275,17 +275,17 @@ describe("startServer", () => {
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
 		const cookie = getCookieHeader(landing);
-		const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/terminals`, {
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/agents/terminals`, {
 			headers: { Cookie: cookie },
 		});
 
 		expect(response.status).toBe(200);
 		const sessions = await response.json();
 		expect(sessions).toHaveLength(2);
-		// Failed session should have empty paneContent
+		// Failed agent should have empty paneContent
 		expect(sessions[0].paneContent).toBe("");
-		expect(sessions[0].sessionName).toBe("cliclaw-broken");
-		// Working session should have content
+		expect(sessions[0].agentName).toBe("cliclaw-broken");
+		// Working agent should have content
 		expect(sessions[1].paneContent).toBe("ok content");
 	});
 

@@ -120,9 +120,9 @@ describe("TmuxBridge", () => {
 		await bridge.createSession(CliclawName);
 		await bridge.createSession(otherName);
 
-		const CliclawSessions = await bridge.listCliclawSessions();
-		expect(CliclawSessions.some((s) => s.name === CliclawName)).toBe(true);
-		expect(CliclawSessions.every((s) => s.name.startsWith("cliclaw-"))).toBe(true);
-		expect(CliclawSessions.some((s) => s.name === otherName)).toBe(false);
+		const CliclawAgents = await bridge.listCliclawAgents();
+		expect(CliclawAgents.some((s) => s.name === CliclawName)).toBe(true);
+		expect(CliclawAgents.every((s) => s.name.startsWith("cliclaw-"))).toBe(true);
+		expect(CliclawAgents.some((s) => s.name === otherName)).toBe(false);
 	});
 });

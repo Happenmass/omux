@@ -47,7 +47,7 @@ describe("CodexAdapter.launch", () => {
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
 			sessionName: "cliclaw-test",
-			resumeSessionId: "019d41a7-3a10-7b73-90a6-62ee8fa056f6",
+			resumeId: "019d41a7-3a10-7b73-90a6-62ee8fa056f6",
 		});
 		await vi.advanceTimersByTimeAsync(11000);
 		await launchPromise;
@@ -83,7 +83,7 @@ describe("CodexAdapter.exitAgent", () => {
 		expect(bridge.sendKeys).toHaveBeenCalledWith(pane, "C-c");
 
 		expect(bridge.capturePane).toHaveBeenCalledWith(pane);
-		expect(result.sessionId).toBe("019d41a7-3a10-7b73-90a6-62ee8fa056f6");
+		expect(result.resumeId).toBe("019d41a7-3a10-7b73-90a6-62ee8fa056f6");
 		expect(result.content).toBe(captureContent);
 	});
 
@@ -93,7 +93,7 @@ describe("CodexAdapter.exitAgent", () => {
 
 		const result = await adapter.exitAgent(bridge, pane);
 
-		expect(result.sessionId).toBeUndefined();
+		expect(result.resumeId).toBeUndefined();
 		expect(result.content).toBe(captureContent);
 	});
 });

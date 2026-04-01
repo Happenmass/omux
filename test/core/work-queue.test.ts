@@ -3,7 +3,7 @@ import { WorkQueue, type AgentEvent } from "../../src/core/work-queue.js";
 
 function makeAgentEvent(overrides: Partial<AgentEvent> = {}): AgentEvent {
 	return {
-		sessionId: "cliclaw-test-1",
+		agentId: "cliclaw-test-1",
 		taskId: "task_1",
 		status: "completed",
 		detail: "Agent finished",
@@ -142,14 +142,14 @@ describe("WorkQueue", () => {
 		expect(handler).toHaveBeenCalledWith({ kind: "agent_event", event });
 	});
 
-	it("removeAgentEventsBySessionId removes only matching agent events", () => {
+	it("removeAgentEventsByAgentId removes only matching agent events", () => {
 		const q = new WorkQueue();
 		q.enqueueUserMessage("keep me");
-		q.enqueueAgentEvent(makeAgentEvent({ sessionId: "session-A", taskId: "t1" }));
-		q.enqueueAgentEvent(makeAgentEvent({ sessionId: "session-A", taskId: "t2" }));
-		q.enqueueAgentEvent(makeAgentEvent({ sessionId: "session-B", taskId: "t3" }));
+		q.enqueueAgentEvent(makeAgentEvent({ agentId: "session-A", taskId: "t1" }));
+		q.enqueueAgentEvent(makeAgentEvent({ agentId: "session-A", taskId: "t2" }));
+		q.enqueueAgentEvent(makeAgentEvent({ agentId: "session-B", taskId: "t3" }));
 
-		const removed = q.removeAgentEventsBySessionId("session-A");
+		const removed = q.removeAgentEventsByAgentId("session-A");
 
 		expect(removed).toBe(2);
 		expect(q.size()).toBe(2); // user message + session-B event
@@ -157,12 +157,12 @@ describe("WorkQueue", () => {
 		expect(q.dequeue()!.kind).toBe("agent_event");
 	});
 
-	it("removeAgentEventsBySessionId returns 0 when no match", () => {
+	it("removeAgentEventsByAgentId returns 0 when no match", () => {
 		const q = new WorkQueue();
-		q.enqueueAgentEvent(makeAgentEvent({ sessionId: "session-A" }));
+		q.enqueueAgentEvent(makeAgentEvent({ agentId: "session-A" }));
 		q.enqueueUserMessage("msg");
 
-		const removed = q.removeAgentEventsBySessionId("session-X");
+		const removed = q.removeAgentEventsByAgentId("session-X");
 
 		expect(removed).toBe(0);
 		expect(q.size()).toBe(2);

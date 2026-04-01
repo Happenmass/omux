@@ -95,7 +95,7 @@ function createMockBridge() {
 			timestamp: Date.now(),
 		}),
 		hasSession: vi.fn().mockResolvedValue(false),
-		listCliclawSessions: vi.fn().mockResolvedValue([]),
+		listCliclawAgents: vi.fn().mockResolvedValue([]),
 		createSession: vi.fn().mockResolvedValue(undefined),
 	} as any;
 }
@@ -213,7 +213,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		if (withMonitor) {
-			agent.setupSessionMonitor();
+			agent.setupAgentMonitor();
 		}
 
 		return agent;
@@ -351,11 +351,11 @@ describe("MainAgent State Machine", () => {
 
 	describe("handleMessage in EXECUTING state", () => {
 		it("should queue message and send system notification", async () => {
-			// Setup: first call returns a tool that blocks (create_session + send_to_agent)
+			// Setup: first call returns a tool that blocks (create_agent + send_to_agent)
 			// But simpler: just set the state to executing manually by sending a message that triggers tools
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("create_agent", {}, "tc0"),
 					toolCallResponse("send_to_agent", { prompt: "work", summary: "Working" }, "tc1"),
 					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
 				],
@@ -379,8 +379,8 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent(
 				[
 					// First LLM call: tool call
-					toolCallResponse("create_session", {}, "tc0", "I'll create a session."),
-					// Second LLM call (after create_session result): send_to_agent (returns immediately)
+					toolCallResponse("create_agent", {}, "tc0", "I'll create a session."),
+					// Second LLM call (after create_agent result): send_to_agent (returns immediately)
 					toolCallResponse(
 						"send_to_agent",
 						{ prompt: "implement feature", summary: "Implementing feature" },
@@ -411,7 +411,7 @@ describe("MainAgent State Machine", () => {
 		it("should broadcast agent_update for send_to_agent with summary", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("create_agent", {}, "tc0"),
 					toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
 					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
 				],
@@ -427,10 +427,10 @@ describe("MainAgent State Machine", () => {
 			});
 		});
 
-		it("should broadcast execution_event planned phase for create_session and send_to_agent", async () => {
+		it("should broadcast execution_event planned phase for create_agent and send_to_agent", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", {}, "tc0"),
+					toolCallResponse("create_agent", {}, "tc0"),
 					toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
 					toolCallResponse("mark_complete", { summary: "Done" }, "tc2"),
 				],
@@ -445,14 +445,14 @@ describe("MainAgent State Machine", () => {
 				.filter((message: any) => message.type === "execution_event");
 
 			// send_to_agent now returns immediately — settled phase is emitted asynchronously
-			// by SessionMonitor, so we only check for planned phases here
+			// by AgentMonitor, so we only check for planned phases here
 			expect(executionEvents.length).toBeGreaterThanOrEqual(2);
 			expect(executionEvents).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
 						type: "execution_event",
 						event: expect.objectContaining({
-							toolName: "create_session",
+							toolName: "create_agent",
 							phase: "planned",
 						}),
 					}),
@@ -471,9 +471,9 @@ describe("MainAgent State Machine", () => {
 	describe("stopRequested between rounds", () => {
 		it("should stop executing loop when stopRequested is set", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("create_agent", {}, "tc0"),
 				// After this tool, stopRequested will be true
-				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 			]);
 
 			// Patch signalRouter with special isStopRequested behavior
@@ -533,12 +533,12 @@ describe("MainAgent State Machine", () => {
 		it("should return to idle when LLM returns only text in tool loop", async () => {
 			const agent = setupAgent([
 				// First call: tool call to enter EXECUTING
-				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 				// Second call: only text (no tools) → exit EXECUTING
 				textResponse("All looks good, nothing more to do."),
 			]);
 
-			// Need a pane target for inspect_session
+			// Need a pane target for inspect_agent
 			agent.setPaneTarget("test:0.0");
 
 			await agent.handleMessage("check status");
@@ -550,7 +550,7 @@ describe("MainAgent State Machine", () => {
 	describe("compression check between tool rounds", () => {
 		it("should trigger compression when threshold exceeded", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", {}, "tc0"),
+				toolCallResponse("create_agent", {}, "tc0"),
 				toolCallResponse("mark_complete", { summary: "Done" }, "tc1"),
 			]);
 
@@ -565,7 +565,7 @@ describe("MainAgent State Machine", () => {
 	describe("error recovery", () => {
 		it("should recover to idle when handleMessage fails during executing", async () => {
 			const agent = setupAgent([
-				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 			]);
 			agent.setPaneTarget("test:0.0");
 
@@ -581,7 +581,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should recover to idle when handleResume fails", async () => {
 			const agent = setupAgent([
-				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 			]);
 			agent.setPaneTarget("test:0.0");
 
@@ -593,17 +593,17 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("kill_session tool", () => {
-		it("should call adapter.exitAgent then kill tmux and return session id", async () => {
+	describe("kill_agent tool", () => {
+		it("should call adapter.exitAgent then kill tmux and return resume id", async () => {
 			const agent = setupAgent([
-				toolCallResponse("kill_session", { summary: "Exiting to save session" }),
+				toolCallResponse("kill_agent", { summary: "Exiting to save session" }),
 				textResponse("Agent exited successfully."),
 			]);
 			agent.setPaneTarget("test:0.0");
 
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
 				content: "Resume this session with:\nclaude --resume abc-123",
-				sessionId: "abc-123",
+				resumeId: "abc-123",
 			});
 			mockBridge.hasSession.mockResolvedValue(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
@@ -615,16 +615,16 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 		});
 
-		it("should broadcast persisted execution evidence with session id", async () => {
+		it("should broadcast persisted execution evidence with resume id", async () => {
 			const agent = setupAgent([
-				toolCallResponse("kill_session", { summary: "Exiting to save session" }),
+				toolCallResponse("kill_agent", { summary: "Exiting to save session" }),
 				textResponse("Agent exited successfully."),
 			]);
 			agent.setPaneTarget("test:0.0");
 
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
 				content: "Resume this session with:\nclaude --resume abc-123",
-				sessionId: "abc-123",
+				resumeId: "abc-123",
 			});
 			mockBridge.hasSession.mockResolvedValue(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
@@ -635,20 +635,20 @@ describe("MainAgent State Machine", () => {
 				expect.objectContaining({
 					type: "execution_event",
 					event: expect.objectContaining({
-						toolName: "kill_session",
+						toolName: "kill_agent",
 						phase: "persisted",
 						persistence: expect.objectContaining({
-							sessionResumeId: "abc-123",
-							sessionResumable: true,
+							agentResumeId: "abc-123",
+							agentResumable: true,
 						}),
 					}),
 				}),
 			);
 		});
 
-		it("should return error when no active session", async () => {
+		it("should return error when no active agent", async () => {
 			const agent = setupAgent([
-				toolCallResponse("kill_session", { summary: "Exiting" }),
+				toolCallResponse("kill_agent", { summary: "Exiting" }),
 				textResponse("No session."),
 			]);
 			// Do NOT set paneTarget
@@ -661,7 +661,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should succeed without exitAgent by falling back to tmux kill", async () => {
 			const agent = setupAgent([
-				toolCallResponse("kill_session", { summary: "Exiting" }),
+				toolCallResponse("kill_agent", { summary: "Exiting" }),
 				textResponse("Killed."),
 			]);
 			agent.setPaneTarget("test:0.0");
@@ -679,7 +679,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should succeed even if exitAgent throws", async () => {
 			const agent = setupAgent([
-				toolCallResponse("kill_session", { summary: "Exiting" }),
+				toolCallResponse("kill_agent", { summary: "Exiting" }),
 				textResponse("Killed."),
 			]);
 			agent.setPaneTarget("test:0.0");
@@ -872,27 +872,27 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("multi-session routing", () => {
-		it("should register session and set activeSessionId on create_session", async () => {
+	describe("multi-agent routing", () => {
+		it("should register agent and set activeAgentId on create_agent", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "backend" }),
+				toolCallResponse("create_agent", { agent_name: "backend" }),
 				textResponse("Session created."),
 			]);
 
 			await agent.handleMessage("create backend session");
 
 			expect(mockAdapter.launch).toHaveBeenCalled();
-			// Verify the return output contains Session ID
+			// Verify the return output contains the agent name
 			const addMessageCalls = mockCtx.addMessage.mock.calls;
 			const toolResultMsg = addMessageCalls.find(
-				(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("Session ID"),
+				(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("cliclaw-backend"),
 			);
 			expect(toolResultMsg).toBeTruthy();
 		});
 
-		it("should pass resumeSessionId to adapter.launch when resume_session_id is provided", async () => {
+		it("should pass resumeId to adapter.launch when resume_id is provided", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "resumed", resume_session_id: "abc-123" }),
+				toolCallResponse("create_agent", { agent_name: "resumed", resume_id: "abc-123" }),
 				textResponse("Session resumed."),
 			]);
 
@@ -902,20 +902,20 @@ describe("MainAgent State Machine", () => {
 				expect.anything(),
 				expect.objectContaining({
 					sessionName: "cliclaw-resumed",
-					resumeSessionId: "abc-123",
+					resumeId: "abc-123",
 				}),
 			);
 		});
 
-		it("should support multiple sessions and route send_to_agent by session_id", async () => {
-			// Create two sessions, then send to the first one by session_id
+		it("should support multiple agents and route send_to_agent by agent_id", async () => {
+			// Create two agents, then send to the first one by agent_id
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "frontend" }, "tc2"),
 					toolCallResponse(
 						"send_to_agent",
-						{ prompt: "test", summary: "test", session_id: "cliclaw-backend" },
+						{ prompt: "test", summary: "test", agent_id: "cliclaw-backend" },
 						"tc3",
 					),
 					textResponse("Done."),
@@ -924,7 +924,7 @@ describe("MainAgent State Machine", () => {
 				{ withMonitor: true },
 			);
 
-			// Adapter returns different pane targets for each session
+			// Adapter returns different pane targets for each agent
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
 				.mockResolvedValueOnce("cliclaw-frontend:0.0");
@@ -935,10 +935,10 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "test");
 		});
 
-		it("should route to active session when session_id is omitted", async () => {
+		it("should route to active agent when agent_id is omitted", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
 					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc2"),
 					textResponse("Done."),
 				],
@@ -953,13 +953,13 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "test");
 		});
 
-		it("should return error for non-existent session_id", async () => {
+		it("should return error for non-existent agent_id", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
 					toolCallResponse(
 						"send_to_agent",
-						{ prompt: "test", summary: "test", session_id: "nonexistent" },
+						{ prompt: "test", summary: "test", agent_id: "nonexistent" },
 						"tc2",
 					),
 					textResponse("Error handled."),
@@ -974,7 +974,7 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("should return error when no active session exists", async () => {
+		it("should return error when no active agent exists", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc1"),
@@ -989,13 +989,13 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("should remove session from registry on kill_session", async () => {
+		it("should remove agent from registry on kill_agent", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
-					toolCallResponse("kill_session", { summary: "exit frontend", session_id: "cliclaw-frontend" }, "tc3"),
-					// After kill, send to remaining session without session_id
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "frontend" }, "tc2"),
+					toolCallResponse("kill_agent", { summary: "exit frontend", agent_id: "cliclaw-frontend" }, "tc3"),
+					// After kill, send to remaining agent without agent_id
 					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 					textResponse("Done."),
 				],
@@ -1006,8 +1006,8 @@ describe("MainAgent State Machine", () => {
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
 				.mockResolvedValueOnce("cliclaw-frontend:0.0");
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
-			// create_session x2 checks hasSession (false), then kill_session checks (true)
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			// create_agent x2 checks hasAgent (false), then kill_agent checks (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
@@ -1015,16 +1015,16 @@ describe("MainAgent State Machine", () => {
 
 			expect(mockAdapter.exitAgent).toHaveBeenCalledWith(mockBridge, "cliclaw-frontend:0.0");
 			expect(mockBridge.killSession).toHaveBeenCalledWith("cliclaw-frontend");
-			// send_to_agent should route to backend (the remaining session)
+			// send_to_agent should route to backend (the remaining agent)
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-backend:0.0", "continue");
 		});
 
-		it("should set activeSessionId to null when last session is killed", async () => {
+		it("should set activeAgentId to null when last agent is killed", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "only" }, "tc1"),
-					toolCallResponse("kill_session", { summary: "exit only" }, "tc2"),
-					// Now try send_to_agent — should fail with no active session
+					toolCallResponse("create_agent", { agent_name: "only" }, "tc1"),
+					toolCallResponse("kill_agent", { summary: "exit only" }, "tc2"),
+					// Now try send_to_agent — should fail with no active agent
 					toolCallResponse("send_to_agent", { prompt: "test", summary: "test" }, "tc3"),
 					textResponse("Done."),
 				],
@@ -1032,24 +1032,24 @@ describe("MainAgent State Machine", () => {
 				{ withMonitor: true },
 			);
 
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			mockBridge.hasSession.mockResolvedValue(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("exit all");
 
-			// send_to_agent should not have been called since no sessions remain
+			// send_to_agent should not have been called since no agents remain
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("should not change activeSessionId when killing a non-active session", async () => {
+		it("should not change activeAgentId when killing a non-active agent", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "frontend" }, "tc2"),
 					// frontend is now active; kill backend
-					toolCallResponse("kill_session", { summary: "exit backend", session_id: "cliclaw-backend" }, "tc3"),
-					// send without session_id should still go to frontend (still active)
+					toolCallResponse("kill_agent", { summary: "exit backend", agent_id: "cliclaw-backend" }, "tc3"),
+					// send without agent_id should still go to frontend (still active)
 					toolCallResponse("send_to_agent", { prompt: "continue", summary: "continue" }, "tc4"),
 					textResponse("Done."),
 				],
@@ -1060,8 +1060,8 @@ describe("MainAgent State Machine", () => {
 			mockAdapter.launch
 				.mockResolvedValueOnce("cliclaw-backend:0.0")
 				.mockResolvedValueOnce("cliclaw-frontend:0.0");
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
-			// create_session x2 (false), kill_session (true)
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			// create_agent x2 (false), kill_agent (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
@@ -1071,18 +1071,18 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-frontend:0.0", "continue");
 		});
 
-		it("should update activeSessionId when using session_id parameter", async () => {
+		it("should update activeAgentId when using agent_id parameter", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "backend" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "frontend" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "frontend" }, "tc2"),
 					// Send to backend explicitly — should switch active
 					toolCallResponse(
 						"send_to_agent",
-						{ prompt: "backend task", summary: "test", session_id: "cliclaw-backend" },
+						{ prompt: "backend task", summary: "test", agent_id: "cliclaw-backend" },
 						"tc3",
 					),
-					// Now send without session_id — should go to backend (newly active)
+					// Now send without agent_id — should go to backend (newly active)
 					toolCallResponse("send_to_agent", { prompt: "follow up", summary: "test" }, "tc4"),
 					textResponse("Done."),
 				],
@@ -1104,7 +1104,7 @@ describe("MainAgent State Machine", () => {
 
 		it("should work with setPaneTarget for backward compatibility", async () => {
 			const agent = setupAgent([
-				toolCallResponse("inspect_session", { lines: 100 }, "tc1"),
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 				textResponse("Got content."),
 			]);
 
@@ -1136,7 +1136,7 @@ describe("MainAgent State Machine", () => {
 			expect(toolResultMsg).toBeDefined();
 		});
 
-		it("returns active tasks when session monitor has tasks", async () => {
+		it("returns active tasks when agent monitor has tasks", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("list_agent_tasks", {}, "tc1"),
@@ -1149,7 +1149,7 @@ describe("MainAgent State Machine", () => {
 			// Inject a fake task directly via dispatch mock
 			const fakeTask = {
 				taskId: "task_1",
-				sessionId: "cliclaw-test-1",
+				agentId: "cliclaw-test-1",
 				status: "waiting_input" as const,
 				summary: "Implement login flow",
 				taskContext: "Implement login flow",
@@ -1157,7 +1157,7 @@ describe("MainAgent State Machine", () => {
 				startedAt: Date.now() - 30000,
 				abortController: new AbortController(),
 			};
-			(agent as any).sessionMonitor.tasks.set("cliclaw-test-1", fakeTask);
+			(agent as any).agentMonitor.tasks.set("cliclaw-test-1", fakeTask);
 
 			await agent.handleMessage("check agents");
 
@@ -1257,21 +1257,21 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("getActiveSessions", () => {
-		it("should return empty array when no sessions exist", () => {
+	describe("getActiveAgents", () => {
+		it("should return empty array when no agents exist", () => {
 			const agent = setupAgent([]);
-			expect(agent.getActiveSessions()).toEqual([]);
+			expect(agent.getActiveAgents()).toEqual([]);
 		});
 
-		it("should return sessions with idle status when no tasks running", () => {
+		it("should return agents with idle status when no tasks running", () => {
 			const agent = setupAgent([]);
 			agent.setPaneTarget("sess:0.0", "cliclaw-auth");
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions).toHaveLength(1);
 			expect(sessions[0]).toEqual({
-				sessionName: "cliclaw-auth",
-				sessionId: "cliclaw-auth",
+				agentName: "cliclaw-auth",
+				agentId: "cliclaw-auth",
 				paneTarget: "sess:0.0",
 				status: "idle",
 				takenOver: false,
@@ -1285,7 +1285,7 @@ describe("MainAgent State Machine", () => {
 			// Inject a running task
 			const fakeTask = {
 				taskId: "task_1",
-				sessionId: "cliclaw-auth",
+				agentId: "cliclaw-auth",
 				status: "running" as const,
 				summary: "test",
 				taskContext: "test",
@@ -1293,9 +1293,9 @@ describe("MainAgent State Machine", () => {
 				startedAt: Date.now(),
 				abortController: new AbortController(),
 			};
-			(agent as any).sessionMonitor.tasks.set("cliclaw-auth", fakeTask);
+			(agent as any).agentMonitor.tasks.set("cliclaw-auth", fakeTask);
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions[0].status).toBe("active");
 		});
 
@@ -1305,7 +1305,7 @@ describe("MainAgent State Machine", () => {
 
 			const fakeTask = {
 				taskId: "task_1",
-				sessionId: "cliclaw-auth",
+				agentId: "cliclaw-auth",
 				status: "waiting_input" as const,
 				summary: "test",
 				taskContext: "test",
@@ -1313,21 +1313,21 @@ describe("MainAgent State Machine", () => {
 				startedAt: Date.now(),
 				abortController: new AbortController(),
 			};
-			(agent as any).sessionMonitor.tasks.set("cliclaw-auth", fakeTask);
+			(agent as any).agentMonitor.tasks.set("cliclaw-auth", fakeTask);
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions[0].status).toBe("waiting_input");
 		});
 
-		it("should return multiple sessions with mixed states", () => {
+		it("should return multiple agents with mixed states", () => {
 			const agent = setupAgent([], {}, { withMonitor: true });
 			agent.setPaneTarget("s1:0.0", "cliclaw-a");
 			agent.setPaneTarget("s2:0.0", "cliclaw-b");
 			agent.setPaneTarget("s3:0.0", "cliclaw-c");
 
-			(agent as any).sessionMonitor.tasks.set("cliclaw-a", {
+			(agent as any).agentMonitor.tasks.set("cliclaw-a", {
 				taskId: "t1",
-				sessionId: "cliclaw-a",
+				agentId: "cliclaw-a",
 				status: "running",
 				summary: "",
 				taskContext: "",
@@ -1335,9 +1335,9 @@ describe("MainAgent State Machine", () => {
 				startedAt: Date.now(),
 				abortController: new AbortController(),
 			});
-			(agent as any).sessionMonitor.tasks.set("cliclaw-b", {
+			(agent as any).agentMonitor.tasks.set("cliclaw-b", {
 				taskId: "t2",
-				sessionId: "cliclaw-b",
+				agentId: "cliclaw-b",
 				status: "waiting_input",
 				summary: "",
 				taskContext: "",
@@ -1346,67 +1346,67 @@ describe("MainAgent State Machine", () => {
 				abortController: new AbortController(),
 			});
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions).toHaveLength(3);
-			const statusMap = new Map(sessions.map((s: any) => [s.sessionId, s.status]));
+			const statusMap = new Map(sessions.map((s: any) => [s.agentId, s.status]));
 			expect(statusMap.get("cliclaw-a")).toBe("active");
 			expect(statusMap.get("cliclaw-b")).toBe("waiting_input");
 			expect(statusMap.get("cliclaw-c")).toBe("idle");
 		});
 	});
 
-	describe("onSessionChange callback", () => {
-		it("should call onSessionChange after create_session", async () => {
+	describe("onAgentChange callback", () => {
+		it("should call onAgentChange after create_agent", async () => {
 			const callback = vi.fn();
 			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "test" }),
+				toolCallResponse("create_agent", { agent_name: "test" }),
 				textResponse("Done."),
 			]);
-			agent.setOnSessionChange(callback);
+			agent.setOnAgentChange(callback);
 
 			await agent.handleMessage("create session");
 
 			expect(callback).toHaveBeenCalledTimes(1);
 		});
 
-		it("should call onSessionChange after kill_session (with exitAgent)", async () => {
+		it("should call onAgentChange after kill_agent (with exitAgent)", async () => {
 			const callback = vi.fn();
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "test" }, "tc1"),
+					toolCallResponse("kill_agent", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
 				{},
 				{ withMonitor: true },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
-			// create_session (false), kill_session (true)
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			// create_agent (false), kill_agent (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
-			agent.setOnSessionChange(callback);
+			agent.setOnAgentChange(callback);
 
 			await agent.handleMessage("create and exit");
 
-			// Called twice: once for create_session, once for kill_session
+			// Called twice: once for create_agent, once for kill_agent
 			expect(callback).toHaveBeenCalledTimes(2);
 		});
 
-		it("should call onSessionChange after kill_session (explicit session_id)", async () => {
+		it("should call onAgentChange after kill_agent (explicit agent_id)", async () => {
 			const callback = vi.fn();
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("kill_session", { session_id: "cliclaw-test", summary: "kill" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "test" }, "tc1"),
+					toolCallResponse("kill_agent", { agent_id: "cliclaw-test", summary: "kill" }, "tc2"),
 					textResponse("Done."),
 				],
 				{},
 				{ withMonitor: true },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
-			agent.setOnSessionChange(callback);
+			agent.setOnAgentChange(callback);
 
 			await agent.handleMessage("create and kill");
 
@@ -1415,11 +1415,11 @@ describe("MainAgent State Machine", () => {
 
 		it("should not throw when no callback is registered", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "test" }),
+				toolCallResponse("create_agent", { agent_name: "test" }),
 				textResponse("Done."),
 			]);
 
-			// No setOnSessionChange — should not throw
+			// No setOnAgentChange — should not throw
 			await expect(agent.handleMessage("create session")).resolves.toBeUndefined();
 		});
 	});
@@ -1509,9 +1509,9 @@ describe("MainAgent State Machine", () => {
 				stateDetector: mockDetector,
 				broadcaster: mockBroadcaster,
 			});
-			agent.setupSessionMonitor();
+			agent.setupAgentMonitor();
 
-			// Pre-register a session so send_to_agent can dispatch
+			// Pre-register an agent so send_to_agent can dispatch
 			agent.setPaneTarget("test-session:0.0", "cliclaw-test-1");
 
 			// Start handleMessage — this will enter drainPendingUserMessages
@@ -1522,7 +1522,7 @@ describe("MainAgent State Machine", () => {
 			await Promise.resolve();
 
 			// The mock stateDetector resolves immediately with "completed",
-			// so SessionMonitor will automatically enqueue an agent event
+			// so AgentMonitor will automatically enqueue an agent event
 			// into the workQueue during the executeToolLoop.
 
 			// Wait for handleMessage to fully complete
@@ -1551,126 +1551,126 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("session persistence (SessionStore integration)", () => {
-		function createMockSessionStore() {
+	describe("agent persistence (AgentStore integration)", () => {
+		function createMockAgentStore() {
 			return {
-				saveSession: vi.fn(),
-				deleteSession: vi.fn(),
-				loadSessions: vi.fn().mockReturnValue([]),
+				saveAgent: vi.fn(),
+				deleteAgent: vi.fn(),
+				loadAgents: vi.fn().mockReturnValue([]),
 			} as any;
 		}
 
-		it("should call sessionStore.saveSession on create_session", async () => {
-			const mockSessionStore = createMockSessionStore();
+		it("should call agentStore.saveAgent on create_agent", async () => {
+			const mockAgentStore = createMockAgentStore();
 			const agent = setupAgent(
-				[toolCallResponse("create_session", { session_name: "test" }), textResponse("Done.")],
-				{ sessionStore: mockSessionStore },
+				[toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")],
+				{ agentStore: mockAgentStore },
 			);
 
 			await agent.handleMessage("create session");
 
-			expect(mockSessionStore.saveSession).toHaveBeenCalledTimes(1);
-			expect(mockSessionStore.saveSession).toHaveBeenCalledWith("cliclaw-test", {
+			expect(mockAgentStore.saveAgent).toHaveBeenCalledTimes(1);
+			expect(mockAgentStore.saveAgent).toHaveBeenCalledWith("cliclaw-test", {
 				paneTarget: "test-session:0.0",
 				workingDir: expect.any(String),
 			});
 		});
 
-		it("should call sessionStore.deleteSession on kill_session", async () => {
-			const mockSessionStore = createMockSessionStore();
+		it("should call agentStore.deleteAgent on kill_agent", async () => {
+			const mockAgentStore = createMockAgentStore();
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "test" }, "tc1"),
+					toolCallResponse("kill_agent", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
-				{ sessionStore: mockSessionStore },
+				{ agentStore: mockAgentStore },
 				{ withMonitor: true },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
-			// create_session (false), kill_session (true)
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			// create_agent (false), kill_agent (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create and exit");
 
-			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-test");
+			expect(mockAgentStore.deleteAgent).toHaveBeenCalledWith("cliclaw-test");
 		});
 
-		it("should call sessionStore.deleteSession on kill_session (explicit session_id)", async () => {
-			const mockSessionStore = createMockSessionStore();
+		it("should call agentStore.deleteAgent on kill_agent (explicit agent_id)", async () => {
+			const mockAgentStore = createMockAgentStore();
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "test" }, "tc1"),
-					toolCallResponse("kill_session", { session_id: "cliclaw-test", summary: "kill" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "test" }, "tc1"),
+					toolCallResponse("kill_agent", { agent_id: "cliclaw-test", summary: "kill" }, "tc2"),
 					textResponse("Done."),
 				],
-				{ sessionStore: mockSessionStore },
+				{ agentStore: mockAgentStore },
 				{ withMonitor: true },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create and kill");
 
-			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-test");
+			expect(mockAgentStore.deleteAgent).toHaveBeenCalledWith("cliclaw-test");
 		});
 
-		it("should call sessionStore.deleteSession for each session on kill_session all", async () => {
-			const mockSessionStore = createMockSessionStore();
+		it("should call agentStore.deleteAgent for each agent on kill_agent all", async () => {
+			const mockAgentStore = createMockAgentStore();
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "s1" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "s2" }, "tc2"),
-					toolCallResponse("kill_session", { session_id: "all", summary: "kill all" }, "tc3"),
+					toolCallResponse("create_agent", { agent_name: "s1" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "s2" }, "tc2"),
+					toolCallResponse("kill_agent", { agent_id: "all", summary: "kill all" }, "tc3"),
 					textResponse("Done."),
 				],
-				{ sessionStore: mockSessionStore },
+				{ agentStore: mockAgentStore },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
-			mockBridge.listCliclawSessions.mockResolvedValue([{ name: "cliclaw-s1", windows: 1, attached: false }, { name: "cliclaw-s2", windows: 1, attached: false }]);
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			mockBridge.listCliclawAgents.mockResolvedValue([{ name: "cliclaw-s1", windows: 1, attached: false }, { name: "cliclaw-s2", windows: 1, attached: false }]);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create two and kill all");
 
-			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-s1");
-			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-s2");
+			expect(mockAgentStore.deleteAgent).toHaveBeenCalledWith("cliclaw-s1");
+			expect(mockAgentStore.deleteAgent).toHaveBeenCalledWith("cliclaw-s2");
 		});
 
-		it("should not fail when sessionStore is not provided", async () => {
+		it("should not fail when agentStore is not provided", async () => {
 			const agent = setupAgent([
-				toolCallResponse("create_session", { session_name: "test" }),
+				toolCallResponse("create_agent", { agent_name: "test" }),
 				textResponse("Done."),
 			]);
-			// No sessionStore — should not throw
+			// No agentStore — should not throw
 			await expect(agent.handleMessage("create session")).resolves.toBeUndefined();
 		});
 	});
 
-	describe("restoreSession", () => {
-		it("should restore a session into the sessions map", () => {
+	describe("restoreAgent", () => {
+		it("should restore an agent into the agents map", () => {
 			const agent = setupAgent([]);
-			agent.restoreSession("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
+			agent.restoreAgent("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions).toHaveLength(1);
-			expect(sessions[0].sessionId).toBe("cliclaw-restored");
+			expect(sessions[0].agentId).toBe("cliclaw-restored");
 			expect(sessions[0].paneTarget).toBe("cliclaw-restored:0.0");
 		});
 
-		it("should set the restored session as active (last wins)", () => {
+		it("should set the restored agent as active (last wins)", () => {
 			const agent = setupAgent([]);
-			agent.restoreSession("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
-			agent.restoreSession("cliclaw-b", { paneTarget: "b:0.0", workingDir: "/b" });
+			agent.restoreAgent("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
+			agent.restoreAgent("cliclaw-b", { paneTarget: "b:0.0", workingDir: "/b" });
 
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions).toHaveLength(2);
-			expect((agent as any).activeSessionId).toBe("cliclaw-b");
+			expect((agent as any).activeAgentId).toBe("cliclaw-b");
 		});
 
-		it("should allow restored sessions to be used by send_to_agent", async () => {
-			// Restore a session then try to send_to_agent — it should route to the restored session
+		it("should allow restored agents to be used by send_to_agent", async () => {
+			// Restore an agent then try to send_to_agent — it should route to the restored agent
 			const agent = setupAgent(
 				[
 					toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }),
@@ -1679,11 +1679,11 @@ describe("MainAgent State Machine", () => {
 				{},
 				{ withMonitor: true },
 			);
-			agent.restoreSession("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
+			agent.restoreAgent("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
 
 			await agent.handleMessage("send hello to agent");
 
-			// sendPrompt should have been called on the restored session's pane
+			// sendPrompt should have been called on the restored agent's pane
 			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(
 				mockBridge,
 				"cliclaw-restored:0.0",
@@ -1691,47 +1691,47 @@ describe("MainAgent State Machine", () => {
 			);
 		});
 
-		it("should allow restored sessions to be killed", async () => {
-			const mockSessionStore = {
-				saveSession: vi.fn(),
-				deleteSession: vi.fn(),
-				loadSessions: vi.fn().mockReturnValue([]),
+		it("should allow restored agents to be killed", async () => {
+			const mockAgentStore = {
+				saveAgent: vi.fn(),
+				deleteAgent: vi.fn(),
+				loadAgents: vi.fn().mockReturnValue([]),
 			} as any;
 			const agent = setupAgent(
 				[
-					toolCallResponse("kill_session", { session_id: "cliclaw-restored", summary: "kill" }),
+					toolCallResponse("kill_agent", { agent_id: "cliclaw-restored", summary: "kill" }),
 					textResponse("Done."),
 				],
-				{ sessionStore: mockSessionStore },
+				{ agentStore: mockAgentStore },
 				{ withMonitor: true },
 			);
-			agent.restoreSession("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
+			agent.restoreAgent("cliclaw-restored", { paneTarget: "cliclaw-restored:0.0", workingDir: "/work" });
 			mockBridge.hasSession.mockResolvedValueOnce(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("kill the restored session");
 
 			expect(mockBridge.killSession).toHaveBeenCalledWith("cliclaw-restored");
-			expect(mockSessionStore.deleteSession).toHaveBeenCalledWith("cliclaw-restored");
-			expect(agent.getActiveSessions()).toHaveLength(0);
+			expect(mockAgentStore.deleteAgent).toHaveBeenCalledWith("cliclaw-restored");
+			expect(agent.getActiveAgents()).toHaveLength(0);
 		});
 
-		it("should not trigger onSessionChange during restore", () => {
+		it("should not trigger onAgentChange during restore", () => {
 			const callback = vi.fn();
 			const agent = setupAgent([]);
-			agent.setOnSessionChange(callback);
+			agent.setOnAgentChange(callback);
 
-			agent.restoreSession("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
+			agent.restoreAgent("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
 
-			// restoreSession is a cold restore — no broadcast needed
+			// restoreAgent is a cold restore — no broadcast needed
 			expect(callback).not.toHaveBeenCalled();
 		});
 	});
 
-	describe("session persistence with real SessionStore", () => {
+	describe("agent persistence with real AgentStore", () => {
 		let tmpDir: string;
 		let realDb: any;
-		let realSessionStore: any;
+		let realAgentStore: any;
 
 		beforeEach(async () => {
 			const { mkdtemp } = await import("node:fs/promises");
@@ -1739,12 +1739,12 @@ describe("MainAgent State Machine", () => {
 			const { join } = await import("node:path");
 			const Database = (await import("better-sqlite3")).default;
 
-			tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-agent-session-test-"));
+			tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-agent-store-test-"));
 			realDb = new Database(join(tmpDir, "test.sqlite"));
 			realDb.pragma("journal_mode = WAL");
 
-			const { SessionStore } = await import("../../src/persistence/session-store.js");
-			realSessionStore = new SessionStore(realDb);
+			const { AgentStore } = await import("../../src/persistence/agent-store.js");
+			realAgentStore = new AgentStore(realDb);
 		});
 
 		afterEach(async () => {
@@ -1755,93 +1755,93 @@ describe("MainAgent State Machine", () => {
 			}
 		});
 
-		it("should persist session to real SQLite on create_session", async () => {
+		it("should persist agent to real SQLite on create_agent", async () => {
 			const agent = setupAgent(
-				[toolCallResponse("create_session", { session_name: "real-test" }), textResponse("Done.")],
-				{ sessionStore: realSessionStore },
+				[toolCallResponse("create_agent", { agent_name: "real-test" }), textResponse("Done.")],
+				{ agentStore: realAgentStore },
 			);
 
 			await agent.handleMessage("create session");
 
-			const sessions = realSessionStore.loadSessions();
-			expect(sessions).toHaveLength(1);
-			expect(sessions[0].sessionId).toBe("cliclaw-real-test");
-			expect(sessions[0].paneTarget).toBe("test-session:0.0");
+			const agents = realAgentStore.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].agentId).toBe("cliclaw-real-test");
+			expect(agents[0].paneTarget).toBe("test-session:0.0");
 		});
 
-		it("should remove from real SQLite on kill_session", async () => {
+		it("should remove from real SQLite on kill_agent", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "real-exit" }, "tc1"),
-					toolCallResponse("kill_session", { summary: "exit" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "real-exit" }, "tc1"),
+					toolCallResponse("kill_agent", { summary: "exit" }, "tc2"),
 					textResponse("Done."),
 				],
-				{ sessionStore: realSessionStore },
+				{ agentStore: realAgentStore },
 				{ withMonitor: true },
 			);
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", sessionId: null });
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			mockBridge.hasSession.mockResolvedValue(true);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create and exit");
 
-			expect(realSessionStore.loadSessions()).toHaveLength(0);
+			expect(realAgentStore.loadAgents()).toHaveLength(0);
 		});
 
 		it("full lifecycle: create → persist → simulate restart → restore", async () => {
-			// Phase 1: create sessions
+			// Phase 1: create agents
 			const agent1 = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "svc-a" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "svc-b" }, "tc2"),
+					toolCallResponse("create_agent", { agent_name: "svc-a" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "svc-b" }, "tc2"),
 					textResponse("Done."),
 				],
-				{ sessionStore: realSessionStore },
+				{ agentStore: realAgentStore },
 			);
 
 			await agent1.handleMessage("create two sessions");
 
 			// Verify persisted
-			const persisted = realSessionStore.loadSessions();
+			const persisted = realAgentStore.loadAgents();
 			expect(persisted).toHaveLength(2);
-			expect(persisted[0].sessionId).toBe("cliclaw-svc-a");
-			expect(persisted[1].sessionId).toBe("cliclaw-svc-b");
+			expect(persisted[0].agentId).toBe("cliclaw-svc-a");
+			expect(persisted[1].agentId).toBe("cliclaw-svc-b");
 
 			// Phase 2: simulate restart — new agent, load from store, restore alive ones
-			const agent2 = setupAgent([], { sessionStore: realSessionStore });
-			const loaded = realSessionStore.loadSessions();
+			const agent2 = setupAgent([], { agentStore: realAgentStore });
+			const loaded = realAgentStore.loadAgents();
 
 			// Simulate: svc-a is alive, svc-b is dead
 			for (const s of loaded) {
-				if (s.sessionId === "cliclaw-svc-a") {
-					agent2.restoreSession(s.sessionId, { paneTarget: s.paneTarget, workingDir: s.workingDir });
+				if (s.agentId === "cliclaw-svc-a") {
+					agent2.restoreAgent(s.agentId, { paneTarget: s.paneTarget, workingDir: s.workingDir });
 				} else {
-					realSessionStore.deleteSession(s.sessionId);
+					realAgentStore.deleteAgent(s.agentId);
 				}
 			}
 
 			// Verify in-memory state
-			const restored = agent2.getActiveSessions();
+			const restored = agent2.getActiveAgents();
 			expect(restored).toHaveLength(1);
-			expect(restored[0].sessionId).toBe("cliclaw-svc-a");
+			expect(restored[0].agentId).toBe("cliclaw-svc-a");
 
 			// Verify SQLite state
-			const remaining = realSessionStore.loadSessions();
+			const remaining = realAgentStore.loadAgents();
 			expect(remaining).toHaveLength(1);
-			expect(remaining[0].sessionId).toBe("cliclaw-svc-a");
+			expect(remaining[0].agentId).toBe("cliclaw-svc-a");
 		});
 
 		it("create → kill all → verify SQLite is empty", async () => {
 			const agent = setupAgent(
 				[
-					toolCallResponse("create_session", { session_name: "k1" }, "tc1"),
-					toolCallResponse("create_session", { session_name: "k2" }, "tc2"),
-					toolCallResponse("kill_session", { session_id: "all", summary: "kill all" }, "tc3"),
+					toolCallResponse("create_agent", { agent_name: "k1" }, "tc1"),
+					toolCallResponse("create_agent", { agent_name: "k2" }, "tc2"),
+					toolCallResponse("kill_agent", { agent_id: "all", summary: "kill all" }, "tc3"),
 					textResponse("Done."),
 				],
-				{ sessionStore: realSessionStore },
+				{ agentStore: realAgentStore },
 			);
-			mockBridge.listCliclawSessions.mockResolvedValue([
+			mockBridge.listCliclawAgents.mockResolvedValue([
 				{ name: "cliclaw-k1", windows: 1, attached: false },
 				{ name: "cliclaw-k2", windows: 1, attached: false },
 			]);
@@ -1849,37 +1849,37 @@ describe("MainAgent State Machine", () => {
 
 			await agent.handleMessage("create two and kill all");
 
-			expect(realSessionStore.loadSessions()).toHaveLength(0);
-			expect(agent.getActiveSessions()).toHaveLength(0);
+			expect(realAgentStore.loadAgents()).toHaveLength(0);
+			expect(agent.getActiveAgents()).toHaveLength(0);
 		});
 	});
 
 	describe("human takeover (takenOver)", () => {
-		it("setTakenOver should mark session and call sessionStore", () => {
-			const mockSessionStore = {
-				saveSession: vi.fn(),
-				deleteSession: vi.fn(),
-				loadSessions: vi.fn().mockReturnValue([]),
+		it("setTakenOver should mark agent and call agentStore", () => {
+			const mockAgentStore = {
+				saveAgent: vi.fn(),
+				deleteAgent: vi.fn(),
+				loadAgents: vi.fn().mockReturnValue([]),
 				setTakenOver: vi.fn(),
 			} as any;
-			const agent = setupAgent([], { sessionStore: mockSessionStore });
-			agent.restoreSession("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
+			const agent = setupAgent([], { agentStore: mockAgentStore });
+			agent.restoreAgent("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
 
 			agent.setTakenOver("cliclaw-test", true);
 
 			expect(agent.isTakenOver("cliclaw-test")).toBe(true);
-			expect(mockSessionStore.setTakenOver).toHaveBeenCalledWith("cliclaw-test", true);
+			expect(mockAgentStore.setTakenOver).toHaveBeenCalledWith("cliclaw-test", true);
 		});
 
-		it("setTakenOver(false) should release session", () => {
-			const mockSessionStore = {
-				saveSession: vi.fn(),
-				deleteSession: vi.fn(),
-				loadSessions: vi.fn().mockReturnValue([]),
+		it("setTakenOver(false) should release agent", () => {
+			const mockAgentStore = {
+				saveAgent: vi.fn(),
+				deleteAgent: vi.fn(),
+				loadAgents: vi.fn().mockReturnValue([]),
 				setTakenOver: vi.fn(),
 			} as any;
-			const agent = setupAgent([], { sessionStore: mockSessionStore });
-			agent.restoreSession("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
+			const agent = setupAgent([], { agentStore: mockAgentStore });
+			agent.restoreAgent("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
 
 			agent.setTakenOver("cliclaw-test", true);
 			agent.setTakenOver("cliclaw-test", false);
@@ -1887,38 +1887,38 @@ describe("MainAgent State Machine", () => {
 			expect(agent.isTakenOver("cliclaw-test")).toBe(false);
 		});
 
-		it("setTakenOver should trigger onSessionChange", () => {
+		it("setTakenOver should trigger onAgentChange", () => {
 			const callback = vi.fn();
 			const agent = setupAgent([]);
-			agent.setOnSessionChange(callback);
-			agent.restoreSession("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
+			agent.setOnAgentChange(callback);
+			agent.restoreAgent("cliclaw-test", { paneTarget: "t:0.0", workingDir: "/t" });
 
 			agent.setTakenOver("cliclaw-test", true);
 
 			expect(callback).toHaveBeenCalledTimes(1);
 		});
 
-		it("setTakenOver should be no-op for non-existent session", () => {
+		it("setTakenOver should be no-op for non-existent agent", () => {
 			const agent = setupAgent([]);
 			agent.setTakenOver("cliclaw-nonexistent", true);
 			expect(agent.isTakenOver("cliclaw-nonexistent")).toBe(false);
 		});
 
-		it("getActiveSessions should include takenOver field", () => {
+		it("getActiveAgents should include takenOver field", () => {
 			const agent = setupAgent([]);
-			agent.restoreSession("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
-			agent.restoreSession("cliclaw-b", { paneTarget: "b:0.0", workingDir: "/b" });
+			agent.restoreAgent("cliclaw-a", { paneTarget: "a:0.0", workingDir: "/a" });
+			agent.restoreAgent("cliclaw-b", { paneTarget: "b:0.0", workingDir: "/b" });
 
 			agent.setTakenOver("cliclaw-a", true);
 
-			const sessions = agent.getActiveSessions();
-			const a = sessions.find((s: any) => s.sessionId === "cliclaw-a");
-			const b = sessions.find((s: any) => s.sessionId === "cliclaw-b");
+			const sessions = agent.getActiveAgents();
+			const a = sessions.find((s: any) => s.agentId === "cliclaw-a");
+			const b = sessions.find((s: any) => s.agentId === "cliclaw-b");
 			expect(a!.takenOver).toBe(true);
 			expect(b!.takenOver).toBe(false);
 		});
 
-		it("resolveSession should block send_to_agent for taken-over session", async () => {
+		it("resolveAgent should block send_to_agent for taken-over agent", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }),
@@ -1927,7 +1927,7 @@ describe("MainAgent State Machine", () => {
 				{},
 				{ withMonitor: true },
 			);
-			agent.restoreSession("cliclaw-taken", { paneTarget: "t:0.0", workingDir: "/t" });
+			agent.restoreAgent("cliclaw-taken", { paneTarget: "t:0.0", workingDir: "/t" });
 			agent.setTakenOver("cliclaw-taken", true);
 
 			await agent.handleMessage("send hello");
@@ -1936,25 +1936,25 @@ describe("MainAgent State Machine", () => {
 			expect(mockAdapter.sendPrompt).not.toHaveBeenCalled();
 		});
 
-		it("restoreSession with takenOver=true should restore takeover state", () => {
+		it("restoreAgent with takenOver=true should restore takeover state", () => {
 			const agent = setupAgent([]);
-			agent.restoreSession("cliclaw-tk", { paneTarget: "tk:0.0", workingDir: "/tk" }, true);
+			agent.restoreAgent("cliclaw-tk", { paneTarget: "tk:0.0", workingDir: "/tk" }, true);
 
 			expect(agent.isTakenOver("cliclaw-tk")).toBe(true);
-			const sessions = agent.getActiveSessions();
+			const sessions = agent.getActiveAgents();
 			expect(sessions[0].takenOver).toBe(true);
 		});
 
-		it("getSessionPaneTarget should return pane target for existing session", () => {
+		it("getAgentPaneTarget should return pane target for existing agent", () => {
 			const agent = setupAgent([]);
-			agent.restoreSession("cliclaw-pt", { paneTarget: "pt:0.0", workingDir: "/pt" });
+			agent.restoreAgent("cliclaw-pt", { paneTarget: "pt:0.0", workingDir: "/pt" });
 
-			expect(agent.getSessionPaneTarget("cliclaw-pt")).toBe("pt:0.0");
+			expect(agent.getAgentPaneTarget("cliclaw-pt")).toBe("pt:0.0");
 		});
 
-		it("getSessionPaneTarget should return undefined for non-existent session", () => {
+		it("getAgentPaneTarget should return undefined for non-existent agent", () => {
 			const agent = setupAgent([]);
-			expect(agent.getSessionPaneTarget("cliclaw-none")).toBeUndefined();
+			expect(agent.getAgentPaneTarget("cliclaw-none")).toBeUndefined();
 		});
 	});
 });

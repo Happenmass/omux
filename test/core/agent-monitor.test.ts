@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SessionMonitor } from "../../src/core/session-monitor.js";
-import type { SettledEvent } from "../../src/core/session-monitor.js";
+import { AgentMonitor } from "../../src/core/agent-monitor.js";
+import type { SettledEvent } from "../../src/core/agent-monitor.js";
 import { WorkQueue, type AgentEvent } from "../../src/core/work-queue.js";
 import type { SettledResult, PaneAnalysis } from "../../src/tmux/state-detector.js";
 
@@ -43,8 +43,8 @@ function settledResult(status: PaneAnalysis["status"], detail = "done", timedOut
 	};
 }
 
-describe("SessionMonitor", () => {
-	let monitor: SessionMonitor;
+describe("AgentMonitor", () => {
+	let monitor: AgentMonitor;
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockSignalRouter: ReturnType<typeof createMockSignalRouter>;
@@ -58,7 +58,7 @@ describe("SessionMonitor", () => {
 		workQueue = new WorkQueue();
 		onSettled = vi.fn();
 
-		monitor = new SessionMonitor({
+		monitor = new AgentMonitor({
 			stateDetector: mockDetector as any,
 			bridge: mockBridge,
 			signalRouter: mockSignalRouter,
@@ -84,7 +84,7 @@ describe("SessionMonitor", () => {
 			expect(result.dispatched).toBe(true);
 			if (result.dispatched) {
 				expect(result.task.taskId).toBe("task_1");
-				expect(result.task.sessionId).toBe("session-1");
+				expect(result.task.agentId).toBe("session-1");
 				expect(result.task.status).toBe("running");
 				expect(result.task.summary).toBe("Fix the bug");
 				expect(result.task.preHash).toBe("abc123");
@@ -168,9 +168,9 @@ describe("SessionMonitor", () => {
 
 			expect(result.dispatched).toBe(false);
 			if (!result.dispatched) {
-				expect(result.busy.sessionId).toBe("session-1");
+				expect(result.busy.agentId).toBe("session-1");
 				expect(result.busy.currentTask.summary).toBe("First task");
-				expect(result.busy.paneContent).toBe("(session busy)");
+				expect(result.busy.paneContent).toBe("(agent busy)");
 			}
 		});
 	});
@@ -207,7 +207,7 @@ describe("SessionMonitor", () => {
 
 			const item = workQueue.dequeue()!;
 			const event = item.kind === "agent_event" ? item.event : null!;
-			expect(event.sessionId).toBe("session-1");
+			expect(event.agentId).toBe("session-1");
 			expect(event.taskId).toBe("task_1");
 			expect(event.status).toBe("completed");
 			expect(event.detail).toBe("Task finished successfully");
@@ -325,7 +325,7 @@ describe("SessionMonitor", () => {
 			const workItem = handler.mock.calls[0][0] as { kind: string; event: AgentEvent };
 			expect(workItem.kind).toBe("agent_event");
 			expect(workItem.event.status).toBe("completed");
-			expect(workItem.event.sessionId).toBe("session-1");
+			expect(workItem.event.agentId).toBe("session-1");
 		});
 	});
 
@@ -406,7 +406,7 @@ describe("SessionMonitor", () => {
 		});
 
 		it("should not fire when onSettled callback is not provided", async () => {
-			const monitorNoSettled = new SessionMonitor({
+			const monitorNoSettled = new AgentMonitor({
 				stateDetector: mockDetector as any,
 				bridge: mockBridge,
 				signalRouter: mockSignalRouter,

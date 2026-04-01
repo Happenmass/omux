@@ -570,15 +570,15 @@ body.resizing-execution-panel .execution-resize-handle::before {
 	display: flex;
 }
 
-/* ─── Session Sub-Tabs ───────────────────────────── */
-.session-tabs {
+/* ─── Agent Sub-Tabs ─────────────────────────────── */
+.agent-tabs {
 	display: flex;
 	gap: 0;
 	padding: 0 14px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-.session-tab {
+.agent-tab {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
@@ -599,41 +599,41 @@ body.resizing-execution-panel .execution-resize-handle::before {
 	justify-content: center;
 }
 
-.session-tab:hover {
+.agent-tab:hover {
 	color: var(--text);
 }
 
-.session-tab.active {
+.agent-tab.active {
 	color: var(--text);
 	border-bottom-color: var(--text);
 }
 
-.session-tab-label {
+.agent-tab-label {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	min-width: 0;
 }
 
-.session-tab-dot {
+.agent-tab-dot {
 	width: 7px;
 	height: 7px;
 	border-radius: 999px;
 	flex-shrink: 0;
 }
 
-.session-tab-dot.status-active {
-	background: var(--idle-color);
-}
-
-.session-tab-dot.status-waiting_input {
+.agent-tab-dot.status-active {
 	background: var(--executing-color);
 }
 
-.session-tab-dot.status-idle {
+.agent-tab-dot.status-waiting_input {
+	background: var(--idle-color);
+}
+
+.agent-tab-dot.status-idle {
 	background: var(--text-dim);
 }
 
-.session-tab-dot.status-taken_over {
+.agent-tab-dot.status-taken_over {
 	background: #ff9800;
 }
 

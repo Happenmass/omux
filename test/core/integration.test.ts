@@ -65,7 +65,7 @@ function createMockBridge(): TmuxBridge {
 			timestamp: Date.now(),
 		}),
 		hasSession: vi.fn().mockResolvedValue(false),
-		listCliclawSessions: vi.fn().mockResolvedValue([]),
+		listCliclawAgents: vi.fn().mockResolvedValue([]),
 	} as any;
 }
 
@@ -162,9 +162,9 @@ describe("Integration: Chat mode end-to-end", () => {
 		broadcaster = createMockBroadcaster();
 	});
 
-	it("should complete via create_session → send_to_agent → mark_complete", async () => {
+	it("should complete via create_agent → send_to_agent → mark_complete", async () => {
 		const llmClient = createMockStreamingLLM([
-			toolCallEvents("create_session", {}, "tc0"),
+			toolCallEvents("create_agent", {}, "tc0"),
 			toolCallEvents("send_to_agent", { prompt: "Implement the feature", summary: "Implementing feature" }, "tc1"),
 			toolCallEvents("mark_complete", { summary: "Feature implemented successfully" }, "tc2"),
 		]);
@@ -181,7 +181,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
-		mainAgent.setupSessionMonitor();
+		mainAgent.setupAgentMonitor();
 
 		await mainAgent.handleMessage("Build a feature");
 
@@ -189,7 +189,7 @@ describe("Integration: Chat mode end-to-end", () => {
 		expect(adapter.launch).toHaveBeenCalledTimes(1);
 		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Implement the feature");
 		expect(stateDetector.captureHash).toHaveBeenCalled();
-		// send_to_agent now dispatches async via SessionMonitor — no direct waitForSettled call
+		// send_to_agent now dispatches async via AgentMonitor — no direct waitForSettled call
 		expect(broadcaster.broadcast).toHaveBeenCalledWith({
 			type: "agent_update",
 			summary: "Implementing feature",
@@ -224,10 +224,10 @@ describe("Integration: Chat mode end-to-end", () => {
 		);
 	});
 
-	it("should handle multi-step tool use: create_session → inspect_session → send_to_agent → complete", async () => {
+	it("should handle multi-step tool use: create_agent → inspect_agent → send_to_agent → complete", async () => {
 		const llmClient = createMockStreamingLLM([
-			toolCallEvents("create_session", {}, "tc0"),
-			toolCallEvents("inspect_session", { lines: 200 }, "tc1"),
+			toolCallEvents("create_agent", {}, "tc0"),
+			toolCallEvents("inspect_agent", { lines: 200 }, "tc1"),
 			toolCallEvents("send_to_agent", { prompt: "Fix the bug", summary: "Fixing bug" }, "tc2"),
 			toolCallEvents("mark_complete", { summary: "Bug fixed" }, "tc3"),
 		]);
@@ -243,14 +243,14 @@ describe("Integration: Chat mode end-to-end", () => {
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
-		mainAgent.setupSessionMonitor();
+		mainAgent.setupAgentMonitor();
 
 		await mainAgent.handleMessage("Fix bugs");
 
 		expect(mainAgent.state).toBe("idle");
 		expect(bridge.capturePane).toHaveBeenCalledWith("test-session:0.0", { startLine: -200 });
 		expect(adapter.sendPrompt).toHaveBeenCalledWith(bridge, "test-session:0.0", "Fix the bug");
-		// send_to_agent now dispatches async via SessionMonitor — no direct waitForSettled call
+		// send_to_agent now dispatches async via AgentMonitor — no direct waitForSettled call
 	});
 
 	it("should handle goal failure via mark_failed tool", async () => {

@@ -42,7 +42,7 @@ describe("ClaudeCodeAdapter.exitAgent", () => {
 		expect(bridge.capturePane).toHaveBeenCalledWith(pane);
 
 		// Should extract session id
-		expect(result.sessionId).toBe("008fa0b2-bc5a-4aa0-94b0-865a67205615");
+		expect(result.resumeId).toBe("008fa0b2-bc5a-4aa0-94b0-865a67205615");
 		expect(result.content).toBe(captureContent);
 	});
 
@@ -52,7 +52,7 @@ describe("ClaudeCodeAdapter.exitAgent", () => {
 
 		const result = await adapter.exitAgent(bridge, pane);
 
-		expect(result.sessionId).toBeUndefined();
+		expect(result.resumeId).toBeUndefined();
 		expect(result.content).toBe(captureContent);
 	});
 
@@ -62,7 +62,7 @@ describe("ClaudeCodeAdapter.exitAgent", () => {
 
 		const result = await adapter.exitAgent(bridge, pane);
 
-		expect(result.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+		expect(result.resumeId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 	});
 });
 
