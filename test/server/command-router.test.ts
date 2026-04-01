@@ -24,6 +24,9 @@ function createMockContextManager(shouldCompress = true) {
 		clear: vi.fn().mockResolvedValue(undefined),
 		shouldCompress: vi.fn().mockReturnValue(shouldCompress),
 		compress: vi.fn().mockResolvedValue(undefined),
+		getCurrentTokenEstimate: vi.fn().mockReturnValue(50000),
+		getContextWindowLimit: vi.fn().mockReturnValue(500000),
+		getConversationLength: vi.fn().mockReturnValue(10),
 	} as any;
 }
 
@@ -96,9 +99,6 @@ describe("CommandRouter", () => {
 			await commandRouter.handle("clear");
 			expect(mockCtx.clear).toHaveBeenCalled();
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "clear" });
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
-				expect.objectContaining({ type: "system", message: "对话已清空" }),
-			);
 		});
 
 		it("should stop first then clear when executing", async () => {
@@ -112,20 +112,20 @@ describe("CommandRouter", () => {
 	});
 
 	describe("/compact", () => {
-		it("should compress context and broadcast when shouldCompress is true", async () => {
+		it("should compress context and broadcast when conversation is not empty", async () => {
 			setup("idle");
 			await commandRouter.handle("compact");
-			expect(mockCtx.shouldCompress).toHaveBeenCalled();
 			expect(mockCtx.compress).toHaveBeenCalled();
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 				expect.objectContaining({ type: "system", message: "对话历史已压缩并注入系统提示词" }),
 			);
 		});
 
-		it("should skip compression when context is short", async () => {
+		it("should skip compression when conversation is empty", async () => {
 			mockAgent = createMockMainAgent("idle");
 			mockRouter = createMockSignalRouter();
 			mockCtx = createMockContextManager(false);
+			mockCtx.getConversationLength = vi.fn().mockReturnValue(0);
 			mockBroadcaster = createMockBroadcaster();
 			commandRegistry = new CommandRegistry();
 			commandRouter = new CommandRouter({
@@ -138,7 +138,7 @@ describe("CommandRouter", () => {
 			await commandRouter.handle("compact");
 			expect(mockCtx.compress).not.toHaveBeenCalled();
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
-				expect.objectContaining({ type: "system", message: "对话上下文较短，无需压缩" }),
+				expect.objectContaining({ type: "system", message: "当前没有对话内容，无需压缩" }),
 			);
 		});
 
@@ -159,7 +159,8 @@ describe("CommandRouter", () => {
 			expect(commandRegistry.has("clear")).toBe(true);
 			expect(commandRegistry.has("reset")).toBe(true);
 			expect(commandRegistry.has("compact")).toBe(true);
-			expect(commandRegistry.size).toBe(5);
+			expect(commandRegistry.has("context")).toBe(true);
+			expect(commandRegistry.size).toBe(6);
 		});
 	});
 

@@ -14,6 +14,7 @@ const BUILTIN_COMMANDS: CommandDescriptor[] = [
 	{ name: "clear", description: "清空对话历史", category: "builtin" },
 	{ name: "reset", description: "重置对话并重新加载提示词和技能", category: "builtin" },
 	{ name: "compact", description: "压缩对话历史并注入系统提示词", category: "builtin" },
+	{ name: "context", description: "查看上下文用量", category: "builtin" },
 ];
 
 /**
@@ -65,6 +66,8 @@ export class CommandRouter {
 				return this.handleReset();
 			case "compact":
 				return this.handleCompact();
+			case "context":
+				return this.handleContext();
 			default:
 				this.broadcaster.broadcast({
 					type: "system",
@@ -173,5 +176,23 @@ export class CommandRouter {
 		});
 
 		logger.info("command-router", "System reset complete");
+	}
+
+	private handleContext(): void {
+		const estimate = this.contextManager.getCurrentTokenEstimate();
+		const limit = this.contextManager.getContextWindowLimit();
+		const usage = ((estimate / limit) * 100).toFixed(1);
+		const messages = this.contextManager.getConversationLength();
+
+		const lines = [
+			`📊 上下文用量`,
+			`Token 估算: ${estimate.toLocaleString()} / ${limit.toLocaleString()} (${usage}%)`,
+			`对话消息数: ${messages}`,
+		];
+
+		this.broadcaster.broadcast({
+			type: "system",
+			message: lines.join("\n"),
+		});
 	}
 }

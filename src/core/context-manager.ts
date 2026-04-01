@@ -401,6 +401,10 @@ export class ContextManager {
 		return this.lastKnownTokenCount + Math.ceil(this.pendingChars / 4);
 	}
 
+	getContextWindowLimit(): number {
+		return this.contextWindowLimit;
+	}
+
 	// ─── Compression (Layer 3) ────────────────────────────
 
 	shouldCompress(): boolean {
