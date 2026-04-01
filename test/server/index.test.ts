@@ -289,6 +289,98 @@ describe("startServer", () => {
 		expect(sessions[1].paneContent).toBe("ok content");
 	});
 
+	it("should broadcast agent_terminals with 'agents' key (not 'sessions')", async () => {
+		const mainAgent = createMainAgentMock();
+		let capturedOnAgentChange: (() => void) | undefined;
+		mainAgent.setOnAgentChange = (cb: () => void) => {
+			capturedOnAgentChange = cb;
+		};
+		mainAgent.getActiveAgents = () => [
+			{
+				agentName: "cliclaw-test",
+				agentId: "cliclaw-test",
+				paneTarget: "test:0.0",
+				status: "active",
+				takenOver: false,
+			},
+		];
+
+		const broadcasts: any[] = [];
+		const broadcaster = createBroadcasterMock();
+		broadcaster.getClientCount = () => 1;
+		broadcaster.broadcast = (msg: any) => {
+			broadcasts.push(msg);
+		};
+
+		const bridge = createBridgeMock();
+
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent,
+			signalRouter: createSignalRouterMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore: createConversationStoreMock(),
+			broadcaster,
+			bridge,
+			commandRegistry: new CommandRegistry(),
+			executionEventStore: new ExecutionEventStore(),
+		});
+
+		// Trigger agent change callback (simulates agent creation/kill)
+		expect(capturedOnAgentChange).toBeDefined();
+		capturedOnAgentChange!();
+
+		// Wait for async collectAgentTerminals to complete
+		await new Promise((r) => setTimeout(r, 100));
+
+		const terminalMsg = broadcasts.find((m) => m.type === "agent_terminals");
+		expect(terminalMsg).toBeDefined();
+		// Must use 'agents' key, NOT 'sessions'
+		expect(terminalMsg.agents).toBeDefined();
+		expect(terminalMsg.sessions).toBeUndefined();
+		expect(terminalMsg.agents).toHaveLength(1);
+		expect(terminalMsg.agents[0].agentId).toBe("cliclaw-test");
+		expect(terminalMsg.agents[0].agentName).toBe("cliclaw-test");
+	});
+
+	it("should broadcast empty agents array after all agents killed", async () => {
+		const mainAgent = createMainAgentMock();
+		let capturedOnAgentChange: (() => void) | undefined;
+		mainAgent.setOnAgentChange = (cb: () => void) => {
+			capturedOnAgentChange = cb;
+		};
+		// No active agents (simulates post-kill state)
+		mainAgent.getActiveAgents = () => [];
+
+		const broadcasts: any[] = [];
+		const broadcaster = createBroadcasterMock();
+		broadcaster.getClientCount = () => 1;
+		broadcaster.broadcast = (msg: any) => {
+			broadcasts.push(msg);
+		};
+
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent,
+			signalRouter: createSignalRouterMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore: createConversationStoreMock(),
+			broadcaster,
+			bridge: createBridgeMock(),
+			commandRegistry: new CommandRegistry(),
+			executionEventStore: new ExecutionEventStore(),
+		});
+
+		capturedOnAgentChange!();
+		await new Promise((r) => setTimeout(r, 100));
+
+		const terminalMsg = broadcasts.find((m) => m.type === "agent_terminals");
+		expect(terminalMsg).toBeDefined();
+		expect(terminalMsg.agents).toEqual([]);
+	});
+
 	it("should return recent ui summary events from the API", async () => {
 		const uiEventStore = new UiEventStore();
 		uiEventStore.add({

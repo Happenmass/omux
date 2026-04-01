@@ -654,7 +654,7 @@ function handleServerMessage(data) {
 			break;
 
 		case "agent_terminals":
-			handleAgentTerminals(data.sessions);
+			handleAgentTerminals(data.agents);
 			break;
 
 		case "clear":
