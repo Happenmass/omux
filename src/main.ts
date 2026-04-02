@@ -42,7 +42,6 @@ import {
 	getGlobalDbPath,
 	getGlobalStorageDir,
 	getLogsDir,
-	GLOBAL_PROJECT_ID,
 	loadConfig,
 	loadServerRuntimeState,
 	type ServerRuntimeState,
@@ -99,93 +98,6 @@ function createMemorySyncRunner(params: {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Migrate legacy per-project memory files to the global memory directory.
- * Scans ~/.cliclaw/projects/\*\/memory/\*.md and copies them to ~/.cliclaw/memory/.
- * Existing files in the global directory are NOT overwritten (global wins).
- * Also migrates SQLite chunks/files rows from old projectIds to "global".
- */
-async function migrateProjectMemoryToGlobal(globalStorageDir: string): Promise<void> {
-	const { readdir, copyFile, stat: fsStat, rename } = await import("node:fs/promises");
-	const { GLOBAL_PROJECT_ID } = await import("./utils/config.js");
-
-	const projectsDir = join(globalStorageDir, "projects");
-	const globalMemoryDir = join(globalStorageDir, "memory");
-
-	let projectDirs: string[];
-	try {
-		const entries = await readdir(projectsDir, { withFileTypes: true });
-		projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-	} catch {
-		return; // No projects/ directory — nothing to migrate
-	}
-
-	if (projectDirs.length === 0) return;
-
-	let migratedFiles = 0;
-	const migratedProjects = new Set<string>();
-
-	for (const projDir of projectDirs) {
-		const srcMemoryDir = join(projectsDir, projDir, "memory");
-		let files: string[];
-		try {
-			const entries = await readdir(srcMemoryDir);
-			files = entries.filter((f) => f.endsWith(".md"));
-		} catch {
-			continue; // No memory/ subdirectory
-		}
-
-		for (const file of files) {
-			const src = join(srcMemoryDir, file);
-			const dest = join(globalMemoryDir, file);
-			try {
-				await fsStat(dest);
-				// dest already exists — skip (global wins)
-			} catch {
-				// dest doesn't exist — copy
-				await copyFile(src, dest);
-				migratedFiles++;
-			}
-		}
-		migratedProjects.add(projDir);
-	}
-
-	// Migrate SQLite rows: update projectId from old values to "global"
-	if (migratedProjects.size > 0) {
-		try {
-			const { getGlobalDbPath } = await import("./utils/config.js");
-			const Database = (await import("better-sqlite3")).default;
-			const db = new Database(getGlobalDbPath());
-			db.pragma("journal_mode = WAL");
-
-			const oldIds = [...migratedProjects];
-			for (const oldId of oldIds) {
-				db.prepare("UPDATE OR IGNORE files SET project = ? WHERE project = ?").run(GLOBAL_PROJECT_ID, oldId);
-				db.prepare("UPDATE OR IGNORE chunks SET project = ? WHERE project = ?").run(GLOBAL_PROJECT_ID, oldId);
-				db.prepare("UPDATE OR IGNORE chunks_fts SET project = ? WHERE project = ?").run(GLOBAL_PROJECT_ID, oldId);
-			}
-			db.close();
-		} catch (err: any) {
-			logger.warn("main", `SQLite migration failed (non-fatal): ${err.message}`);
-		}
-	}
-
-	// Rename migrated project dirs to mark them as done
-	for (const projDir of migratedProjects) {
-		const src = join(projectsDir, projDir);
-		const dest = join(projectsDir, `${projDir}.migrated`);
-		try {
-			await rename(src, dest);
-		} catch {
-			/* best-effort */
-		}
-	}
-
-	if (migratedFiles > 0) {
-		logger.info("main", `Migrated ${migratedFiles} memory file(s) from ${migratedProjects.size} legacy project(s) to global`);
-	}
 }
 
 async function triggerTmuxEscapeCascade(opts?: { repeats?: number; intervalMs?: number }): Promise<void> {
@@ -687,17 +599,12 @@ async function main(): Promise<void> {
 
 	// Initialize global storage directory (~/.cliclaw/memory/)
 	const storageDir = await ensureGlobalStorageDir();
-	const projectId = GLOBAL_PROJECT_ID;
-
-	// Migrate legacy per-project memory files to global directory
-	await migrateProjectMemoryToGlobal(storageDir);
 
 	logger.info("main", `Memory: ${storageDir}/memory/`);
 
 	// Initialize MemoryStore + Embedding Provider (global DB)
 	const memoryStore = new MemoryStore({
 		dbPath: getGlobalDbPath(),
-		projectId,
 		workspaceDir: args.cwd,
 		storageDir,
 		vectorEnabled: true,
@@ -1016,6 +923,10 @@ async function main(): Promise<void> {
 		executionEventStore,
 		uiEventStore,
 		onReset,
+		llmClient,
+		promptLoader,
+		memoryStore,
+		syncMemory,
 	});
 
 	// Notify connected clients about restored conversation

@@ -106,7 +106,6 @@ describe("Memory Hybrid Search Integration", () => {
 
 		store = new MemoryStore({
 			dbPath: join(storageDir, "test.sqlite"),
-			projectId: "testproj-search",
 			workspaceDir: tmpDir,
 			storageDir,
 			vectorEnabled: false, // use brute-force fallback
@@ -243,11 +242,11 @@ describe("Memory Hybrid Search Integration", () => {
 			expect(deployResult).toBeDefined();
 		});
 
-		it("should return results with correct path format (project/path)", async () => {
+		it("should return results with plain path (no project prefix)", async () => {
 			const results = await searchMemory(store, "architecture", provider, defaultConfig);
 
 			for (const r of results) {
-				expect(r.path).toMatch(/^testproj-search\//);
+				expect(r.path).toMatch(/^memory\//);
 			}
 		});
 

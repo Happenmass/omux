@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join } from "node:path";
 
 export interface LLMConfig {
 	provider: string;
@@ -228,33 +227,11 @@ export async function getLogsDir(): Promise<string> {
 }
 
 /**
- * Generate a deterministic project identifier from a directory path.
- * Used only for legacy migration — new code uses GLOBAL_PROJECT_ID.
- * Format: {basename}-{first 6 chars of sha256(absolutePath)}
- */
-export function getLegacyProjectId(projectDir: string): string {
-	const absPath = resolve(projectDir);
-	const name = basename(absPath).toLowerCase();
-	const hash = createHash("sha256").update(absPath).digest("hex").slice(0, 6);
-	return `${name}-${hash}`;
-}
-
-/** Fixed project identifier — memory is global, not per-project. */
-export const GLOBAL_PROJECT_ID = "global";
-
-/**
  * Get the global storage directory (memory files live here).
  * Layout: ~/.cliclaw/ (storageDir) → ~/.cliclaw/memory/*.md
  */
 export function getGlobalStorageDir(): string {
 	return CONFIG_DIR;
-}
-
-/**
- * Legacy: get the per-project storage directory path (for migration).
- */
-export function getLegacyProjectStorageDir(projectDir: string): string {
-	return join(CONFIG_DIR, "projects", getLegacyProjectId(projectDir));
 }
 
 /**

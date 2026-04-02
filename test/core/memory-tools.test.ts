@@ -67,7 +67,6 @@ function createMockMemoryStore(workspaceDir: string) {
 	return {
 		getWorkspaceDir: vi.fn().mockReturnValue(workspaceDir),
 		getStorageDir: vi.fn().mockReturnValue(workspaceDir),
-		getProjectId: vi.fn().mockReturnValue("global"),
 		getTrackedFilePaths: vi.fn().mockReturnValue([]),
 		isFtsAvailable: vi.fn().mockReturnValue(true),
 		write: vi.fn().mockResolvedValue({ success: true, path: "memory/core.md" }),
@@ -193,25 +192,6 @@ describe("MainAgent memory tools", () => {
 			});
 
 			expect(result.output).toBe("Line 3\nLine 4");
-			expect(result.terminal).toBe(false);
-		});
-
-		it("should strip legacy project-id prefix and read from global memory", async () => {
-			await mkdir(join(tmpDir, "memory"), { recursive: true });
-			await writeFile(join(tmpDir, "memory", "core.md"), "global memory content");
-
-			const mockStore = createMockMemoryStore(tmpDir);
-			const agent = createAgent({ memoryStore: mockStore });
-
-			// Legacy path format: "projectId/memory/core.md" → should resolve to "memory/core.md"
-			const result = await (agent as any).executeTool({
-				type: "tool_call",
-				id: "tc1",
-				name: "memory_get",
-				arguments: { path: "clipilot-c64d2d/memory/core.md" },
-			});
-
-			expect(result.output).toBe("global memory content");
 			expect(result.terminal).toBe(false);
 		});
 

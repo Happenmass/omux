@@ -213,8 +213,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			properties: {
 				agent_name: {
 					type: "string",
-					description:
-						'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
+					description: 'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
 				},
 				working_dir: {
 					type: "string",
@@ -1103,16 +1102,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			throw new Error("Memory store not available.");
 		}
 
-		let normalizedPath = rawPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-
-		// Strip legacy projectId prefix (e.g. "clipilot-c64d2d/memory/core.md" → "memory/core.md")
-		const slashIdx = normalizedPath.indexOf("/");
-		if (slashIdx > 0) {
-			const afterSlash = normalizedPath.slice(slashIdx + 1);
-			if (afterSlash.startsWith("memory/")) {
-				normalizedPath = afterSlash;
-			}
-		}
+		const normalizedPath = rawPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 
 		return {
 			storageDir: this.memoryStore.getStorageDir(),

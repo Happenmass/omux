@@ -314,7 +314,7 @@ export function createLocalEmbeddingProvider(params: { modelPath: string; modelC
 // ─── Factory ────────────────────────────────────────────
 
 /** Default HuggingFace model for local embedding when no model path is configured */
-const DEFAULT_HF_MODEL = "hf:gpustack/bce-embedding-base_v1-GGUF/bce-embedding-base_v1-Q8_0.gguf";
+const DEFAULT_HF_MODEL = "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf";
 
 /** Auto-detection order for embedding providers (remote first, local last to avoid heavy model loading) */
 const AUTO_DETECT_ORDER: Array<Exclude<EmbeddingProviderRequest, "auto">> = [

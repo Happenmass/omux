@@ -141,7 +141,6 @@ export type MemorySearchConfig = {
 /** Hybrid vector search result (before merging) */
 export type HybridVectorResult = {
 	id: string;
-	project: string;
 	path: string;
 	startLine: number;
 	endLine: number;
@@ -153,7 +152,6 @@ export type HybridVectorResult = {
 /** Hybrid keyword search result (before merging) */
 export type HybridKeywordResult = {
 	id: string;
-	project: string;
 	path: string;
 	startLine: number;
 	endLine: number;

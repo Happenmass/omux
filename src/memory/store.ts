@@ -12,6 +12,8 @@ import type { FileEntry } from "./types.js";
 
 // ─── Schema SQL ─────────────────────────────────────────
 
+const SCHEMA_VERSION = "2";
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
@@ -19,18 +21,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS files (
-	project TEXT NOT NULL,
-	path    TEXT NOT NULL,
+	path    TEXT PRIMARY KEY,
 	source  TEXT NOT NULL DEFAULT 'memory',
 	hash    TEXT NOT NULL,
 	mtime   INTEGER NOT NULL,
-	size    INTEGER NOT NULL,
-	PRIMARY KEY (project, path)
+	size    INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
 	id         TEXT PRIMARY KEY,
-	project    TEXT NOT NULL,
 	path       TEXT NOT NULL,
 	source     TEXT NOT NULL DEFAULT 'memory',
 	start_line INTEGER NOT NULL,
@@ -42,14 +41,12 @@ CREATE TABLE IF NOT EXISTS chunks (
 	updated_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project);
 CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 	text,
 	id UNINDEXED,
-	project UNINDEXED,
 	path UNINDEXED,
 	source UNINDEXED,
 	model UNINDEXED,
@@ -93,8 +90,6 @@ const VEC_TABLE_SQL = (provider: string, dims: number) => {
 export interface MemoryStoreConfig {
 	/** Path to the SQLite database file */
 	dbPath: string;
-	/** Project identifier (e.g. "cliclaw-a3f2d1") */
-	projectId: string;
 	/** Workspace root directory (project location, used for skills/prompts discovery) */
 	workspaceDir: string;
 	/** Centralized storage directory for memory files (defaults to workspaceDir for backwards compat) */
@@ -107,7 +102,6 @@ export interface MemoryStoreConfig {
 
 export class MemoryStore {
 	private db: Database.Database;
-	private projectId: string;
 	private workspaceDir: string;
 	private storageDir: string;
 	private vecAvailable = false;
@@ -116,7 +110,6 @@ export class MemoryStore {
 	private dirty = false;
 
 	constructor(config: MemoryStoreConfig) {
-		this.projectId = config.projectId;
 		this.workspaceDir = config.workspaceDir;
 		this.storageDir = config.storageDir ?? config.workspaceDir;
 		mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -124,11 +117,11 @@ export class MemoryStore {
 
 		// Enable WAL mode for better concurrent read performance
 		this.db.pragma("journal_mode = WAL");
-		// Set busy timeout for concurrent access from multiple projects
 		this.db.pragma("busy_timeout = 5000");
 
-		// Initialize core schema (non-vec tables)
-		this.db.exec(SCHEMA_SQL);
+		// Check schema version and rebuild if needed
+		this.migrateSchemaIfNeeded();
+
 		this.ftsAvailable = this.checkFtsAvailable();
 
 		// Attempt to load sqlite-vec extension
@@ -136,17 +129,10 @@ export class MemoryStore {
 			this.vecAvailable = this.loadVecExtension(config.vectorExtensionPath);
 		}
 
-		logger.info(
-			"memory-store",
-			`Initialized: project=${this.projectId}, vec=${this.vecAvailable}, fts=${this.ftsAvailable}`,
-		);
+		logger.info("memory-store", `Initialized: vec=${this.vecAvailable}, fts=${this.ftsAvailable}`);
 	}
 
 	// ─── Public Accessors ─────────────────────────────────
-
-	getProjectId(): string {
-		return this.projectId;
-	}
 
 	isVecAvailable(): boolean {
 		return this.vecAvailable;
@@ -197,7 +183,19 @@ export class MemoryStore {
 		if (this.vecTableName === tableName) return; // Already initialized
 
 		try {
+			// Drop stale vec tables from previous provider/dims combinations
+			this.dropStaleVecTables(tableName);
+
 			this.db.exec(VEC_TABLE_SQL(provider, dims));
+
+			// Verify the table is functional — a corrupted table (e.g. missing internal
+			// helper tables) will pass CREATE IF NOT EXISTS but fail on insert.
+			if (!this.verifyVecTable(tableName, dims)) {
+				logger.warn("memory-store", `${tableName} is corrupted, rebuilding`);
+				this.db.exec(`DROP TABLE IF EXISTS "${tableName}"`);
+				this.db.exec(VEC_TABLE_SQL(provider, dims));
+			}
+
 			this.vecTableName = tableName;
 			logger.info("memory-store", `${tableName} table initialized with ${dims} dimensions`);
 		} catch (err: any) {
@@ -206,45 +204,107 @@ export class MemoryStore {
 		}
 	}
 
+	/**
+	 * Verify a vec table is functional by doing a probe insert + delete.
+	 */
+	private verifyVecTable(tableName: string, dims: number): boolean {
+		const probeId = "__vec_probe__";
+		try {
+			const zeroBuf = Buffer.alloc(dims * 4); // float32 zeros
+			this.db.prepare(`INSERT INTO "${tableName}" (id, embedding) VALUES (?, ?)`).run(probeId, zeroBuf);
+			this.db.prepare(`DELETE FROM "${tableName}" WHERE id = ?`).run(probeId);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Drop any chunks_vec_* tables that don't match the current table name.
+	 * This cleans up leftovers when the embedding model (and thus dimensions) changes.
+	 */
+	private dropStaleVecTables(currentTableName: string): void {
+		try {
+			// Only match main vec0 virtual tables (e.g. chunks_vec_local_768),
+			// not their internal helper tables (_info, _chunks, _rowids, _vector_chunks00).
+			// Dropping the main virtual table lets sqlite-vec clean up helpers automatically.
+			const rows = this.db
+				.prepare(
+					`SELECT name FROM sqlite_master
+					 WHERE type = 'table'
+					   AND name LIKE 'chunks_vec_%'
+					   AND name NOT LIKE '%_info'
+					   AND name NOT LIKE '%_chunks'
+					   AND name NOT LIKE '%_rowids'
+					   AND name NOT LIKE '%_vector_chunks%'`,
+				)
+				.all() as { name: string }[];
+			for (const { name } of rows) {
+				if (name !== currentTableName) {
+					this.db.exec(`DROP TABLE IF EXISTS "${name}"`);
+					logger.info("memory-store", `Dropped stale vec table: ${name}`);
+				}
+			}
+		} catch (err: any) {
+			logger.warn("memory-store", `Failed to clean up stale vec tables: ${err.message}`);
+		}
+	}
+
 	// ─── File Tracking ────────────────────────────────────
 
 	getTrackedFile(path: string): { hash: string } | undefined {
-		return this.db.prepare("SELECT hash FROM files WHERE project = ? AND path = ?").get(this.projectId, path) as
-			| { hash: string }
-			| undefined;
+		return this.db.prepare("SELECT hash FROM files WHERE path = ?").get(path) as { hash: string } | undefined;
 	}
 
 	upsertFile(entry: FileEntry): void {
 		this.db
 			.prepare(
-				`INSERT OR REPLACE INTO files (project, path, source, hash, mtime, size)
-				 VALUES (?, ?, 'memory', ?, ?, ?)`,
+				`INSERT OR REPLACE INTO files (path, source, hash, mtime, size)
+				 VALUES (?, 'memory', ?, ?, ?)`,
 			)
-			.run(this.projectId, entry.path, entry.hash, entry.mtimeMs, entry.size);
+			.run(entry.path, entry.hash, entry.mtimeMs, entry.size);
 	}
 
 	getTrackedFilePaths(): string[] {
-		const rows = this.db
-			.prepare("SELECT path FROM files WHERE project = ? AND source = 'memory'")
-			.all(this.projectId) as { path: string }[];
+		const rows = this.db.prepare("SELECT path FROM files WHERE source = 'memory'").all() as { path: string }[];
 		return rows.map((r) => r.path);
 	}
 
 	removeFile(path: string): void {
-		this.db.prepare("DELETE FROM files WHERE project = ? AND path = ?").run(this.projectId, path);
+		this.db.prepare("DELETE FROM files WHERE path = ?").run(path);
 		this.removeChunksByPath(path);
+	}
+
+	/**
+	 * Check if the embedding model has changed since the last sync.
+	 * Compares against the model field stored in existing chunks.
+	 */
+	hasModelChanged(currentModel: string): boolean {
+		const row = this.db.prepare("SELECT model FROM chunks LIMIT 1").get() as { model: string } | undefined;
+		if (!row) return false; // No existing chunks, nothing to invalidate
+		return row.model !== currentModel;
+	}
+
+	/**
+	 * Clear all tracked files and chunks.
+	 * Used to force a full re-sync when the embedding model changes.
+	 * Vec table cleanup is handled separately by dropStaleVecTables in initVecTable.
+	 */
+	clearAllTrackedFiles(): void {
+		this.db.prepare("DELETE FROM chunks_fts").run();
+		this.db.prepare("DELETE FROM chunks").run();
+		this.db.prepare("DELETE FROM files").run();
+		this.markDirty();
 	}
 
 	// ─── Chunk Operations ─────────────────────────────────
 
 	removeChunksByPath(path: string): void {
 		// Get chunk IDs for vec cleanup
-		const chunkIds = this.db
-			.prepare("SELECT id FROM chunks WHERE project = ? AND path = ?")
-			.all(this.projectId, path) as { id: string }[];
+		const chunkIds = this.db.prepare("SELECT id FROM chunks WHERE path = ?").all(path) as { id: string }[];
 
-		this.db.prepare("DELETE FROM chunks WHERE project = ? AND path = ?").run(this.projectId, path);
-		this.db.prepare("DELETE FROM chunks_fts WHERE project = ? AND path = ?").run(this.projectId, path);
+		this.db.prepare("DELETE FROM chunks WHERE path = ?").run(path);
+		this.db.prepare("DELETE FROM chunks_fts WHERE path = ?").run(path);
 
 		if (this.vecAvailable && this.vecTableName) {
 			for (const { id } of chunkIds) {
@@ -273,12 +333,11 @@ export class MemoryStore {
 		this.db
 			.prepare(
 				`INSERT OR REPLACE INTO chunks
-				 (id, project, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-				 VALUES (?, ?, ?, 'memory', ?, ?, ?, ?, ?, ?, ?)`,
+				 (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+				 VALUES (?, ?, 'memory', ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				params.id,
-				this.projectId,
 				params.path,
 				params.startLine,
 				params.endLine,
@@ -293,10 +352,10 @@ export class MemoryStore {
 		if (this.ftsAvailable) {
 			this.db
 				.prepare(
-					`INSERT INTO chunks_fts (text, id, project, path, source, model, start_line, end_line)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)`,
+					`INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line)
+					 VALUES (?, ?, ?, 'memory', ?, ?, ?)`,
 				)
-				.run(params.text, params.id, this.projectId, params.path, params.model, params.startLine, params.endLine);
+				.run(params.text, params.id, params.path, params.model, params.startLine, params.endLine);
 		}
 
 		// Vec insert
@@ -380,11 +439,16 @@ export class MemoryStore {
 	 * Write content to a memory file. Used by both MainAgent memory_write tool
 	 * and ContextManager Memory Flush.
 	 */
-	async write(params: { path: string; content: string }): Promise<{ success: boolean; path: string }> {
+	async write(params: {
+		path: string;
+		content: string;
+		mode?: "append" | "overwrite";
+	}): Promise<{ success: boolean; path: string }> {
 		const { writeFile, appendFile, mkdir } = await import("node:fs/promises");
 		const { dirname } = await import("node:path");
 
 		const relPath = params.path.trim();
+		const mode = params.mode ?? "append";
 
 		// Security: only allow memory/ directory
 		if (!isMemoryPath(relPath)) {
@@ -396,16 +460,20 @@ export class MemoryStore {
 		// Ensure directory exists
 		await mkdir(dirname(absPath), { recursive: true });
 
-		// Append or create
-		try {
-			const existing = await readFile(absPath, "utf-8");
-			if (!existing.endsWith("\n")) {
-				await appendFile(absPath, "\n");
-			}
-			await appendFile(absPath, params.content);
-		} catch {
-			// File doesn't exist, create it
+		if (mode === "overwrite") {
 			await writeFile(absPath, params.content, "utf-8");
+		} else {
+			// Append or create
+			try {
+				const existing = await readFile(absPath, "utf-8");
+				if (!existing.endsWith("\n")) {
+					await appendFile(absPath, "\n");
+				}
+				await appendFile(absPath, params.content);
+			} catch {
+				// File doesn't exist, create it
+				await writeFile(absPath, params.content, "utf-8");
+			}
 		}
 
 		this.markDirty();
@@ -419,6 +487,36 @@ export class MemoryStore {
 	}
 
 	// ─── Private Methods ──────────────────────────────────
+
+	/**
+	 * Check stored schema version and rebuild tables if outdated.
+	 * This handles migration from the old per-project schema (v1) to the
+	 * simplified global schema (v2) which removed the `project` column.
+	 */
+	private migrateSchemaIfNeeded(): void {
+		try {
+			const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
+				| { value: string }
+				| undefined;
+			if (row?.value === SCHEMA_VERSION) {
+				return; // Up to date
+			}
+		} catch {
+			// meta table may not exist yet
+		}
+
+		// Drop old tables and rebuild
+		logger.info("memory-store", `Schema migration to v${SCHEMA_VERSION}: rebuilding tables`);
+		this.db.exec(`
+			DROP TABLE IF EXISTS chunks_fts;
+			DROP TABLE IF EXISTS chunks;
+			DROP TABLE IF EXISTS files;
+			DROP TABLE IF EXISTS meta;
+		`);
+		this.db.exec(SCHEMA_SQL);
+		this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
+		this.dirty = true;
+	}
 
 	private loadVecExtension(extensionPath?: string): boolean {
 		try {

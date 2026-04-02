@@ -56,23 +56,23 @@ describe("bm25RankToScore", () => {
 });
 
 describe("mergeHybridResults", () => {
-	it("should merge dual-hit chunks with combined score and project path", () => {
+	it("should merge dual-hit chunks with combined score", () => {
 		const vector: HybridVectorResult[] = [
-			{ id: "c1", project: "proj-abc", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "text", source: "memory", vectorScore: 0.8 },
+			{ id: "c1", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "text", source: "memory", vectorScore: 0.8 },
 		];
 		const keyword: HybridKeywordResult[] = [
-			{ id: "c1", project: "proj-abc", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "text", source: "memory", textScore: 0.6 },
+			{ id: "c1", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "text", source: "memory", textScore: 0.6 },
 		];
 
 		const result = mergeHybridResults({ vector, keyword, vectorWeight: 0.7, textWeight: 0.3 });
 		expect(result).toHaveLength(1);
 		expect(result[0].score).toBeCloseTo(0.7 * 0.8 + 0.3 * 0.6, 5);
-		expect(result[0].path).toBe("proj-abc/memory/core.md");
+		expect(result[0].path).toBe("memory/core.md");
 	});
 
 	it("should handle vector-only hits", () => {
 		const vector: HybridVectorResult[] = [
-			{ id: "c1", project: "proj-abc", path: "p", startLine: 1, endLine: 1, snippet: "t", source: "memory", vectorScore: 0.8 },
+			{ id: "c1", path: "memory/core.md", startLine: 1, endLine: 1, snippet: "t", source: "memory", vectorScore: 0.8 },
 		];
 		const result = mergeHybridResults({ vector, keyword: [], vectorWeight: 0.7, textWeight: 0.3 });
 		expect(result[0].score).toBeCloseTo(0.7 * 0.8, 5);
@@ -80,7 +80,7 @@ describe("mergeHybridResults", () => {
 
 	it("should handle keyword-only hits", () => {
 		const keyword: HybridKeywordResult[] = [
-			{ id: "c2", project: "proj-abc", path: "p", startLine: 1, endLine: 1, snippet: "t", source: "memory", textScore: 0.6 },
+			{ id: "c2", path: "memory/core.md", startLine: 1, endLine: 1, snippet: "t", source: "memory", textScore: 0.6 },
 		];
 		const result = mergeHybridResults({ vector: [], keyword, vectorWeight: 0.7, textWeight: 0.3 });
 		expect(result[0].score).toBeCloseTo(0.3 * 0.6, 5);
@@ -91,22 +91,22 @@ describe("mergeHybridResults", () => {
 		expect(result).toHaveLength(0);
 	});
 
-	it("should merge cross-project chunks with correct path prefixes", () => {
+	it("should merge chunks from different files", () => {
 		const vector: HybridVectorResult[] = [
-			{ id: "c1", project: "projA-111", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "t1", source: "memory", vectorScore: 0.9 },
-			{ id: "c2", project: "projB-222", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "t2", source: "memory", vectorScore: 0.5 },
+			{ id: "c1", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "t1", source: "memory", vectorScore: 0.9 },
+			{ id: "c2", path: "memory/todos.md", startLine: 1, endLine: 5, snippet: "t2", source: "memory", vectorScore: 0.5 },
 		];
 		const keyword: HybridKeywordResult[] = [
-			{ id: "c2", project: "projB-222", path: "memory/core.md", startLine: 1, endLine: 5, snippet: "t2", source: "memory", textScore: 0.7 },
-			{ id: "c3", project: "projA-111", path: "memory/todos.md", startLine: 1, endLine: 5, snippet: "t3", source: "memory", textScore: 0.3 },
+			{ id: "c2", path: "memory/todos.md", startLine: 1, endLine: 5, snippet: "t2", source: "memory", textScore: 0.7 },
+			{ id: "c3", path: "memory/preferences.md", startLine: 1, endLine: 5, snippet: "t3", source: "memory", textScore: 0.3 },
 		];
 
 		const result = mergeHybridResults({ vector, keyword, vectorWeight: 0.7, textWeight: 0.3 });
 		expect(result).toHaveLength(3);
 
-		const c1 = result.find((r) => r.path === "projA-111/memory/core.md")!;
-		const c2 = result.find((r) => r.path === "projB-222/memory/core.md")!;
-		const c3 = result.find((r) => r.path === "projA-111/memory/todos.md")!;
+		const c1 = result.find((r) => r.path === "memory/core.md")!;
+		const c2 = result.find((r) => r.path === "memory/todos.md")!;
+		const c3 = result.find((r) => r.path === "memory/preferences.md")!;
 
 		expect(c1.score).toBeCloseTo(0.7 * 0.9, 5); // Vector only
 		expect(c2.score).toBeCloseTo(0.7 * 0.5 + 0.3 * 0.7, 5); // Both paths
@@ -115,24 +115,15 @@ describe("mergeHybridResults", () => {
 });
 
 describe("applyTemporalDecay", () => {
-	it("should not decay evergreen files (with project prefix)", () => {
+	it("should not decay evergreen files", () => {
 		const results: MergedResult[] = [
-			{ path: "proj-abc/memory/core.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
+			{ path: "memory/core.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
 		];
 		const decayed = applyTemporalDecay(results, { enabled: true, halfLifeDays: 30 });
 		expect(decayed[0].score).toBe(0.8);
 	});
 
-	it("should decay 30-day-old daily log with project prefix by ~50%", () => {
-		const results: MergedResult[] = [
-			{ path: "proj-abc/memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
-		];
-		const now = new Date("2024-02-14");
-		const decayed = applyTemporalDecay(results, { enabled: true, halfLifeDays: 30 }, now);
-		expect(decayed[0].score).toBeCloseTo(0.8 * 0.5, 1);
-	});
-
-	it("should also handle legacy paths without project prefix", () => {
+	it("should decay 30-day-old daily log by ~50%", () => {
 		const results: MergedResult[] = [
 			{ path: "memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
 		];
@@ -143,7 +134,7 @@ describe("applyTemporalDecay", () => {
 
 	it("should not decay when disabled", () => {
 		const results: MergedResult[] = [
-			{ path: "proj-abc/memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
+			{ path: "memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
 		];
 		const now = new Date("2024-03-15");
 		const decayed = applyTemporalDecay(results, { enabled: false, halfLifeDays: 30 }, now);
@@ -152,8 +143,8 @@ describe("applyTemporalDecay", () => {
 
 	it("should decay more for older files", () => {
 		const results: MergedResult[] = [
-			{ path: "proj-abc/memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t1", source: "memory" },
-			{ path: "proj-abc/memory/2024-02-10.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t2", source: "memory" },
+			{ path: "memory/2024-01-15.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t1", source: "memory" },
+			{ path: "memory/2024-02-10.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t2", source: "memory" },
 		];
 		const now = new Date("2024-02-15");
 		const decayed = applyTemporalDecay(results, { enabled: true, halfLifeDays: 30 }, now);
@@ -163,7 +154,7 @@ describe("applyTemporalDecay", () => {
 
 	it("should not decay future dates (age <= 0)", () => {
 		const results: MergedResult[] = [
-			{ path: "proj-abc/memory/2024-12-31.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
+			{ path: "memory/2024-12-31.md", startLine: 1, endLine: 5, score: 0.8, snippet: "t", source: "memory" },
 		];
 		const now = new Date("2024-01-01");
 		const decayed = applyTemporalDecay(results, { enabled: true, halfLifeDays: 30 }, now);

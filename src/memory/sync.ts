@@ -37,6 +37,14 @@ export async function syncMemoryFiles(
 	const chunking = opts.chunking ?? { tokens: 400, overlap: 80 };
 	const stats = { added: 0, updated: 0, deleted: 0, chunksIndexed: 0 };
 
+	// Detect embedding model change — if the model has changed since last sync,
+	// clear all tracked files so every file gets re-indexed with the new model.
+	const currentModel = opts.embeddingProvider?.model ?? "none";
+	if (store.hasModelChanged(currentModel)) {
+		logger.info("memory-sync", `Embedding model changed to ${currentModel}, clearing index for full re-sync`);
+		store.clearAllTrackedFiles();
+	}
+
 	const currentFiles = await listMemoryFiles(store.getStorageDir());
 	const currentPaths = new Set<string>();
 
