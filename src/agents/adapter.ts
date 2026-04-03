@@ -14,6 +14,8 @@ export interface LaunchOptions {
 	env?: Record<string, string>;
 	/** Resume id for --resume, obtained from kill_agent */
 	resumeId?: string;
+	/** Pre-commands to run before the agent launch command, joined with && */
+	preCommands?: string[];
 }
 
 export interface OpenSpecCommands {

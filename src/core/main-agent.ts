@@ -233,6 +233,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 					description:
 						"Resume id for restoring a previous agent conversation. REQUIRED when the user supplies a resume id or one was retrieved from memory. When provided, launches with --resume to restore the agent's prior conversation. When omitted, a fresh agent starts and all previous context is lost.",
 				},
+				pre_commands: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						'Shell commands to run before launching the agent. Each command is joined with " && " and prepended to the agent launch command. Example: ["export FOO=bar", "source .env"] results in: export FOO=bar && source .env && claude ...',
+				},
 			},
 		},
 	},
@@ -1562,10 +1568,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							terminal: false,
 						};
 					}
+					const rawPreCommands = args.pre_commands as string[] | undefined;
+					const preCommands =
+						rawPreCommands && Array.isArray(rawPreCommands) && rawPreCommands.length > 0
+							? rawPreCommands.filter((c) => typeof c === "string" && c.trim())
+							: undefined;
 					const paneTarget = await this.adapter.launch(this.bridge, {
 						workingDir,
 						sessionName: agentName,
 						resumeId,
+						preCommands,
 					});
 					this.agents.set(agentName, { paneTarget, workingDir });
 					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir });

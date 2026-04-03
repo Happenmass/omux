@@ -32,7 +32,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
 		// Type launch command and press Enter
 		const baseCmd = `${this.command} --permission-mode auto`;
-		const cmd = opts.resumeId ? `${baseCmd} --resume ${opts.resumeId}` : baseCmd;
+		let cmd = opts.resumeId ? `${baseCmd} --resume ${opts.resumeId}` : baseCmd;
+		if (opts.preCommands && opts.preCommands.length > 0) {
+			cmd = `${opts.preCommands.join(" && ")} && ${cmd}`;
+		}
 		logger.info("claude-code", `Launching in ${paneTarget}: ${cmd}`);
 		await bridge.sendText(paneTarget, cmd);
 		await sleep(200);
