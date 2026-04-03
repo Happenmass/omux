@@ -695,14 +695,14 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("memory_write evidence", () => {
-		it("should broadcast persisted execution evidence after memory_write", async () => {
+	describe("memory_edit evidence", () => {
+		it("should broadcast persisted execution evidence after memory_edit", async () => {
 			const memoryStore = {
-				write: vi.fn().mockResolvedValue({ path: "memory/core.md" }),
+				edit: vi.fn().mockResolvedValue({ path: "memory/core.md" }),
 			} as any;
 			const agent = setupAgent(
 				[
-					toolCallResponse("memory_write", { path: "memory/core.md", content: "# note" }),
+					toolCallResponse("memory_edit", { path: "memory/core.md", content: "# note" }),
 					textResponse("Saved."),
 				],
 				{ memoryStore },
@@ -714,7 +714,7 @@ describe("MainAgent State Machine", () => {
 				expect.objectContaining({
 					type: "execution_event",
 					event: expect.objectContaining({
-						toolName: "memory_write",
+						toolName: "memory_edit",
 						phase: "persisted",
 						persistence: expect.objectContaining({
 							memoryWrites: ["memory/core.md"],

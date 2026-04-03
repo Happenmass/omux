@@ -4,6 +4,20 @@ Chat-based meta-orchestrator that commands coding agents (like Claude Code) via 
 
 Cliclaw runs as a persistent server with a web chat UI. You chat with the MainAgent naturally — it can answer questions, discuss code, and when you assign a development task, it autonomously commands coding agents in tmux sessions to get the work done, streaming progress updates back to you in real-time.
 
+## Core Features
+
+- **Natural chat + autonomous execution** — Talk naturally or assign complex dev tasks, the agent decides when to act
+- **Multi-agent orchestration** — Create, manage, and kill multiple coding agents simultaneously in tmux sessions
+- **Hybrid memory system** — Vector + keyword search over persistent Markdown memory files with auto-indexing
+- **Memory editing** — Append, overwrite, search-and-replace, and delete operations on memory files
+- **Memory tidy** — LLM-powered `/tidy` command reviews memory files and archives outdated entries
+- **Context management** — Automatic compression and memory flush when context window fills up
+- **Conversation persistence** — SQLite-backed chat history survives server restarts
+- **Skill system** — Extensible capabilities via Markdown skill files with conditional activation
+- **Human takeover** — Take direct control of an agent session from the web UI
+- **Execution evidence** — Track what agents changed (files, tests, memory writes) with structured events
+- **12 LLM providers** — OpenAI, Anthropic, DeepSeek, Gemini, Groq, Mistral, xAI, Ollama, and more
+
 ## Prerequisites
 
 - **Node.js** >= 20.0.0
@@ -17,7 +31,7 @@ brew install tmux
 sudo apt install tmux
 ```
 
-## Installation
+## Quick Start
 
 ```bash
 # Clone and install
@@ -26,67 +40,39 @@ cd cliclaw
 npm install
 npm run build
 
-# Or link globally
-npm link
-```
-
-## Quick Start
-
-```bash
-# Start the server in foreground (default port 3120)
+# Start the server (default port 3120)
 cliclaw
 
-# Open the chat UI in your browser
+# Open the chat UI
 open http://localhost:3120
-
-# Start the server in background (daemon mode)
-cliclaw start
-
-# If already running, start prints the existing URL again
-cliclaw start
-
-# Stop the background server
-cliclaw stop
-
-# Restart the background server (stop + start)
-cliclaw restart
-
-# Start with a specific port
-cliclaw --port 8080
-
-# Specify a provider and model
-cliclaw -p openai -m gpt-5.4
 ```
 
-In background mode, Cliclaw writes logs to `~/.cliclaw/logs/server.log` and runtime state to `~/.cliclaw/server-state.json`.
+### Background Mode
 
-Once the server is running, open the printed URL (default `http://localhost:3120`) in your browser. You'll see a chat interface where you can:
+```bash
+cliclaw start           # Start in background (daemon)
+cliclaw stop            # Stop background server
+cliclaw restart         # Restart
+```
 
-- **Chat naturally** — Ask questions, discuss code, get explanations
-- **Assign tasks** — "Add JWT authentication to this Express app" — the agent will work autonomously
-- **Monitor progress** — See real-time updates as the agent works
-- **Use slash commands** — `/stop`, `/resume`, `/clear`
+Logs at `~/.cliclaw/logs/server.log`, runtime state at `~/.cliclaw/server-state.json`.
 
 ## How It Works
 
 ```
-You (Browser) ←→ WebSocket ←→ MainAgent ←→ LLM (streaming)
-                                  ↕
-                            tmux sessions
-                                  ↕
-                          Coding Agent (Claude Code)
+You (Browser) <--> WebSocket <--> MainAgent <--> LLM (streaming)
+                                      |
+                                 tmux sessions
+                                      |
+                              Coding Agents (Claude Code, Codex)
 ```
 
 1. You send a message through the chat UI
-2. The MainAgent streams it to the LLM for analysis
+2. MainAgent streams it to the LLM for analysis
 3. For simple questions, it responds directly (stays **IDLE**)
-4. For tasks, it enters **EXECUTING** state and uses tools:
-   - Creates tmux sessions with coding agents
-   - Sends instructions and monitors progress
-   - Pushes summary updates to your chat in real-time
-5. When done, it calls `mark_complete` and returns to **IDLE**
-
-Your conversation persists in SQLite — restart the server and pick up where you left off.
+4. For tasks, it enters **EXECUTING** state and uses tools to create agents, send instructions, and monitor progress
+5. Summary updates stream back to your chat in real-time
+6. When done, it calls `mark_complete` and returns to **IDLE**
 
 ## Chat Commands
 
@@ -95,23 +81,65 @@ Your conversation persists in SQLite — restart the server and pick up where yo
 | `/stop` | Stop the current task execution |
 | `/resume` | Resume after `/stop` |
 | `/clear` | Clear conversation history (runs memory flush first) |
+| `/reset` | Reset: clear conversation + reload prompts and skills |
+| `/compact` | Force compress conversation history |
+| `/context` | Show context token usage |
+| `/tidy` | LLM reviews memory files, archives outdated entries |
 
-## CLI Options
+## Memory System
+
+Dual-storage architecture: **Markdown files** are the source of truth, **SQLite** is the search index.
+
+### Memory Files
+
+| File | Purpose |
+|------|---------|
+| `memory/core.md` | Architecture decisions, project conventions |
+| `memory/preferences.md` | User preferences, coding style |
+| `memory/people.md` | Team members, roles |
+| `memory/todos.md` | Action items, pending tasks |
+| `memory/YYYY-MM-DD.md` | Daily logs, archived entries |
+
+### Search
+
+Hybrid search combining vector KNN (sqlite-vec) and keyword BM25 (FTS5) with configurable weights. Supports 6 embedding providers with auto-detection fallback:
+
+- **Remote**: OpenAI, Gemini, Voyage, Mistral
+- **Local**: Qwen3-Embedding via node-llama-cpp
+- **Fallback**: FTS-only mode when no provider available
+
+### Editing
+
+The `memory_edit` tool supports four modes:
+- **append** — Add content to file (default)
+- **overwrite** — Replace entire file
+- **replace** — Find exact text and replace it
+- **delete** — Find exact text and remove it
+
+## Agent Tools
+
+| Tool | Description |
+|------|-------------|
+| `send_to_agent` | Send instruction to a coding agent |
+| `respond_to_agent` | Reply to agent waiting for input |
+| `inspect_agent` | Capture agent pane content |
+| `create_agent` / `list_agents` / `kill_agent` | Agent lifecycle |
+| `memory_search` / `memory_get` / `memory_edit` | Memory operations |
+| `exec_command` | Read-only bash for reconnaissance |
+| `read_skill` | Load full skill instructions |
+| `mark_complete` / `mark_failed` / `escalate_to_human` | Task completion |
+
+## CLI
 
 ```
-cliclaw [options]              Start the chat server in foreground (default)
-cliclaw serve [options]        Start the chat server in foreground explicitly
-cliclaw start [options]        Start the chat server in background
-cliclaw stop                   Stop the background server
-
-Subcommands:
-  serve                   Start the chat server in foreground (default behavior)
-  start                   Start the chat server in background (daemon mode)
-  stop                    Stop the background server
-  init                    Initialize project-level skills and prompts directories
-  remember <text>         Save a note to project memory
-  config                  Open configuration TUI
-  doctor                  Run health checks
+cliclaw [options]              Start the chat server (default: foreground)
+cliclaw start [options]        Start in background (daemon)
+cliclaw stop                   Stop background server
+cliclaw restart                Restart background server
+cliclaw init                   Initialize project skills/prompts
+cliclaw remember <text>        Save a note to memory
+cliclaw config                 Open configuration TUI
+cliclaw doctor                 Run health checks
 
 Options:
   -a, --agent <name>      Coding agent (default: claude-code)
@@ -120,26 +148,18 @@ Options:
   --base-url <url>        Custom API base URL
   --host <host>           Bind address (default: 127.0.0.1)
   --port <number>         Server port (default: 3120)
+  --context-window <n>    Context window size (default: 500000)
   --list-providers        List all available LLM providers
-  --cwd <path>            Working directory (default: current)
-  -h, --help              Show help
-  -v, --version           Show version
+  --cwd <path>            Working directory
 ```
 
 ## Configuration
 
-Cliclaw stores configuration in `~/.cliclaw/config.json`. Edit it directly or use the interactive TUI:
-
-```bash
-cliclaw config
-```
-
-### Config File Format
+Config at `~/.cliclaw/config.json`. Edit directly or use `cliclaw config`.
 
 ```json
 {
   "defaultAgent": "claude-code",
-  "debug": false,
   "llm": {
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
@@ -148,7 +168,8 @@ cliclaw config
   "memory": {
     "embeddingProvider": "auto",
     "flushThreshold": 0.6,
-    "vectorWeight": 0.7
+    "vectorWeight": 0.7,
+    "decayHalfLifeDays": 30
   }
 }
 ```
@@ -173,82 +194,12 @@ cliclaw config
 ## Development
 
 ```bash
-# Build
-npm run build
-
-# Watch mode
-npm run dev
-
-# Run tests
-npm test
-
-# Type check
-npx tsc --noEmit
-
-# Lint & format
-npm run check
-npm run format
-```
-
-## Project Structure
-
-```
-src/
-├── main.ts                    # Entry point — bootstrap + start server
-├── cli.ts                     # CLI argument parsing
-├── core/                      # Core logic
-│   ├── main-agent.ts          # MainAgent state machine (IDLE ↔ EXECUTING)
-│   ├── context-manager.ts     # System prompt, conversation, compression, persistence
-│   ├── signal-router.ts       # Execution control (stop/resume)
-│   └── session.ts             # Session management
-├── server/                    # HTTP + WebSocket server
-│   ├── index.ts               # Express app, routes, WebSocket server
-│   ├── chat-broadcaster.ts    # WebSocket client management & broadcast
-│   ├── ws-handler.ts          # WebSocket message routing
-│   ├── command-router.ts      # Slash command handling (/stop, /resume, /clear)
-│   └── message-queue.ts       # Human message queue (EXECUTING state)
-├── persistence/               # Data persistence
-│   └── conversation-store.ts  # SQLite conversation persistence
-├── tmux/                      # tmux integration
-│   ├── bridge.ts              # tmux command wrapper
-│   └── state-detector.ts      # Agent state detection
-├── agents/                    # Agent adapters
-│   ├── adapter.ts             # Adapter interface
-│   └── claude-code.ts         # Claude Code adapter
-├── llm/                       # LLM client
-│   ├── client.ts              # LLM API client (complete + stream)
-│   ├── types.ts               # LLM types
-│   ├── prompt-loader.ts       # Prompt templates
-│   └── providers/             # Provider registry
-├── memory/                    # Memory system
-│   ├── store.ts               # SQLite backend
-│   ├── search.ts              # Hybrid search (vector + keyword)
-│   ├── embedder.ts            # Embedding providers
-│   ├── chunker.ts             # Markdown chunking
-│   └── sync.ts                # File-to-SQLite sync
-├── skills/                    # Skill system
-│   ├── discovery.ts           # Skill discovery
-│   ├── filter.ts              # Conditional activation
-│   ├── registry.ts            # Skill lookup
-│   └── injector.ts            # Prompt injection
-├── tui/                       # Legacy TUI (still compiles)
-│   ├── app.ts                 # TUI application
-│   ├── dashboard.ts           # Dashboard view
-│   └── config-view.ts         # Config editor
-└── utils/
-    ├── config.ts              # Configuration management
-    └── logger.ts              # Logging
-
-web/                           # Chat UI (served by Express)
-├── index.html                 # Page structure
-├── styles.css                 # Dark theme styles
-└── app.js                     # WebSocket client, message rendering
-
-prompts/                       # LLM prompt templates
-├── main-agent.md              # MainAgent system prompt
-├── history-compressor.md      # Conversation compression
-├── memory-flush.md            # Memory extraction
-└── state-analyzer.md          # Agent state analysis
+npm run build          # tsc — compile to dist/
+npm run dev            # tsc --watch
+npm test               # vitest run — all tests
+npm run test:watch     # vitest — watch mode
+npm run check          # biome check src/
+npm run format         # biome format --write src/
 ```
 
 ## License

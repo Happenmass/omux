@@ -433,16 +433,21 @@ export class MemoryStore {
 			.run(provider, model, toDelete);
 	}
 
-	// ─── Write Operations ─────────────────────────────────
+	// ─── Edit Operations ─────────────────────────────────
 
 	/**
-	 * Write content to a memory file. Used by both MainAgent memory_write tool
-	 * and ContextManager Memory Flush.
+	 * Edit a memory file. Supports append, overwrite, search-and-replace, and delete.
+	 *
+	 * - **append** (default): Append content to the file (create if missing)
+	 * - **overwrite**: Replace entire file content
+	 * - **replace**: Find `match` text and replace with `content`
+	 * - **delete**: Find `match` text and remove it
 	 */
-	async write(params: {
+	async edit(params: {
 		path: string;
-		content: string;
-		mode?: "append" | "overwrite";
+		content?: string;
+		mode?: "append" | "overwrite" | "replace" | "delete";
+		match?: string;
 	}): Promise<{ success: boolean; path: string }> {
 		const { writeFile, appendFile, mkdir } = await import("node:fs/promises");
 		const { dirname } = await import("node:path");
@@ -460,24 +465,61 @@ export class MemoryStore {
 		// Ensure directory exists
 		await mkdir(dirname(absPath), { recursive: true });
 
-		if (mode === "overwrite") {
-			await writeFile(absPath, params.content, "utf-8");
-		} else {
-			// Append or create
-			try {
-				const existing = await readFile(absPath, "utf-8");
-				if (!existing.endsWith("\n")) {
-					await appendFile(absPath, "\n");
-				}
-				await appendFile(absPath, params.content);
-			} catch {
-				// File doesn't exist, create it
+		switch (mode) {
+			case "overwrite": {
+				if (!params.content) throw new Error("content is required for overwrite mode");
 				await writeFile(absPath, params.content, "utf-8");
+				break;
+			}
+			case "replace": {
+				if (!params.match) throw new Error("match is required for replace mode");
+				if (params.content === undefined) throw new Error("content is required for replace mode");
+				const existing = await readFile(absPath, "utf-8");
+				if (!existing.includes(params.match)) {
+					throw new Error(`match text not found in ${relPath}`);
+				}
+				const updated = existing.replace(params.match, params.content);
+				await writeFile(absPath, updated, "utf-8");
+				break;
+			}
+			case "delete": {
+				if (!params.match) throw new Error("match is required for delete mode");
+				const existing = await readFile(absPath, "utf-8");
+				if (!existing.includes(params.match)) {
+					throw new Error(`match text not found in ${relPath}`);
+				}
+				const updated = existing.replace(params.match, "");
+				await writeFile(absPath, updated, "utf-8");
+				break;
+			}
+			default: {
+				// append
+				if (!params.content) throw new Error("content is required for append mode");
+				try {
+					const existing = await readFile(absPath, "utf-8");
+					if (!existing.endsWith("\n")) {
+						await appendFile(absPath, "\n");
+					}
+					await appendFile(absPath, params.content);
+				} catch {
+					// File doesn't exist, create it
+					await writeFile(absPath, params.content, "utf-8");
+				}
+				break;
 			}
 		}
 
 		this.markDirty();
 		return { success: true, path: relPath };
+	}
+
+	/** Alias for edit() — backwards compatibility for callers using write(). */
+	async write(params: {
+		path: string;
+		content: string;
+		mode?: "append" | "overwrite";
+	}): Promise<{ success: boolean; path: string }> {
+		return this.edit(params);
 	}
 
 	// ─── Cleanup ──────────────────────────────────────────

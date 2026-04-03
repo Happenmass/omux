@@ -180,16 +180,25 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "memory_write",
+		name: "memory_edit",
 		description:
-			"Write content to a memory file. Only memory/*.md files are allowed. Creates the file if it does not exist, appends if it does.",
+			"Edit a memory file. Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed.",
 		parameters: {
 			type: "object",
 			properties: {
 				path: { type: "string", description: 'Relative path (e.g. "memory/core.md")' },
-				content: { type: "string", description: "Content to write or append" },
+				content: { type: "string", description: "Content to write (for append/overwrite/replace)" },
+				mode: {
+					type: "string",
+					enum: ["append", "overwrite", "replace", "delete"],
+					description: "Edit mode (default: append)",
+				},
+				match: {
+					type: "string",
+					description: "Text to find for replace/delete operations. Must be an exact match in the file.",
+				},
 			},
-			required: ["path", "content"],
+			required: ["path"],
 		},
 	},
 	{
@@ -1390,21 +1399,29 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 			}
 
+			case "memory_edit":
 			case "memory_write": {
 				if (!this.memoryStore) {
 					return { output: "Memory store not available.", terminal: false };
 				}
-				const path = args.path as string;
-				const content = args.content as string;
+				const editPath = args.path as string;
+				const editContent = args.content as string | undefined;
+				const editMode = (args.mode as "append" | "overwrite" | "replace" | "delete") ?? "append";
+				const editMatch = args.match as string | undefined;
 
 				try {
-					const result = await this.memoryStore.write({ path, content });
+					const result = await this.memoryStore.edit({
+						path: editPath,
+						content: editContent,
+						mode: editMode,
+						match: editMatch,
+					});
 					if (this.syncMemory) {
 						try {
 							await this.syncMemory();
 						} catch (err: any) {
 							return {
-								output: `Written to ${result.path} successfully. Warning: memory sync failed: ${err.message}`,
+								output: `Edited ${result.path} successfully. Warning: memory sync failed: ${err.message}`,
 								terminal: false,
 							};
 						}
@@ -1413,7 +1430,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						runId: this.createExecutionRunId(name),
 						phase: "persisted",
 						toolName: name,
-						summary: `Wrote ${result.path}`,
+						summary: `Edited ${result.path} (${editMode})`,
 						workspace: {
 							workingDir: this.getAgentWorkingDir(),
 							available: false,
@@ -1423,9 +1440,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							memoryWrites: [result.path],
 						}),
 					});
-					return { output: `Written to ${result.path} successfully.`, terminal: false };
+					return { output: `Edited ${result.path} successfully (${editMode}).`, terminal: false };
 				} catch (err: any) {
-					return { output: `Memory write error: ${err.message}`, terminal: false };
+					return { output: `Memory edit error: ${err.message}`, terminal: false };
 				}
 			}
 

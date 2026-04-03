@@ -49,12 +49,15 @@ Chat-driven decision engine with a two-state machine: **IDLE** ↔ **EXECUTING**
 
 Uses `llmClient.stream()` for all LLM calls — text deltas are broadcast to WebSocket clients in real-time.
 
-Emits events: `state_change`, `log`. 14 built-in tools:
+Emits events: `state_change`, `log`. Built-in tools:
 - `send_to_agent` / `respond_to_agent` — interact with coding agent in tmux (both have required `summary` parameter for chat UI updates)
-- `fetch_more` — capture more tmux pane content
+- `inspect_agent` — capture agent pane content and task status
+- `list_agent_tasks` — list active sub-agent tasks and pending events
 - `mark_complete` / `mark_failed` — terminal: return to IDLE
 - `escalate_to_human` — terminal: request human intervention
-- `memory_search` / `memory_get` / `memory_write` — hybrid search, read, and persist memories
+- `memory_search` / `memory_get` — hybrid search and read memories
+- `memory_edit` — edit memory files (modes: append, overwrite, replace, delete). `memory_write` is a backwards-compatible alias
+- `persistent_memory` — read/update global and project MEMORY.md (sections: user_profile, project_conventions, key_decisions, people_and_context, active_notes)
 - `read_skill` — read full SKILL.md content on demand
 - `create_agent` — create a `cliclaw-` prefixed tmux session and launch agent
 - `list_agents` — list all `cliclaw-` prefixed agents
@@ -67,15 +70,16 @@ HTTP + WebSocket server for the chat interface.
 - `index.ts` — Express app creation, static file serving (`web/`), REST API (`/api/history`, `/api/status`), WebSocket server on `/ws` path. `startServer()` returns a `ServerInstance` with a `close()` method.
 - `chat-broadcaster.ts` — Manages WebSocket client connections. `broadcast(message)` sends to all connected clients. Used by MainAgent to push `assistant_delta`, `assistant_done`, `agent_update`, `tool_activity`, `state`, `system`, `clear` messages.
 - `ws-handler.ts` — Handles individual WebSocket connections. Routes `{ type: "message" }` to `MainAgent.handleMessage()` and `{ type: "command" }` to `CommandRouter`. Sends current state on connect.
-- `command-router.ts` — Handles slash commands (`/stop`, `/resume`, `/clear`). `/stop` sets `stopRequested` on SignalRouter. `/resume` calls `MainAgent.handleResume()`. `/clear` stops execution → runs memory flush → clears SQLite → broadcasts clear event.
+- `command-router.ts` — Handles slash commands (`/stop`, `/resume`, `/clear`, `/reset`, `/compact`, `/context`, `/tidy`). `/tidy` uses LLM to review memory files and archive outdated entries. Receives optional `llmClient`, `promptLoader`, `memoryStore`, `syncMemory` dependencies for commands that need LLM access.
 - `command-registry.ts` — Central registry for slash command metadata (`CommandDescriptor`). Stores both built-in and skill-declared commands. Methods: `register()`, `registerMany()`, `get()`, `has()`, `getAll()`, `search()`. Skills can dynamically register commands at startup.
 - `message-queue.ts` — Simple FIFO queue for human messages received during EXECUTING state. Drained between tool-use rounds.
 
-### Conversation Persistence (`src/persistence/`)
-- `conversation-store.ts` — SQLite persistence for chat messages and context state. Two tables in the global `~/.cliclaw/cliclaw.db`:
+### Persistence (`src/persistence/`)
+- `conversation-store.ts` — SQLite persistence for chat messages and context state. Two tables in `~/.cliclaw/cliclaw.db`:
   - `chat_messages` — role, content (JSON-serialized), tool_call_id, created_at
   - `chat_context_state` — key-value store for compressed_history, compaction_count, etc.
   - Methods: `saveMessage()`, `loadMessages()`, `saveContextState()`, `loadContextState()`, `clearAll()`, `getMessageCount()`
+- `agent-store.ts` — SQLite persistence for agent sessions: session_id, pane_target, working_dir, taken_over flag
 
 ### ContextManager (`src/core/context-manager.ts`)
 Modular system prompt with replaceable sections (`{{compressed_history}}`, `{{memory}}`, `{{agent_capabilities}}`). Two-layer context guard:
@@ -105,12 +109,12 @@ Polls tmux pane content, computes content hashes, and classifies agent state (ac
 ### Memory Module (`src/memory/`)
 Dual-storage architecture: Markdown files are the source of truth, SQLite is the search index (rebuildable).
 
-- `store.ts` — SQLite backend with WAL mode, 6 tables (meta, files, chunks, chunks_vec, chunks_fts, embedding_cache)
-- `search.ts` — hybrid search: vector KNN (sqlite-vec) + keyword BM25 (FTS5), weighted merge (0.7/0.3), time decay, MMR diversity
-- `embedder.ts` — embedding provider factory supporting OpenAI, Gemini, Voyage, Mistral; auto-fallback chain with retry and caching
+- `store.ts` — SQLite backend with WAL mode, schema v2 (no project column), auto-migration from v1. Tables: meta, files, chunks, chunks_vec_*, chunks_fts, embedding_cache. `edit()` method supports 4 modes: append, overwrite, replace, delete. `write()` is a backwards-compatible alias.
+- `search.ts` — hybrid search: vector KNN (sqlite-vec) + keyword BM25 (FTS5), weighted merge (0.7/0.3), time decay
+- `embedder.ts` — embedding provider factory supporting OpenAI, Gemini, Voyage, Mistral, local (Qwen3-Embedding via node-llama-cpp); auto-fallback chain with retry and caching
 - `chunker.ts` — Markdown chunking (configurable tokens/overlap, default 400/80)
-- `sync.ts` — incremental file-to-SQLite sync via content hash tracking
-- `category.ts` — 7 categories (core, preferences, people, todos, daily, legacy, topic) inferred from file path
+- `sync.ts` — incremental file-to-SQLite sync via content hash tracking, embedding model change detection triggers full re-sync
+- `category.ts` — 6 categories (core, preferences, people, todos, daily, topic) inferred from file path
 - `types.ts` — shared types: `MemoryChunk`, `MemorySearchResult`, `EmbeddingProvider`, `HybridSearchConfig`
 
 ### Skill System (`src/skills/`)
@@ -134,7 +138,8 @@ Markdown templates with `{{variable}}` placeholders:
 - `main-agent.md` — MainAgent system prompt (chat-mode autonomous decision guidelines, execution paths, memory recall, agent management, skill usage)
 - `state-analyzer.md` — ambiguous state classification
 - `history-compressor.md` — conversation compression
-- `memory-flush.md` — extract decisions/preferences/knowledge from conversation for persistence
+- `memory-flush.md` — extract decisions/preferences/knowledge from conversation for persistence (uses `memory_edit` tool)
+- `memory-tidy.md` — LLM-driven memory file review, outputs structured JSON (retained/archived/summary)
 - `error-analyzer.md`, `session-summarizer.md`
 
 ### Chat UI (`web/`)
@@ -146,7 +151,8 @@ Minimal vanilla HTML/CSS/JS chat interface served by Express as static files.
 
 ### Agent Adapters (`src/agents/`)
 - `adapter.ts` — `AgentAdapter` interface: abstract contract for agent implementations. Defines `LaunchOptions`, `ExitAgentResult`, `OpenSpecCommands`, `AgentCharacteristics` types. Methods: `launch()`, `sendPrompt()`, `sendResponse()`, `abort()`, `shutdown()`, `exitAgent()`, `getCharacteristics()`, `getSkillsDir()`, `getCapabilitiesFile()`, `getOpenSpecCommands()`.
-- `claude-code.ts` — `ClaudeCodeAdapter`: concrete implementation for Claude Code agent.
+- `claude-code.ts` — `ClaudeCodeAdapter`: launches Claude Code with `--permission-mode auto`, supports resume via `--resume <id>`, auto-clears stuck `❯ (current)` state.
+- `codex.ts` — `CodexAdapter`: concrete implementation for Codex agent with resume support.
 
 ### Other Components
 - `TmuxBridge` (`src/tmux/bridge.ts`) — tmux command wrapper (create sessions, send keys, capture panes, `listCliclawAgents()`)
@@ -155,7 +161,7 @@ Minimal vanilla HTML/CSS/JS chat interface served by Express as static files.
 
 ## Testing
 
-Tests live in `test/` mirroring `src/` structure (36 test files). All tests mock external dependencies (LLM calls, tmux commands).
+Tests live in `test/` mirroring `src/` structure (47 test files). All tests mock external dependencies (LLM calls, tmux commands).
 
 Key test directories:
 - `test/core/` — MainAgent state machine, integration flow, ContextManager (incl. persistence), memory tools, signal-router
@@ -186,7 +192,9 @@ Memory-related config under `config.memory`:
 
 Client → Server:
 - `{ type: "message", content: string }` — user chat message
-- `{ type: "command", name: string }` — slash command (/stop, /resume, /clear)
+- `{ type: "command", name: string }` — slash command (/stop, /resume, /clear, /reset, /compact, /context, /tidy)
+- `{ type: "takeover", agentId: string }` — human takes over agent session
+- `{ type: "release", agentId: string }` — release agent back to MainAgent control
 
 Server → Client:
 - `{ type: "assistant_delta", delta: string }` — streaming text fragment

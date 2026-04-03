@@ -639,7 +639,7 @@ describe("ContextManager", () => {
 						{
 							type: "tool_call",
 							id: "flush-1",
-							name: "memory_write",
+							name: "memory_edit",
 							arguments: { path: "memory/core.md", content: "- persisted memory" },
 						},
 					],

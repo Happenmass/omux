@@ -310,6 +310,51 @@ describe("MemoryStore", () => {
 		});
 	});
 
+	describe("edit", () => {
+		it("should replace matched text", async () => {
+			await mkdir(join(storageDir, "memory"), { recursive: true });
+			await writeFile(join(storageDir, "memory/core.md"), "# Core\n- old item\n- keep item\n");
+
+			await store.edit({ path: "memory/core.md", mode: "replace", match: "- old item", content: "- new item" });
+
+			const { readFile } = await import("node:fs/promises");
+			const content = await readFile(join(storageDir, "memory/core.md"), "utf-8");
+			expect(content).toBe("# Core\n- new item\n- keep item\n");
+		});
+
+		it("should delete matched text", async () => {
+			await mkdir(join(storageDir, "memory"), { recursive: true });
+			await writeFile(join(storageDir, "memory/todos.md"), "# Todos\n- done task\n- pending task\n");
+
+			await store.edit({ path: "memory/todos.md", mode: "delete", match: "- done task\n" });
+
+			const { readFile } = await import("node:fs/promises");
+			const content = await readFile(join(storageDir, "memory/todos.md"), "utf-8");
+			expect(content).toBe("# Todos\n- pending task\n");
+		});
+
+		it("should throw when match text not found", async () => {
+			await mkdir(join(storageDir, "memory"), { recursive: true });
+			await writeFile(join(storageDir, "memory/core.md"), "# Core\n- item\n");
+
+			await expect(
+				store.edit({ path: "memory/core.md", mode: "replace", match: "nonexistent", content: "new" }),
+			).rejects.toThrow("match text not found");
+		});
+
+		it("should throw when match missing for replace mode", async () => {
+			await expect(
+				store.edit({ path: "memory/core.md", mode: "replace", content: "new" }),
+			).rejects.toThrow("match is required");
+		});
+
+		it("should throw when match missing for delete mode", async () => {
+			await expect(
+				store.edit({ path: "memory/core.md", mode: "delete" }),
+			).rejects.toThrow("match is required");
+		});
+	});
+
 	describe("vec table naming", () => {
 		it("should sanitize provider names for table names", () => {
 			expect(sanitizeVecTableProvider("openai")).toBe("openai");

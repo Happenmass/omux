@@ -513,8 +513,8 @@ export class ContextManager {
 				systemPrompt: flushSystemPrompt,
 				tools: [
 					{
-						name: "memory_write",
-						description: "Write content to a memory file",
+						name: "memory_edit",
+						description: "Edit a memory file (append by default)",
 						parameters: {
 							type: "object",
 							properties: {
@@ -528,12 +528,12 @@ export class ContextManager {
 				temperature: 0,
 			});
 
-			// Execute any memory_write tool calls
+			// Execute any memory_edit tool calls
 			const toolCalls = response.contentBlocks.filter((b): b is ToolCallContent => b.type === "tool_call");
 			let wroteMemory = false;
 
 			for (const call of toolCalls) {
-				if (call.name === "memory_write") {
+				if (call.name === "memory_edit") {
 					const path = call.arguments.path as string;
 					const content = call.arguments.content as string;
 					try {

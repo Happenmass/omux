@@ -69,6 +69,7 @@ function createMockMemoryStore(workspaceDir: string) {
 		getStorageDir: vi.fn().mockReturnValue(workspaceDir),
 		getTrackedFilePaths: vi.fn().mockReturnValue([]),
 		isFtsAvailable: vi.fn().mockReturnValue(true),
+		edit: vi.fn().mockResolvedValue({ success: true, path: "memory/core.md" }),
 		write: vi.fn().mockResolvedValue({ success: true, path: "memory/core.md" }),
 		close: vi.fn(),
 	} as any;
@@ -224,22 +225,24 @@ describe("MainAgent memory tools", () => {
 			expect(result.terminal).toBe(false);
 		});
 
-		it("should write to memory file via store.write()", async () => {
+		it("should edit memory file via store.edit()", async () => {
 			const mockStore = createMockMemoryStore(tmpDir);
 			const agent = createAgent({ memoryStore: mockStore });
 
 			const result = await (agent as any).executeTool({
 				type: "tool_call",
 				id: "tc1",
-				name: "memory_write",
+				name: "memory_edit",
 				arguments: { path: "memory/core.md", content: "\n- New preference" },
 			});
 
-			expect(mockStore.write).toHaveBeenCalledWith({
+			expect(mockStore.edit).toHaveBeenCalledWith({
 				path: "memory/core.md",
 				content: "\n- New preference",
+				mode: "append",
+				match: undefined,
 			});
-			expect(result.output).toContain("Written to");
+			expect(result.output).toContain("Edited");
 			expect(result.terminal).toBe(false);
 		});
 
@@ -258,9 +261,9 @@ describe("MainAgent memory tools", () => {
 			expect(syncMemory).toHaveBeenCalledOnce();
 		});
 
-		it("should handle write errors gracefully", async () => {
+		it("should handle edit errors gracefully", async () => {
 			const mockStore = createMockMemoryStore(tmpDir);
-			mockStore.write.mockRejectedValue(new Error("Only .md files under memory/ directory"));
+			mockStore.edit.mockRejectedValue(new Error("Only .md files under memory/ directory"));
 			const agent = createAgent({ memoryStore: mockStore });
 
 			const result = await (agent as any).executeTool({
@@ -270,7 +273,7 @@ describe("MainAgent memory tools", () => {
 				arguments: { path: "src/evil.ts", content: "bad stuff" },
 			});
 
-			expect(result.output).toContain("Memory write error");
+			expect(result.output).toContain("Memory edit error");
 			expect(result.terminal).toBe(false);
 		});
 
@@ -292,7 +295,7 @@ describe("MainAgent memory tools", () => {
 	describe("path security", () => {
 		it("should reject writes to paths outside memory/ via store validation", async () => {
 			const mockStore = createMockMemoryStore(tmpDir);
-			mockStore.write.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
+			mockStore.edit.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
 			const agent = createAgent({ memoryStore: mockStore });
 
 			const result = await (agent as any).executeTool({
@@ -302,12 +305,12 @@ describe("MainAgent memory tools", () => {
 				arguments: { path: "src/config.ts", content: "malicious" },
 			});
 
-			expect(result.output).toContain("Memory write error");
+			expect(result.output).toContain("Memory edit error");
 		});
 
 		it("should reject writes to non-.md files via store validation", async () => {
 			const mockStore = createMockMemoryStore(tmpDir);
-			mockStore.write.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
+			mockStore.edit.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
 			const agent = createAgent({ memoryStore: mockStore });
 
 			const result = await (agent as any).executeTool({
@@ -317,12 +320,12 @@ describe("MainAgent memory tools", () => {
 				arguments: { path: "memory/data.json", content: "{}" },
 			});
 
-			expect(result.output).toContain("Memory write error");
+			expect(result.output).toContain("Memory edit error");
 		});
 
 		it("should reject path traversal attempts", async () => {
 			const mockStore = createMockMemoryStore(tmpDir);
-			mockStore.write.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
+			mockStore.edit.mockRejectedValue(new Error("Only .md files under memory/ directory are allowed"));
 			const agent = createAgent({ memoryStore: mockStore });
 
 			const result = await (agent as any).executeTool({
@@ -332,7 +335,7 @@ describe("MainAgent memory tools", () => {
 				arguments: { path: "../../../etc/passwd", content: "evil" },
 			});
 
-			expect(result.output).toContain("Memory write error");
+			expect(result.output).toContain("Memory edit error");
 		});
 	});
 });

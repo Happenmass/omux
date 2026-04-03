@@ -30,7 +30,7 @@ Choose the appropriate file for each piece of information:
 
 ## Output Format
 
-For each piece of information to persist, call the `memory_write` tool with:
+For each piece of information to persist, call the `memory_edit` tool with:
 - `path`: The target memory file
 - `content`: The Markdown content to append
 
