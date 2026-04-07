@@ -97,6 +97,7 @@ function createMockBridge() {
 		hasSession: vi.fn().mockResolvedValue(false),
 		listCliclawAgents: vi.fn().mockResolvedValue([]),
 		createSession: vi.fn().mockResolvedValue(undefined),
+		sendEscape: vi.fn().mockResolvedValue(undefined),
 	} as any;
 }
 
@@ -516,6 +517,39 @@ describe("MainAgent State Machine", () => {
 
 			await agent.handleMessage("do dangerous thing");
 			expect(agent.state).toBe("idle");
+		});
+	});
+
+	describe("interrupt_agent tool", () => {
+		it("should send Escape and cleanup agent monitor task", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("create_agent", {}, "tc0"),
+					toolCallResponse(
+						"interrupt_agent",
+						{ summary: "Agent is modifying wrong file" },
+						"tc1",
+					),
+					textResponse("Interrupted, will redirect."),
+				],
+				{},
+				{ withMonitor: true },
+			);
+
+			await agent.handleMessage("do task");
+
+			expect(agent.state).toBe("idle");
+
+			// Should broadcast system message about interrupt
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "system",
+					message: expect.stringContaining("中断 agent"),
+				}),
+			);
+
+			// Should have called sendEscape on the bridge
+			expect(mockBridge.sendEscape).toHaveBeenCalled();
 		});
 	});
 

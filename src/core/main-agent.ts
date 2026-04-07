@@ -96,6 +96,26 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
+		name: "interrupt_agent",
+		description:
+			"Interrupt a coding agent that is going off track by sending an Escape key to its tmux session. This immediately interrupts the agent's current operation without destroying the session. Use when the agent is deviating from the goal and you want to regain control before sending a corrected instruction. If agent_id is omitted, routes to the most recently used agent.",
+		parameters: {
+			type: "object",
+			properties: {
+				summary: {
+					type: "string",
+					description:
+						"A brief human-readable summary explaining why the agent is being interrupted (e.g., 'Agent is modifying wrong file, interrupting to redirect')",
+				},
+				agent_id: {
+					type: "string",
+					description: "Target agent name. If omitted, routes to the active agent.",
+				},
+			},
+			required: ["summary"],
+		},
+	},
+	{
 		name: "inspect_agent",
 		description:
 			"Inspect an agent's current pane content and task status. Can be used at any time — during agent execution, while waiting, or after completion. Useful for checking progress, understanding what an agent is doing, or getting more context beyond what a callback provided. If agent_id is omitted, routes to the most recently used agent.",
@@ -1267,6 +1287,31 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 
 				return { output: "Error: AgentMonitor not initialized", terminal: false };
+			}
+
+			case "interrupt_agent": {
+				const resolved = this.resolveAgent(args.agent_id as string | undefined);
+				if ("error" in resolved) {
+					return { output: `Error: ${resolved.error}`, terminal: false };
+				}
+				const { entry: interruptAgent, id: interruptAgentId } = resolved;
+				this.activeAgentId = interruptAgentId;
+
+				const summary = args.summary as string;
+
+				this.emit("log", `Interrupting agent ${interruptAgentId}: ${summary}`);
+				this.broadcaster.broadcast({ type: "system", message: `中断 agent: ${summary}` });
+
+				await this.bridge.sendEscape(interruptAgent.paneTarget);
+
+				if (this.agentMonitor) {
+					this.agentMonitor.cleanup(interruptAgentId);
+				}
+
+				return {
+					output: `Agent ${interruptAgentId} interrupted. You can now send a new instruction with send_to_agent.`,
+					terminal: false,
+				};
 			}
 
 			case "inspect_agent": {

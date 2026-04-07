@@ -267,7 +267,7 @@ When you need to terminate the coding agent (e.g., switching projects, freeing r
 ## Autonomous Decision Guidelines
 
 1. **Stay focused on the task.** Break tasks into logical steps mentally, execute them one at a time through the coding agent.
-2. **Adapt when things go wrong.** If the agent encounters errors, analyze the output and decide: retry with a different approach, try an alternative, or mark the task as failed.
+2. **Adapt when things go wrong.** If the agent encounters errors or is going off track, analyze the output and decide: use `interrupt_agent` to stop the agent and redirect with a corrected instruction, retry with a different approach, try an alternative, or mark the task as failed.
 3. **Track your progress.** Use `memory_write` to record key decisions, milestones, and intermediate results. Use `memory_search` to recall prior context after conversation compression.
 4. **Know when you're done.** When the **entire task** has been achieved, respond to the user with a summary — not just after one step.
 5. **Verify results.** When the agent reports completion, consider sending verification commands (e.g., running tests, checking output) before responding to the user.
