@@ -21,7 +21,10 @@ import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
 import { AgentMonitor } from "./agent-monitor.js";
+import type { ChangeTracker } from "./change-tracker.js";
 import type { ContextManager } from "./context-manager.js";
+import type { LearningPipeline } from "./learning-pipeline.js";
+import type { PromptTracker } from "./prompt-tracker.js";
 import type { Signal, SignalRouter } from "./signal-router.js";
 import { type AgentEvent, WorkQueue } from "./work-queue.js";
 
@@ -363,6 +366,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private embeddingProvider: EmbeddingProvider | null = null;
 	private skillRegistry: SkillRegistry | null = null;
 	private debug: boolean;
+	private promptTracker: PromptTracker | undefined;
+	private learningPipeline: LearningPipeline | undefined;
+	private changeTracker: ChangeTracker | undefined;
 	private firstLLMCall = true;
 	private execCommandBroadcastCount = 0;
 	private agentMonitor: AgentMonitor | null = null;
@@ -398,6 +404,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		globalDir?: string;
 		workspaceDir?: string;
 		debug?: boolean;
+		promptTracker?: PromptTracker;
+		learningPipeline?: LearningPipeline;
+		changeTracker?: ChangeTracker;
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
@@ -416,6 +425,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.globalDir = opts.globalDir ?? "";
 		this.workspaceDir = opts.workspaceDir ?? "";
 		this.debug = opts.debug ?? false;
+		this.promptTracker = opts.promptTracker;
+		this.learningPipeline = opts.learningPipeline;
+		this.changeTracker = opts.changeTracker;
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -1009,6 +1021,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				const sendPreHash = await this.stateDetector.captureHash(sendAgent.paneTarget);
 				await this.adapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
+				this.promptTracker?.record(sendAgentId, prompt);
 
 				if (this.agentMonitor) {
 					const result = this.agentMonitor.dispatch(sendAgentId, sendAgent.paneTarget, {
@@ -1063,6 +1076,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				this.emitUiEvent("agent_update", summary);
 
 				await this.adapter.sendResponse(this.bridge, respondAgent.paneTarget, value);
+				this.promptTracker?.record(respondAgentId, value);
 
 				if (this.agentMonitor) {
 					// Wait for agent to begin processing the response before capturing hash.
@@ -1377,6 +1391,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preCommands,
 					});
 					this.agents.set(agentName, { paneTarget, workingDir });
+					await this.changeTracker?.registerAgent(agentName, workingDir);
 					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir });
 					this.activeAgentId = agentName;
 					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
@@ -1446,6 +1461,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						// Cleanup all registered agents
 						const registeredIds = [...this.agents.keys()];
 						for (const id of registeredIds) {
+							if (this.learningPipeline && this.changeTracker) {
+								const entry = this.agents.get(id);
+								if (entry) {
+									try {
+										await this.learningPipeline.ingestAgentKill({
+											sessionId: id,
+											sessionName: id,
+											cwd: entry.workingDir,
+											agentPrompts: this.promptTracker?.getFor(id) ?? [],
+										});
+									} catch (err) {
+										logger.warn("main-agent", `learning ingest failed for ${id}: ${(err as Error).message}`);
+									}
+								}
+								this.changeTracker.releaseAgent(id);
+								this.promptTracker?.release(id);
+							}
 							this.cleanupAgent(id);
 						}
 						this.activeAgentId = null;
@@ -1482,6 +1514,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					const exists = await this.bridge.hasSession(agentId);
 					if (exists) {
 						await this.bridge.killSession(agentId);
+					}
+
+					if (this.learningPipeline && this.changeTracker) {
+						try {
+							await this.learningPipeline.ingestAgentKill({
+								sessionId: agentId,
+								sessionName: agentId,
+								cwd: agentEntry.workingDir,
+								agentPrompts: this.promptTracker?.getFor(agentId) ?? [],
+							});
+						} catch (err) {
+							logger.warn("main-agent", `learning ingest failed for ${agentId}: ${(err as Error).message}`);
+						}
+						this.changeTracker.releaseAgent(agentId);
+						this.promptTracker?.release(agentId);
 					}
 
 					// Cleanup agent registry
