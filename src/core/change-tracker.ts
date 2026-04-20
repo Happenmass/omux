@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { logger } from "../utils/logger.js";
 import type { DiffFileEntry, DiffResult } from "./learning-types.js";
@@ -79,7 +81,32 @@ export class ChangeTracker {
 			cwd: b.cwd,
 			maxBuffer: 1024 * 1024 * 50,
 		});
-		return stdout;
+		// `git diff` does not list untracked files. Coding agents (Claude Code, Codex)
+		// typically create new files without staging, so we synthesize new-file diff
+		// fragments for each untracked file respecting .gitignore.
+		const untrackedDiff = await this.buildUntrackedDiff(b.cwd);
+		return stdout + untrackedDiff;
+	}
+
+	private async buildUntrackedDiff(cwd: string): Promise<string> {
+		const { stdout } = await pexec("git", ["ls-files", "--others", "--exclude-standard"], { cwd });
+		const files = stdout.split("\n").filter((f) => f.length > 0);
+		const parts: string[] = [];
+		for (const file of files) {
+			try {
+				const content = await readFile(join(cwd, file), "utf-8");
+				// Skip binary files (contain null bytes).
+				if (content.includes("\u0000")) continue;
+				const lines =
+					content.length > 0 && content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+				const header = `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${lines.length} @@\n`;
+				const body = lines.map((l) => `+${l}`).join("\n");
+				parts.push(header + body + "\n");
+			} catch {
+				// Unreadable file — skip silently.
+			}
+		}
+		return parts.join("");
 	}
 
 	private parseStats(rawDiff: string): Omit<DiffResult, "rawDiff"> {

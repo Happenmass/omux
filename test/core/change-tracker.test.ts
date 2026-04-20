@@ -72,4 +72,28 @@ describe("ChangeTracker", () => {
 		tracker.releaseAgent("s4");
 		expect(await tracker.computeDiff("s4")).toBeNull();
 	});
+
+	it("captures untracked new files without requiring git add", async () => {
+		await tracker.registerAgent("s5", tmpDir);
+		await writeFile(join(tmpDir, "untracked.txt"), "fresh\ncontent\n");
+		const diff = await tracker.computeDiff("s5");
+		expect(diff).not.toBeNull();
+		expect(diff!.filesChanged).toBe(1);
+		expect(diff!.filesList[0].path).toBe("untracked.txt");
+		expect(diff!.filesList[0].status).toBe("added");
+		expect(diff!.rawDiff).toContain("+fresh");
+		expect(diff!.rawDiff).toContain("+content");
+	});
+
+	it("respects .gitignore when listing untracked files", async () => {
+		await writeFile(join(tmpDir, ".gitignore"), "ignored.txt\n");
+		git(tmpDir, "add .gitignore");
+		git(tmpDir, "commit -m gitignore");
+		await tracker.registerAgent("s6", tmpDir);
+		await writeFile(join(tmpDir, "ignored.txt"), "secret\n");
+		await writeFile(join(tmpDir, "visible.txt"), "public\n");
+		const diff = await tracker.computeDiff("s6");
+		expect(diff!.filesChanged).toBe(1);
+		expect(diff!.filesList[0].path).toBe("visible.txt");
+	});
 });
