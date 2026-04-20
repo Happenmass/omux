@@ -117,6 +117,19 @@ Dual-storage architecture: Markdown files are the source of truth, SQLite is the
 - `category.ts` — 6 categories (core, preferences, people, todos, daily, topic) inferred from file path
 - `types.ts` — shared types: `MemoryChunk`, `MemorySearchResult`, `EmbeddingProvider`, `HybridSearchConfig`
 
+### Learning Sessions (`src/core/learning-*.ts` + `src/core/change-tracker.ts` + `src/core/prompt-tracker.ts`)
+Per-sub-agent change tracking with isolated learning chat. Lifecycle driven by MainAgent's `create_agent` / `send_to_agent` / `respond_to_agent` / `kill_agent` hooks — no new agent-facing tools.
+
+- `change-tracker.ts` — captures git baseline at agent launch (commit SHA, or `git stash create` tree for dirty worktrees to avoid stash-stack pollution). Computes unified diff at kill, including untracked files (synthesized new-file diffs respecting `.gitignore`).
+- `learning-store.ts` — SQLite CRUD over `learning_entries` / `learning_messages` tables (same DB as `ConversationStore`). Raw diff stored at `~/.cliclaw/learning/diffs/<id>.diff` on disk; only the path is in SQLite.
+- `learning-summarizer.ts` — calls `llmClient.complete()` with `prompts/learning-summary.md`; one retry on JSON parse failure, skeleton fallback on second failure.
+- `prompt-tracker.ts` — per-sub-agent prompt accumulator. MainAgent records each prompt/response sent to a sub-agent; pipeline retrieves the list at kill time.
+- `learning-pipeline.ts` — orchestrator. `ingestAgentKill` is error-isolated: any failure is caught and logged so kill path is never blocked. Also supports `merge` (combines multiple active entries, archives originals), `regenerate` (re-runs summarizer on stored diff), `flushToMemory` (writes `memory/learning/<id>.md` via `MemoryStore.edit`).
+- `learning-chat.ts` — per-entry chat streaming with `Map<entryId, AbortController>`. Concurrent messages on same entry rejected; different entries may stream in parallel. Context is isolated from MainAgent — no memory flush, no compaction.
+- REST: `GET /api/learning`, `GET /api/learning/:id`, `GET /api/learning/:id/diff`, `GET /api/learning/:id/messages`, `PATCH /api/learning/:id`, `POST /api/learning/merge`, `POST /api/learning/:id/regenerate`, `POST /api/learning/:id/flush-to-memory`, `DELETE /api/learning/:id`.
+- WebSocket client→server: `learning_message`, `learning_stop`. Server→client: `learning_entry_created`, `learning_entry_updated`, `learning_entry_deleted`, `learning_delta`, `learning_done`, `learning_error`.
+- UI: right-side panel split into entries list (top 1/3) and detail pane (Summary / Chat tabs, bottom 2/3). Frontend in `web/learning.js` as an ES module.
+
 ### Skill System (`src/skills/`)
 Extensible capability system allowing agents to contribute domain-specific tools and prompts.
 
