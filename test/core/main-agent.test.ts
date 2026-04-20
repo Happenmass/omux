@@ -427,45 +427,6 @@ describe("MainAgent State Machine", () => {
 			});
 		});
 
-		it("should broadcast execution_event planned phase for create_agent and send_to_agent", async () => {
-			const agent = setupAgent(
-				[
-					toolCallResponse("create_agent", {}, "tc0"),
-					toolCallResponse("send_to_agent", { prompt: "add auth", summary: "Adding JWT auth" }, "tc1"),
-					textResponse("Done"),
-				],
-				{},
-				{ withMonitor: true },
-			);
-
-			await agent.handleMessage("add auth");
-
-			const executionEvents = mockBroadcaster.broadcast.mock.calls
-				.map((call: any) => call[0])
-				.filter((message: any) => message.type === "execution_event");
-
-			// send_to_agent now returns immediately — settled phase is emitted asynchronously
-			// by AgentMonitor, so we only check for planned phases here
-			expect(executionEvents.length).toBeGreaterThanOrEqual(2);
-			expect(executionEvents).toEqual(
-				expect.arrayContaining([
-					expect.objectContaining({
-						type: "execution_event",
-						event: expect.objectContaining({
-							toolName: "create_agent",
-							phase: "planned",
-						}),
-					}),
-					expect.objectContaining({
-						type: "execution_event",
-						event: expect.objectContaining({
-							toolName: "send_to_agent",
-							phase: "planned",
-						}),
-					}),
-				]),
-			);
-		});
 	});
 
 	describe("stopRequested between rounds", () => {
@@ -639,37 +600,6 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 		});
 
-		it("should broadcast persisted execution evidence with resume id", async () => {
-			const agent = setupAgent([
-				toolCallResponse("kill_agent", { summary: "Exiting to save session" }),
-				textResponse("Agent exited successfully."),
-			]);
-			agent.setPaneTarget("test:0.0");
-
-			mockAdapter.exitAgent = vi.fn().mockResolvedValue({
-				content: "Resume this session with:\nclaude --resume abc-123",
-				resumeId: "abc-123",
-			});
-			mockBridge.hasSession.mockResolvedValue(true);
-			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
-
-			await agent.handleMessage("exit agent");
-
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
-				expect.objectContaining({
-					type: "execution_event",
-					event: expect.objectContaining({
-						toolName: "kill_agent",
-						phase: "persisted",
-						persistence: expect.objectContaining({
-							agentResumeId: "abc-123",
-							agentResumable: true,
-						}),
-					}),
-				}),
-			);
-		});
-
 		it("should return error when no active agent", async () => {
 			const agent = setupAgent([
 				toolCallResponse("kill_agent", { summary: "Exiting" }),
@@ -716,36 +646,6 @@ describe("MainAgent State Machine", () => {
 
 			expect(mockBridge.killSession).toHaveBeenCalled();
 			expect(agent.state).toBe("idle");
-		});
-	});
-
-	describe("memory_edit evidence", () => {
-		it("should broadcast persisted execution evidence after memory_edit", async () => {
-			const memoryStore = {
-				edit: vi.fn().mockResolvedValue({ path: "memory/core.md" }),
-			} as any;
-			const agent = setupAgent(
-				[
-					toolCallResponse("memory_edit", { path: "memory/core.md", content: "# note" }),
-					textResponse("Saved."),
-				],
-				{ memoryStore },
-			);
-
-			await agent.handleMessage("save memory");
-
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
-				expect.objectContaining({
-					type: "execution_event",
-					event: expect.objectContaining({
-						toolName: "memory_edit",
-						phase: "persisted",
-						persistence: expect.objectContaining({
-							memoryWrites: ["memory/core.md"],
-						}),
-					}),
-				}),
-			);
 		});
 	});
 

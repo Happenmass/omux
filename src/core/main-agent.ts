@@ -15,22 +15,13 @@ import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
 import type { AgentStore } from "../persistence/agent-store.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
-import type {
-	ExecutionEvent,
-	ExecutionEventStore,
-	ExecutionPersistenceEvidence,
-	ExecutionTestEvidence,
-	ExecutionVerificationEvidence,
-	ExecutionWorkspaceEvidence,
-} from "../server/execution-events.js";
 import type { UiEvent, UiEventStore, UiEventType } from "../server/ui-events.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
-import type { ContextManager } from "./context-manager.js";
-import type { SettledEvent } from "./agent-monitor.js";
 import { AgentMonitor } from "./agent-monitor.js";
+import type { ContextManager } from "./context-manager.js";
 import type { Signal, SignalRouter } from "./signal-router.js";
 import { type AgentEvent, WorkQueue } from "./work-queue.js";
 
@@ -47,8 +38,6 @@ export interface MainAgentEvents {
 	state_change: [state: AgentState];
 	log: [message: string];
 }
-
-const execFileAsync = promisify(execFile);
 
 // ─── Tool definitions ───────────────────────────────────
 
@@ -363,7 +352,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private bridge: TmuxBridge;
 	private stateDetector: StateDetector;
 	private broadcaster: ChatBroadcaster;
-	private executionEventStore: ExecutionEventStore | null = null;
 	private uiEventStore: UiEventStore | null = null;
 	private workQueue = new WorkQueue();
 	private isDispatching = false;
@@ -400,7 +388,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		bridge: TmuxBridge;
 		stateDetector: StateDetector;
 		broadcaster: ChatBroadcaster;
-		executionEventStore?: ExecutionEventStore;
 		uiEventStore?: UiEventStore;
 		memoryStore?: MemoryStore;
 		syncMemory?: () => Promise<void>;
@@ -420,7 +407,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.bridge = opts.bridge;
 		this.stateDetector = opts.stateDetector;
 		this.broadcaster = opts.broadcaster;
-		this.executionEventStore = opts.executionEventStore ?? null;
 		this.uiEventStore = opts.uiEventStore ?? null;
 		this.memoryStore = opts.memoryStore ?? null;
 		this.syncMemory = opts.syncMemory ?? null;
@@ -528,9 +514,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			bridge: this.bridge,
 			signalRouter: this.signalRouter,
 			workQueue: this.workQueue,
-			onSettled: (event: SettledEvent) => {
-				this.emitExecutionEvent({ ...event, phase: "settled" });
-			},
 		});
 
 		this.workQueue.on("item_available", () => {
@@ -946,17 +929,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		logger.error("main-agent", `${source} error: ${err.message}`);
 	}
 
-	private emitExecutionEvent(event: Omit<ExecutionEvent, "id" | "createdAt">): ExecutionEvent {
-		const completeEvent: ExecutionEvent = {
-			...event,
-			id: randomUUID(),
-			createdAt: Date.now(),
-		};
-		this.executionEventStore?.add(completeEvent);
-		this.broadcaster.broadcast({ type: "execution_event", event: completeEvent });
-		return completeEvent;
-	}
-
 	private emitUiEvent(type: UiEventType, summary: string): UiEvent {
 		const event: UiEvent = {
 			id: randomUUID(),
@@ -967,157 +939,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.uiEventStore?.add(event);
 		this.broadcaster.broadcast({ type, summary });
 		return event;
-	}
-
-	private createExecutionRunId(toolName: string): string {
-		return `${toolName}-${randomUUID()}`;
-	}
-
-	private async collectWorkspaceEvidence(workingDir: string): Promise<ExecutionWorkspaceEvidence> {
-		const unavailable = {
-			workingDir,
-			available: false,
-			changedFiles: [],
-		} satisfies ExecutionWorkspaceEvidence;
-
-		try {
-			await execFileAsync("git", ["-C", workingDir, "rev-parse", "--is-inside-work-tree"], {
-				timeout: 5000,
-				maxBuffer: 1024 * 64,
-			});
-		} catch {
-			return unavailable;
-		}
-
-		try {
-			const { stdout: statusStdout } = await execFileAsync("git", ["-C", workingDir, "status", "--short"], {
-				timeout: 5000,
-				maxBuffer: 1024 * 256,
-			});
-			const { stdout: diffStatStdout } = await execFileAsync(
-				"git",
-				["-C", workingDir, "diff", "--stat", "--no-ext-diff"],
-				{
-					timeout: 5000,
-					maxBuffer: 1024 * 256,
-				},
-			);
-
-			const changedFiles = this.parseChangedFiles(statusStdout);
-			const diffStat = diffStatStdout.trim() || undefined;
-
-			return {
-				workingDir,
-				available: true,
-				changedFiles,
-				diffStat,
-				diffSummary: this.buildDiffSummary(diffStat, changedFiles),
-			};
-		} catch (err: any) {
-			logger.warn("main-agent", `Failed to collect workspace evidence: ${err.message}`);
-			return unavailable;
-		}
-	}
-
-	private parseChangedFiles(statusOutput: string): string[] {
-		return statusOutput
-			.split("\n")
-			.map((line) => line.trimEnd())
-			.filter((line) => line.length > 3)
-			.map((line) => {
-				const pathPart = line.slice(3).trim();
-				if (pathPart.includes(" -> ")) {
-					return pathPart.split(" -> ").at(-1) ?? pathPart;
-				}
-				return pathPart;
-			});
-	}
-
-	private buildDiffSummary(diffStat: string | undefined, changedFiles: string[]): string[] {
-		if (diffStat) {
-			const lines = diffStat
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line.length > 0);
-			if (lines.length > 0) {
-				return lines.slice(0, 6);
-			}
-		}
-
-		return changedFiles.slice(0, 5).map((file) => `${file}: changed`);
-	}
-
-	private extractTestEvidence(content: string): ExecutionTestEvidence {
-		const commandMatch = content.match(
-			/(npm test|npm run test(?::[\w-]+)?|pnpm test|pnpm vitest|npx vitest[^\n]*|vitest(?: run)?|jest[^\n]*|yarn test|bun test|npm run build|pnpm build|tsc --noEmit)/i,
-		);
-		const failedMatch = content.match(
-			/(\b\d+\s+failed\b|test suites?:\s*\d+\s+failed|tests?\s+failed|failing|build failed|error:.*test)/i,
-		);
-		const passedMatch = content.match(
-			/(\b\d+\s+passed\b|test suites?:\s*\d+\s+passed|all tests passed|build successful|compiled successfully)/i,
-		);
-
-		if (failedMatch) {
-			return {
-				status: "failed",
-				summary: failedMatch[0],
-				command: commandMatch?.[0],
-			};
-		}
-
-		if (passedMatch) {
-			return {
-				status: "passed",
-				summary: passedMatch[0],
-				command: commandMatch?.[0],
-			};
-		}
-
-		if (commandMatch) {
-			return {
-				status: "unknown",
-				summary: `Detected verification command: ${commandMatch[0]}`,
-				command: commandMatch[0],
-			};
-		}
-
-		return {
-			status: "not_run",
-			summary: "No test or build command detected",
-		};
-	}
-
-	private buildVerificationEvidence(test: ExecutionTestEvidence): ExecutionVerificationEvidence {
-		if (test.status === "passed" || test.status === "failed") {
-			return {
-				status: "verified",
-				summary:
-					test.status === "passed"
-						? "Verification command completed successfully"
-						: "Verification command reported failures",
-			};
-		}
-
-		if (test.status === "unknown") {
-			return {
-				status: "insufficient_evidence",
-				summary: "Verification command detected, but final result was unclear",
-			};
-		}
-
-		return {
-			status: "unverified",
-			summary: "No verification command detected in the available evidence",
-		};
-	}
-
-	private createPersistenceEvidence(overrides?: Partial<ExecutionPersistenceEvidence>): ExecutionPersistenceEvidence {
-		return {
-			memoryWrites: [],
-			conversationPersisted: true,
-			...overrides,
-		};
 	}
 
 	private resolveMemoryGetTarget(rawPath: string): { storageDir: string; relativePath: string } {
@@ -1184,19 +1005,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					};
 				}
 
-				const runId = this.createExecutionRunId(name);
 				this.emitUiEvent("agent_update", summary);
-				this.emitExecutionEvent({
-					runId,
-					phase: "planned",
-					toolName: name,
-					summary,
-					workspace: {
-						workingDir: sendAgent.workingDir,
-						available: false,
-						changedFiles: [],
-					},
-				});
 
 				const sendPreHash = await this.stateDetector.captureHash(sendAgent.paneTarget);
 				await this.adapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
@@ -1251,19 +1060,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 				}
 
-				const runId = this.createExecutionRunId(name);
 				this.emitUiEvent("agent_update", summary);
-				this.emitExecutionEvent({
-					runId,
-					phase: "planned",
-					toolName: name,
-					summary,
-					workspace: {
-						workingDir: respondAgent.workingDir,
-						available: false,
-						changedFiles: [],
-					},
-				});
 
 				await this.adapter.sendResponse(this.bridge, respondAgent.paneTarget, value);
 
@@ -1458,20 +1255,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							};
 						}
 					}
-					this.emitExecutionEvent({
-						runId: this.createExecutionRunId(name),
-						phase: "persisted",
-						toolName: name,
-						summary: `Edited ${result.path} (${editMode})`,
-						workspace: {
-							workingDir: this.getAgentWorkingDir(),
-							available: false,
-							changedFiles: [],
-						},
-						persistence: this.createPersistenceEvidence({
-							memoryWrites: [result.path],
-						}),
-					});
 					return { output: `Edited ${result.path} successfully (${editMode}).`, terminal: false };
 				} catch (err: any) {
 					return { output: `Memory edit error: ${err.message}`, terminal: false };
@@ -1574,18 +1357,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 
 				try {
-					const runId = this.createExecutionRunId(name);
-					this.emitExecutionEvent({
-						runId,
-						phase: "planned",
-						toolName: name,
-						summary: `Create agent ${agentName}`,
-						workspace: {
-							workingDir,
-							available: false,
-							changedFiles: [],
-						},
-					});
 					const rawResumeId = args.resume_id as string | undefined;
 					const resumeId = rawResumeId?.trim() || undefined;
 					if (resumeId && /\s/.test(resumeId)) {
@@ -1609,15 +1380,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir });
 					this.activeAgentId = agentName;
 					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
-					const workspace = await this.collectWorkspaceEvidence(workingDir);
-					this.emitExecutionEvent({
-						runId,
-						phase: "settled",
-						toolName: name,
-						summary: `Agent ${agentName} created`,
-						workspace,
-						persistence: this.createPersistenceEvidence(),
-					});
 					logger.info("main-agent", `Agent created: ${agentName}, pane: ${paneTarget}, cwd: ${workingDir}`);
 					this.onAgentChange?.();
 					return {
@@ -1703,19 +1465,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 					const { entry: agentEntry, id: agentId } = resolved;
 
-					const runId = this.createExecutionRunId(name);
-					this.emitExecutionEvent({
-						runId,
-						phase: "planned",
-						toolName: name,
-						summary: killSummary,
-						workspace: {
-							workingDir: agentEntry.workingDir,
-							available: false,
-							changedFiles: [],
-						},
-					});
-
 					// Gracefully exit agent to capture resume id (best-effort)
 					let agentContent = "";
 					let resumeId: string | undefined;
@@ -1734,30 +1483,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					if (exists) {
 						await this.bridge.killSession(agentId);
 					}
-
-					// Emit evidence
-					const workspace = await this.collectWorkspaceEvidence(agentEntry.workingDir);
-					const test = this.extractTestEvidence(agentContent);
-					this.emitExecutionEvent({
-						runId,
-						phase: "settled",
-						toolName: name,
-						summary: killSummary,
-						workspace,
-						test,
-						verification: this.buildVerificationEvidence(test),
-					});
-					this.emitExecutionEvent({
-						runId,
-						phase: "persisted",
-						toolName: name,
-						summary: killSummary,
-						workspace,
-						persistence: this.createPersistenceEvidence({
-							agentResumeId: resumeId,
-							agentResumable: Boolean(resumeId),
-						}),
-					});
 
 					// Cleanup agent registry
 					this.cleanupAgent(agentId);

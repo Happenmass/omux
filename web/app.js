@@ -2,11 +2,9 @@
 
 let messagesEl;
 let contentEl;
-let executionCardsEl;
 let executionPanelEl;
 let executionResizeHandleEl;
 let executionReopenBtn;
-let collapseAllExecutionBtn;
 let inputEl;
 let sendBtn;
 let statusDot;
@@ -30,8 +28,6 @@ let isDropdownOpen = false;
 let isExecutionPanelResizing = false;
 let executionPanelHidden = false;
 let lastExecutionPanelWidth = 420;
-const executionRuns = new Map();
-const collapsedExecutionRuns = new Set();
 let activePanelTab = "terminal";
 const agentTerminals = new Map();
 let activeAgentTab = null;
@@ -174,209 +170,6 @@ export function shouldHideExecutionPanel(rawWidth, hideThreshold = EXECUTION_PAN
 	return rawWidth <= hideThreshold;
 }
 
-export function mergeExecutionEventSnapshot(existing, event) {
-	const next = existing
-		? {
-			...existing,
-			toolName: event.toolName || existing.toolName,
-			runId: event.runId || existing.runId,
-		}
-		: {
-			runId: event.runId,
-			toolName: event.toolName,
-			createdAt: event.createdAt,
-		};
-
-	next.phase = event.phase;
-	next.summary = event.summary ?? next.summary;
-	next.workspace = event.workspace ?? next.workspace;
-	next.persistence = event.persistence
-		? {
-			memoryWrites: event.persistence.memoryWrites ?? [],
-			agentResumeId: event.persistence.agentResumeId,
-			agentResumable: event.persistence.agentResumable,
-			conversationPersisted: event.persistence.conversationPersisted !== false,
-		}
-		: next.persistence;
-	next.test = event.test ?? next.test;
-	next.verification = event.verification ?? next.verification;
-	next.updatedAt = event.createdAt;
-	return next;
-}
-
-function phaseLabel(phase) {
-	switch (phase) {
-		case "planned":
-			return "即将调用";
-		case "settled":
-			return "已完成";
-		case "persisted":
-			return "已持久化";
-		default:
-			return phase;
-	}
-}
-
-function renderList(items, emptyText) {
-	if (!items || items.length === 0) {
-		return `<div class="execution-empty">${emptyText}</div>`;
-	}
-
-	return `<ul class="execution-list">${items
-		.map(function (item) {
-			return `<li>${escapeHtml(item)}</li>`;
-		})
-		.join("")}</ul>`;
-}
-
-function renderPersistence(snapshot) {
-	if (!snapshot.persistence) return "";
-
-	const parts = [];
-	if (snapshot.persistence.memoryWrites.length > 0) {
-		parts.push(`写入 memory: ${snapshot.persistence.memoryWrites.join(", ")}`);
-	}
-
-	if (snapshot.persistence.agentResumable !== undefined) {
-		parts.push(
-			snapshot.persistence.agentResumable && snapshot.persistence.agentResumeId
-				? `会话可恢复: ${snapshot.persistence.agentResumeId}`
-				: "会话恢复信息不可用",
-		);
-	}
-
-	parts.push(snapshot.persistence.conversationPersisted ? "对话会持久化" : "对话未持久化");
-
-	return `
-		<section class="execution-section">
-			<h3>持久化状态</h3>
-			${renderList(parts, "暂无持久化信息")}
-		</section>
-	`;
-}
-
-export function buildExecutionCardMarkup(snapshot, collapsed = collapsedExecutionRuns.has(snapshot.runId)) {
-	const workspace = snapshot.workspace;
-	const changedFiles = workspace
-		? workspace.available
-			? renderList(workspace.changedFiles, "未发现工作区改动")
-			: `<div class="execution-empty">改动文件暂不可用</div>`
-		: `<div class="execution-empty">尚未收集工作区证据</div>`;
-	const diffSummary =
-		workspace && workspace.diffSummary && workspace.diffSummary.length > 0
-			? renderList(workspace.diffSummary, "暂无 diff 摘要")
-			: "";
-	const testSummary = snapshot.test
-		? `<div class="execution-meta-row"><span>测试结果</span><strong>${escapeHtml(snapshot.test.status)}</strong><em>${escapeHtml(snapshot.test.summary)}</em></div>`
-		: "";
-	const verificationSummary = snapshot.verification
-		? `<div class="execution-meta-row"><span>验证状态</span><strong>${escapeHtml(snapshot.verification.status)}</strong><em>${escapeHtml(snapshot.verification.summary)}</em></div>`
-		: "";
-	const diffStatSummary =
-		workspace && workspace.diffStat
-			? `<div class="execution-meta-row"><span>Diff 统计</span><em>${escapeHtml(workspace.diffStat)}</em></div>`
-			: "";
-
-	const body = collapsed
-		? ""
-		: `
-			<div class="execution-card-body">
-				<section class="execution-section execution-meta">
-					<div class="execution-meta-row">
-						<span>目标目录</span>
-						<code>${escapeHtml(workspace ? workspace.workingDir : "未知")}</code>
-					</div>
-					${diffStatSummary}
-					${testSummary}
-					${verificationSummary}
-				</section>
-				<section class="execution-section">
-					<h3>改动文件</h3>
-					${changedFiles}
-				</section>
-				${diffSummary ? `<section class="execution-section"><h3>Diff 摘要</h3>${diffSummary}</section>` : ""}
-				${renderPersistence(snapshot)}
-			</div>
-		`;
-
-	return `
-		<header class="execution-card-header">
-			<div class="execution-card-headline">
-				<div class="execution-card-title">${escapeHtml(snapshot.toolName)}</div>
-				${!collapsed && snapshot.summary ? `<div class="execution-card-summary">${escapeHtml(snapshot.summary)}</div>` : ""}
-			</div>
-			<div class="execution-card-controls">
-				${!collapsed ? `<span class="execution-badge phase-${escapeHtml(snapshot.phase)}">${escapeHtml(phaseLabel(snapshot.phase))}</span>` : ""}
-				<button class="execution-toggle" type="button" data-run-id="${escapeHtml(snapshot.runId)}" aria-expanded="${String(!collapsed)}" title="${collapsed ? "展开" : "折叠"}">${collapsed ? "▸" : "▾"}</button>
-			</div>
-		</header>
-		${body}
-	`;
-}
-
-function renderExecutionCards() {
-	if (!executionCardsEl) return;
-
-	const snapshots = Array.from(executionRuns.values()).sort(function (a, b) {
-		return (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
-	});
-
-	if (snapshots.length === 0) {
-		executionCardsEl.innerHTML = '<div class="execution-empty-state">最近还没有执行证据。</div>';
-		updateExecutionHeaderControls();
-		return;
-	}
-
-	executionCardsEl.innerHTML = "";
-	for (const snapshot of snapshots) {
-		const collapsed = collapsedExecutionRuns.has(snapshot.runId);
-		const article = document.createElement("article");
-		article.className = "execution-card" + (collapsed ? " collapsed" : "");
-		article.innerHTML = buildExecutionCardMarkup(snapshot, collapsed);
-		executionCardsEl.appendChild(article);
-	}
-	updateExecutionHeaderControls();
-}
-
-function toggleExecutionCardCollapse(runId) {
-	if (!runId) return;
-	if (collapsedExecutionRuns.has(runId)) {
-		collapsedExecutionRuns.delete(runId);
-	} else {
-		collapsedExecutionRuns.add(runId);
-	}
-	renderExecutionCards();
-}
-
-function collapseAllExecutionCards() {
-	for (const runId of executionRuns.keys()) {
-		collapsedExecutionRuns.add(runId);
-	}
-	renderExecutionCards();
-}
-
-function updateExecutionHeaderControls() {
-	if (!collapseAllExecutionBtn) return;
-	if (executionRuns.size === 0) {
-		collapseAllExecutionBtn.disabled = true;
-		return;
-	}
-
-	collapseAllExecutionBtn.disabled = executionRuns.size === collapsedExecutionRuns.size;
-}
-
-function upsertExecutionCard(event) {
-	const existing = executionRuns.get(event.runId);
-	executionRuns.set(event.runId, mergeExecutionEventSnapshot(existing, event));
-	renderExecutionCards();
-}
-
-function resetExecutionCards() {
-	executionRuns.clear();
-	collapsedExecutionRuns.clear();
-	renderExecutionCards();
-}
-
 function supportsFloatingExecutionPanel() {
 	return window.matchMedia("(min-width: 981px)").matches;
 }
@@ -481,7 +274,6 @@ function connect() {
 	ws.onopen = function () {
 		setConnectionStatus("connected");
 		loadHistory();
-		loadExecutionEvents();
 		loadAgentTerminals();
 		fetchCommands();
 	};
@@ -592,20 +384,6 @@ function loadHistory() {
 		});
 }
 
-function loadExecutionEvents() {
-	fetch("/api/execution-events")
-		.then(function (res) { return res.json(); })
-		.then(function (events) {
-			resetExecutionCards();
-			for (const event of events) {
-				upsertExecutionCard(event);
-			}
-		})
-		.catch(function () {
-			resetExecutionCards();
-		});
-}
-
 function handleServerMessage(data) {
 	switch (data.type) {
 		case "assistant_delta":
@@ -633,10 +411,6 @@ function handleServerMessage(data) {
 			scrollToBottom();
 			break;
 
-		case "execution_event":
-			upsertExecutionCard(data.event);
-			break;
-
 		case "state": {
 			const prevState = agentState;
 			agentState = data.state;
@@ -660,7 +434,6 @@ function handleServerMessage(data) {
 		case "clear":
 			messagesEl.innerHTML = "";
 			currentAssistantEl = null;
-			resetExecutionCards();
 			addMessageBubble("system", "对话已清空");
 			break;
 	}
@@ -813,11 +586,9 @@ function sendMessage() {
 function initDomReferences() {
 	messagesEl = document.getElementById("messages");
 	contentEl = document.getElementById("content");
-	executionCardsEl = document.getElementById("execution-cards");
 	executionPanelEl = document.getElementById("execution-panel");
 	executionResizeHandleEl = document.getElementById("execution-resize-handle");
 	executionReopenBtn = document.getElementById("execution-reopen-btn");
-	collapseAllExecutionBtn = document.getElementById("execution-collapse-all-btn");
 	inputEl = document.getElementById("input");
 	sendBtn = document.getElementById("send-btn");
 	statusDot = document.getElementById("status-dot");
@@ -1016,7 +787,6 @@ function switchPanelTab(tab) {
 
 function initApp() {
 	initDomReferences();
-	renderExecutionCards();
 	syncExecutionPanelWidth();
 
 	// Request notification permission early
@@ -1043,16 +813,8 @@ function initApp() {
 		});
 	}
 
-	executionCardsEl.addEventListener("click", function (event) {
-		const target = event.target instanceof Element ? event.target.closest(".execution-toggle") : null;
-		if (!target) return;
-		toggleExecutionCardCollapse(target.dataset.runId);
-	});
 	if (executionResizeHandleEl) {
 		executionResizeHandleEl.addEventListener("mousedown", startExecutionPanelResize);
-	}
-	if (collapseAllExecutionBtn) {
-		collapseAllExecutionBtn.addEventListener("click", collapseAllExecutionCards);
 	}
 	if (executionReopenBtn) {
 		executionReopenBtn.addEventListener("click", reopenExecutionPanel);

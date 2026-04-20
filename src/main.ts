@@ -20,11 +20,10 @@ import { createEmbeddingProvider } from "./memory/embedder.js";
 import { loadPersistentMemory } from "./memory/persistent.js";
 import { MemoryStore } from "./memory/store.js";
 import { syncMemoryFiles } from "./memory/sync.js";
-import { ConversationStore } from "./persistence/conversation-store.js";
 import { AgentStore } from "./persistence/agent-store.js";
+import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
-import { ExecutionEventStore } from "./server/execution-events.js";
 import { startServer } from "./server/index.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
@@ -675,7 +674,6 @@ async function main(): Promise<void> {
 
 	// Initialize ChatBroadcaster
 	const broadcaster = new ChatBroadcaster();
-	const executionEventStore = new ExecutionEventStore({ db: memoryStore.getDb() });
 	const uiEventStore = new UiEventStore({ db: memoryStore.getDb() });
 
 	// Initialize ContextManager with conversation persistence
@@ -755,7 +753,6 @@ async function main(): Promise<void> {
 		bridge,
 		stateDetector,
 		broadcaster,
-		executionEventStore,
 		uiEventStore,
 		memoryStore,
 		syncMemory,
@@ -920,7 +917,6 @@ async function main(): Promise<void> {
 		broadcaster,
 		bridge,
 		commandRegistry,
-		executionEventStore,
 		uiEventStore,
 		onReset,
 		llmClient,

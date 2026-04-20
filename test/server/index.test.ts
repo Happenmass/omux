@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { startServer, type ServerInstance } from "../../src/server/index.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
-import { ExecutionEventStore } from "../../src/server/execution-events.js";
 import { UiEventStore } from "../../src/server/ui-events.js";
 
 function createMainAgentMock() {
@@ -96,7 +95,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge: createBridgeMock(),
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const unauthorized = await fetch(`http://127.0.0.1:${server.port}/api/status`);
@@ -128,7 +126,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge: createBridgeMock(),
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const unauthorizedWs = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
@@ -142,46 +139,6 @@ describe("startServer", () => {
 
 		await expect(waitForWsMessage(authorizedWs)).resolves.toBe(JSON.stringify({ type: "state", state: "idle" }));
 		authorizedWs.close();
-	});
-
-	it("should return recent execution events from the API", async () => {
-		const executionEventStore = new ExecutionEventStore();
-		executionEventStore.add({
-			id: "evt-1",
-			runId: "run-1",
-			phase: "planned",
-			toolName: "send_to_agent",
-			summary: "Prompting agent",
-			createdAt: Date.now(),
-		});
-
-		server = await startServer({
-			host: "127.0.0.1",
-			port: 0,
-			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
-			contextManager: createContextManagerMock(),
-			conversationStore: createConversationStoreMock(),
-			broadcaster: createBroadcasterMock(),
-			bridge: createBridgeMock(),
-			commandRegistry: new CommandRegistry(),
-			executionEventStore,
-		});
-
-		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
-		const cookie = getCookieHeader(landing);
-		const response = await fetch(`http://127.0.0.1:${server.port}/api/execution-events`, {
-			headers: { Cookie: cookie },
-		});
-
-		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual([
-			expect.objectContaining({
-				id: "evt-1",
-				runId: "run-1",
-				toolName: "send_to_agent",
-			}),
-		]);
 	});
 
 	it("should return agent terminals from the API", async () => {
@@ -203,7 +160,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge,
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
@@ -234,7 +190,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge: createBridgeMock(),
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
@@ -270,7 +225,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge,
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
@@ -324,7 +278,6 @@ describe("startServer", () => {
 			broadcaster,
 			bridge,
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		// Trigger agent change callback (simulates agent creation/kill)
@@ -370,7 +323,6 @@ describe("startServer", () => {
 			broadcaster,
 			bridge: createBridgeMock(),
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 		});
 
 		capturedOnAgentChange!();
@@ -410,7 +362,6 @@ describe("startServer", () => {
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
-				executionEventStore: new ExecutionEventStore(),
 				// No llmClient/promptLoader/memoryStore → tidy will broadcast "不可用"
 			});
 
@@ -440,7 +391,6 @@ describe("startServer", () => {
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
-				executionEventStore: new ExecutionEventStore(),
 			});
 
 			// Advance only 20 minutes — should NOT trigger yet
@@ -470,7 +420,6 @@ describe("startServer", () => {
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
-				executionEventStore: new ExecutionEventStore(),
 			});
 
 			// Advance 30 minutes (still today) — should NOT trigger
@@ -502,7 +451,6 @@ describe("startServer", () => {
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
-				executionEventStore: new ExecutionEventStore(),
 			});
 
 			// First trigger at 23:30
@@ -536,7 +484,6 @@ describe("startServer", () => {
 			broadcaster: createBroadcasterMock(),
 			bridge: createBridgeMock(),
 			commandRegistry: new CommandRegistry(),
-			executionEventStore: new ExecutionEventStore(),
 			uiEventStore,
 		});
 

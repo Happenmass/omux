@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { AgentMonitor } from "../../src/core/agent-monitor.js";
-import type { SettledEvent } from "../../src/core/agent-monitor.js";
 import { WorkQueue, type AgentEvent } from "../../src/core/work-queue.js";
 import type { SettledResult, PaneAnalysis } from "../../src/tmux/state-detector.js";
 
@@ -49,21 +48,18 @@ describe("AgentMonitor", () => {
 	let mockBridge: ReturnType<typeof createMockBridge>;
 	let mockSignalRouter: ReturnType<typeof createMockSignalRouter>;
 	let workQueue: WorkQueue;
-	let onSettled: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		mockDetector = createMockStateDetector();
 		mockBridge = createMockBridge();
 		mockSignalRouter = createMockSignalRouter();
 		workQueue = new WorkQueue();
-		onSettled = vi.fn();
 
 		monitor = new AgentMonitor({
 			stateDetector: mockDetector as any,
 			bridge: mockBridge,
 			signalRouter: mockSignalRouter,
 			workQueue,
-			onSettled,
 		});
 	});
 
@@ -329,105 +325,6 @@ describe("AgentMonitor", () => {
 		});
 	});
 
-	describe("onSettled", () => {
-		it("should fire for completed status", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Fix the bug",
-			});
-
-			mockDetector._resolve(settledResult("completed", "Done"));
-
-			await vi.waitFor(() => {
-				expect(onSettled).toHaveBeenCalledTimes(1);
-			});
-
-			const event = onSettled.mock.calls[0][0] as SettledEvent;
-			expect(event.runId).toBe("task_1");
-			expect(event.toolName).toBe("send_to_agent");
-			expect(event.summary).toBe("Fix the bug");
-			expect(event.pane).toBeDefined();
-			expect(event.pane!.content).toContain("line1");
-		});
-
-		it("should fire for error status", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Build",
-			});
-
-			mockDetector._resolve(settledResult("error", "Failed"));
-
-			await vi.waitFor(() => {
-				expect(onSettled).toHaveBeenCalledTimes(1);
-			});
-		});
-
-		it("should fire for timeout", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Slow task",
-			});
-
-			mockDetector._resolve(settledResult("active", "Timed out", true));
-
-			await vi.waitFor(() => {
-				expect(onSettled).toHaveBeenCalledTimes(1);
-			});
-		});
-
-		it("should NOT fire for waiting_input", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Interactive",
-			});
-
-			mockDetector._resolve(settledResult("waiting_input", "Need input"));
-
-			await vi.waitFor(() => {
-				expect(workQueue.size()).toBe(1);
-			});
-
-			expect(onSettled).not.toHaveBeenCalled();
-		});
-
-		it("should NOT fire for aborted tasks", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Will be aborted",
-			});
-
-			// Abort before settling
-			monitor.cleanup("session-1");
-
-			// The waitForSettled will resolve but abort check should prevent settled event
-			await new Promise((r) => setTimeout(r, 50));
-			expect(onSettled).not.toHaveBeenCalled();
-		});
-
-		it("should not fire when onSettled callback is not provided", async () => {
-			const monitorNoSettled = new AgentMonitor({
-				stateDetector: mockDetector as any,
-				bridge: mockBridge,
-				signalRouter: mockSignalRouter,
-				workQueue,
-			});
-
-			monitorNoSettled.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "No settled handler",
-			});
-
-			mockDetector._resolve(settledResult("completed", "Done"));
-
-			await vi.waitFor(() => {
-				expect(workQueue.size()).toBe(1);
-			});
-
-			// Should not throw even without onSettled
-		});
-	});
-
 	describe("pane content in AgentEvent", () => {
 		it("should include captured pane content in event", async () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
@@ -573,34 +470,4 @@ describe("AgentMonitor", () => {
 		});
 	});
 
-	describe("pane snippet in settled event", () => {
-		it("should include last 100 lines capped at 10000 chars", async () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Pane test",
-			});
-
-			// Create content with many lines
-			const lines = Array.from({ length: 150 }, (_, i) => `line ${i + 1}`);
-			const content = lines.join("\n");
-
-			mockDetector._resolve({
-				analysis: { status: "completed", confidence: 0.9, detail: "Done" },
-				content,
-				timedOut: false,
-			});
-
-			await vi.waitFor(() => {
-				expect(onSettled).toHaveBeenCalledTimes(1);
-			});
-
-			const event = onSettled.mock.calls[0][0] as SettledEvent;
-			expect(event.pane).toBeDefined();
-			// Should only have last 100 lines
-			expect(event.pane!.lines).toBe(100);
-			expect(event.pane!.content).toContain("line 51");
-			expect(event.pane!.content).toContain("line 150");
-			expect(event.pane!.content).not.toContain("line 1\n");
-		});
-	});
 });

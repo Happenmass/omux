@@ -1,9 +1,3 @@
-import type {
-	ExecutionPaneSnippet,
-	ExecutionTestEvidence,
-	ExecutionVerificationEvidence,
-	ExecutionWorkspaceEvidence,
-} from "../server/execution-events.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
@@ -29,22 +23,11 @@ export interface BusyResult {
 	paneContent: string;
 }
 
-export interface SettledEvent {
-	runId: string;
-	toolName: string;
-	summary: string;
-	pane?: ExecutionPaneSnippet;
-	workspace?: ExecutionWorkspaceEvidence;
-	test?: ExecutionTestEvidence;
-	verification?: ExecutionVerificationEvidence;
-}
-
 interface AgentMonitorOptions {
 	stateDetector: StateDetector;
 	bridge: TmuxBridge;
 	signalRouter: SignalRouter;
 	workQueue: WorkQueue;
-	onSettled?: (event: SettledEvent) => void;
 }
 
 export class AgentMonitor {
@@ -52,7 +35,6 @@ export class AgentMonitor {
 	private bridge: TmuxBridge;
 	private signalRouter: SignalRouter;
 	private workQueue: WorkQueue;
-	private onSettled?: (event: SettledEvent) => void;
 
 	private tasks = new Map<string, TaskInfo>();
 	private paneTargets = new Map<string, string>();
@@ -63,7 +45,6 @@ export class AgentMonitor {
 		this.bridge = opts.bridge;
 		this.signalRouter = opts.signalRouter;
 		this.workQueue = opts.workQueue;
-		this.onSettled = opts.onSettled;
 	}
 
 	dispatch(
@@ -188,7 +169,6 @@ export class AgentMonitor {
 
 				if (result.timedOut) {
 					this.fireCallback(task, "timeout", result.analysis.detail, duration, paneContent);
-					this.fireSettledEvent(task, result.content);
 					this.tasks.delete(agentId);
 					this.paneTargets.delete(agentId);
 					return;
@@ -196,7 +176,6 @@ export class AgentMonitor {
 
 				// Terminal states: completed, error, or anything else
 				this.fireCallback(task, status, result.analysis.detail, duration, paneContent);
-				this.fireSettledEvent(task, result.content);
 				this.tasks.delete(agentId);
 				this.paneTargets.delete(agentId);
 			} catch (err: any) {
@@ -242,31 +221,5 @@ export class AgentMonitor {
 		} catch {
 			return "(failed to capture pane content)";
 		}
-	}
-
-	private fireSettledEvent(task: TaskInfo, content: string): void {
-		if (!this.onSettled) return;
-
-		const contentLines = content.split("\n");
-		const lastLines = contentLines.slice(-100);
-		let snippet = lastLines.join("\n");
-		if (snippet.length > 10000) {
-			snippet = snippet.slice(-10000);
-		}
-
-		const pane: ExecutionPaneSnippet = {
-			content: snippet,
-			lines: lastLines.length,
-			capturedAt: Date.now(),
-		};
-
-		const event: SettledEvent = {
-			runId: task.taskId,
-			toolName: "send_to_agent",
-			summary: task.summary,
-			pane,
-		};
-
-		this.onSettled(event);
 	}
 }

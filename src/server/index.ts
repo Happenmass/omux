@@ -16,7 +16,6 @@ import { buildAuthCookie, createServerAuthToken, isAuthorized } from "./auth.js"
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRegistry } from "./command-registry.js";
 import { CommandRouter } from "./command-router.js";
-import type { ExecutionEventStore } from "./execution-events.js";
 import { UiEventStore } from "./ui-events.js";
 import { handleWebSocket } from "./ws-handler.js";
 
@@ -30,7 +29,6 @@ export interface ServerOptions {
 	broadcaster: ChatBroadcaster;
 	bridge: TmuxBridge;
 	commandRegistry: CommandRegistry;
-	executionEventStore: ExecutionEventStore;
 	uiEventStore?: UiEventStore;
 	onReset?: () => Promise<void>;
 	/** Dependencies for /tidy command */
@@ -59,7 +57,6 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		broadcaster,
 		bridge,
 		commandRegistry,
-		executionEventStore,
 		uiEventStore = new UiEventStore(),
 		onReset,
 		llmClient,
@@ -111,12 +108,6 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 	app.get("/api/commands", (req, res) => {
 		const query = typeof req.query.q === "string" ? req.query.q : undefined;
 		res.json(commandRegistry.search(query));
-	});
-
-	app.get("/api/execution-events", (req, res) => {
-		const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : undefined;
-		const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
-		res.json(executionEventStore.listRecent(limit));
 	});
 
 	app.get("/api/ui-events", (req, res) => {
@@ -228,7 +219,6 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		contextManager,
 		broadcaster,
 		commandRegistry,
-		executionEventStore,
 		uiEventStore,
 		onReset,
 		llmClient,

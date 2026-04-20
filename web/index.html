@@ -22,7 +22,7 @@
 				<div id="execution-resize-handle" class="execution-resize-handle" title="拖拽调整面板宽度"></div>
 				<nav class="panel-tabs">
 					<button class="panel-tab active" data-panel="terminal">终端</button>
-					<button class="panel-tab" data-panel="evidence">证据</button>
+					<button class="panel-tab" data-panel="evidence">扩展</button>
 				</nav>
 				<div id="terminal-view" class="panel-content active">
 					<div id="agent-tabs" class="agent-tabs"></div>
@@ -34,18 +34,15 @@
 					</div>
 					<div id="terminal-empty" class="terminal-empty">暂无活跃的 Agent 会话</div>
 				</div>
+				<!-- TODO: 此面板预留用于后续扩展功能（原 ExecutionEvent 执行证据卡片已移除） -->
 				<div id="evidence-view" class="panel-content">
 					<div class="execution-panel-header">
-						<div class="execution-panel-header-top">
-							<h2>执行证据</h2>
-							<button id="execution-collapse-all-btn" type="button" class="execution-header-btn">全部折叠</button>
-						</div>
-						<p>显示最近的工具调用和持久化状态。</p>
+						<h2>扩展面板</h2>
+						<p>此面板预留，待扩展功能接入。</p>
 					</div>
-					<div id="execution-cards"></div>
 				</div>
 			</aside>
-			<button id="execution-reopen-btn" type="button" class="execution-reopen-btn" title="打开执行证据">执行证据</button>
+			<button id="execution-reopen-btn" type="button" class="execution-reopen-btn" title="打开扩展面板">扩展面板</button>
 		</div>
 
 		<footer id="input-area">
