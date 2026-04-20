@@ -5,7 +5,7 @@ import type { DiffFileEntry, DiffResult } from "./learning-types.js";
 
 const pexec = promisify(execFile);
 
-interface Baseline {
+export interface Baseline {
 	baseRef: string;
 	cwd: string;
 }
@@ -73,6 +73,8 @@ export class ChangeTracker {
 	}
 
 	private async runDiff(b: Baseline): Promise<string> {
+		// 50MB safety net; diffs beyond this throw ERR_CHILD_PROCESS_STDIO_MAXBUFFER
+		// which is caught in computeDiff() and returns null (entry creation is skipped).
 		const { stdout } = await pexec("git", ["diff", b.baseRef, "--"], {
 			cwd: b.cwd,
 			maxBuffer: 1024 * 1024 * 50,
