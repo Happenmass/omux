@@ -1,8 +1,9 @@
 import type { PromptLoader } from "../llm/prompt-loader.js";
 import type { MemoryStore } from "../memory/store.js";
+import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
 import type { ChangeTracker } from "./change-tracker.js";
-import type { LearningStore } from "./learning-store.js";
+import { type LearningStore, computeDiffFingerprint } from "./learning-store.js";
 import type { LearningSummarizer } from "./learning-summarizer.js";
 import type { DiffResult, DiffStats, LearningEntry, LearningEntrySummary, SourceAgentRef } from "./learning-types.js";
 
@@ -34,6 +35,15 @@ export class LearningPipeline {
 		try {
 			const diff = await this.deps.tracker.computeDiff(ctx.sessionId);
 			if (!diff || diff.filesChanged === 0) return null;
+
+			// Dedup: skip if an existing entry has the same diff in the same cwd
+			const fingerprint = computeDiffFingerprint(ctx.cwd, diff.rawDiff);
+			const existingId = this.deps.store.findByFingerprint(fingerprint);
+			if (existingId) {
+				logger.info("learning-pipeline", `Dedup: skipping duplicate diff (existing: ${existingId})`);
+				return null;
+			}
+
 			const baseline = this.deps.tracker.getBaseline(ctx.sessionId);
 			const endRef = (await this.deps.tracker.resolveHeadSha(ctx.cwd)) ?? "HEAD";
 			const summary = await this.deps.summarizer.generate({
@@ -59,6 +69,7 @@ export class LearningPipeline {
 				summaryJson: summary,
 				diffStats: this.toDiffStats(diff),
 				rawDiff: diff.rawDiff,
+				diffFingerprint: fingerprint,
 			});
 			this.deps.broadcaster.broadcast({
 				type: "learning_entry_created",

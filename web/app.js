@@ -1,5 +1,6 @@
 // ─── Cliclaw Chat UI ──────────────────────────────
 import { initLearning, handleLearningMessage } from "./learning.js";
+import { initI18n } from "./i18n.js";
 
 let messagesEl;
 let contentEl;
@@ -30,6 +31,7 @@ let isExecutionPanelResizing = false;
 let executionPanelHidden = false;
 let lastExecutionPanelWidth = 420;
 let activePanelTab = "terminal";
+let learningEnabled = false;
 const agentTerminals = new Map();
 let activeAgentTab = null;
 let terminalMoreLoading = false;
@@ -268,6 +270,35 @@ function reopenExecutionPanel() {
 	showExecutionPanel();
 }
 
+function fetchLearningStatus(wsRef) {
+	fetch("/api/status")
+		.then(function (res) { return res.json(); })
+		.then(function (data) {
+			initI18n(data.locale);
+			learningEnabled = !!data.learningEnabled;
+			applyLearningVisibility();
+			if (learningEnabled) {
+				initLearning(wsRef);
+			}
+		})
+		.catch(function () {
+			initI18n();
+			learningEnabled = false;
+			applyLearningVisibility();
+		});
+}
+
+function applyLearningVisibility() {
+	const panelTabs = document.querySelector(".panel-tabs");
+	const learningTab = panelTabs ? panelTabs.querySelector('[data-panel="evidence"]') : null;
+	if (learningTab) learningTab.style.display = learningEnabled ? "" : "none";
+	if (evidenceViewEl) evidenceViewEl.style.display = learningEnabled ? "" : "none";
+	// If learning is hidden and currently selected, switch to terminal
+	if (!learningEnabled && activePanelTab === "evidence") {
+		switchPanelTab("terminal");
+	}
+}
+
 function connect() {
 	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
 	ws = new WebSocket(`${protocol}//${location.host}/ws`);
@@ -277,7 +308,7 @@ function connect() {
 		loadHistory();
 		loadAgentTerminals();
 		fetchCommands();
-		initLearning(ws);
+		fetchLearningStatus(ws);
 	};
 
 	ws.onmessage = function (event) {
@@ -388,7 +419,7 @@ function loadHistory() {
 
 function handleServerMessage(data) {
 	if (data.type && data.type.startsWith("learning_")) {
-		handleLearningMessage(data);
+		if (learningEnabled) handleLearningMessage(data);
 		return;
 	}
 	switch (data.type) {

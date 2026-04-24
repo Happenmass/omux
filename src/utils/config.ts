@@ -55,6 +55,11 @@ export interface SkillsConfig {
 	disabled: string[];
 }
 
+export interface LearningConfig {
+	/** Whether the Learning Sessions feature is enabled. Default false. */
+	enabled: boolean;
+}
+
 export interface ContextConfig {
 	/** Context window size in tokens. Should match the model's actual context limit. Default 500000. */
 	contextWindowLimit: number;
@@ -65,6 +70,8 @@ export interface ContextConfig {
 export interface CliclawConfig {
 	defaultAgent: string;
 	debug: boolean;
+	/** UI/prompt language override. Auto-detected from system locale if omitted. */
+	locale?: string;
 	llm: LLMConfig;
 	providers?: ProviderKeyConfig;
 	context: ContextConfig;
@@ -72,6 +79,7 @@ export interface CliclawConfig {
 	tmux: TmuxConfig;
 	memory: MemoryConfig;
 	skills: SkillsConfig;
+	learning: LearningConfig;
 }
 
 const CONFIG_DIR = join(homedir(), ".cliclaw");
@@ -120,6 +128,9 @@ const DEFAULT_CONFIG: CliclawConfig = {
 	skills: {
 		disabled: [],
 	},
+	learning: {
+		enabled: false,
+	},
 };
 
 export function getConfigDir(): string {
@@ -157,6 +168,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			tmux: { ...DEFAULT_CONFIG.tmux, ...userConfig.tmux },
 			memory: { ...DEFAULT_CONFIG.memory, ...userConfig.memory },
 			skills: { ...DEFAULT_CONFIG.skills, ...userConfig.skills },
+			learning: { ...DEFAULT_CONFIG.learning, ...userConfig.learning },
 		};
 	} catch {
 		return { ...DEFAULT_CONFIG };

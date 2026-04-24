@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
@@ -23,8 +24,22 @@ interface EntryRow {
 	diff_stats: string;
 	diff_blob_path: string;
 	memory_flushed_at: number | null;
+	diff_fingerprint: string | null;
 	created_at: number;
 	updated_at: number;
+}
+
+/**
+ * Compute a stable fingerprint from cwd + normalized diff content.
+ * Normalization: trim trailing whitespace per line, collapse trailing newlines.
+ */
+export function computeDiffFingerprint(cwd: string, rawDiff: string): string {
+	const normalized = rawDiff
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.join("\n")
+		.replace(/\n+$/, "\n");
+	return createHash("sha256").update(`${cwd}\0${normalized}`).digest("hex");
 }
 
 export class LearningStore {
@@ -62,7 +77,7 @@ export class LearningStore {
 		return rest;
 	}
 
-	async create(input: CreateLearningEntryInput): Promise<LearningEntry> {
+	async create(input: CreateLearningEntryInput & { diffFingerprint?: string }): Promise<LearningEntry> {
 		await this.ensureDiffDir();
 		const id = `lrn_${ulid()}`;
 		const now = Date.now();
@@ -72,8 +87,8 @@ export class LearningStore {
 			this.db
 				.prepare(
 					`INSERT INTO learning_entries
-					(id, title, status, source_type, source_agents, agent_prompts, summary_json, diff_stats, diff_blob_path, memory_flushed_at, created_at, updated_at)
-					VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+					(id, title, status, source_type, source_agents, agent_prompts, summary_json, diff_stats, diff_blob_path, diff_fingerprint, memory_flushed_at, created_at, updated_at)
+					VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 				)
 				.run(
 					id,
@@ -84,6 +99,7 @@ export class LearningStore {
 					JSON.stringify(input.summaryJson),
 					JSON.stringify(input.diffStats),
 					diffBlobPath,
+					input.diffFingerprint ?? null,
 					now,
 					now,
 				);
@@ -97,6 +113,17 @@ export class LearningStore {
 	async loadEntry(id: string): Promise<LearningEntry | null> {
 		const row = this.db.prepare("SELECT * FROM learning_entries WHERE id = ?").get(id) as EntryRow | undefined;
 		return row ? this.rowToEntry(row) : null;
+	}
+
+	/**
+	 * Check whether a non-deleted entry with the given fingerprint already exists.
+	 * Returns the existing entry id if found, null otherwise.
+	 */
+	findByFingerprint(fingerprint: string): string | null {
+		const row = this.db
+			.prepare("SELECT id FROM learning_entries WHERE diff_fingerprint = ? AND status IN ('active', 'archived')")
+			.get(fingerprint) as { id: string } | undefined;
+		return row?.id ?? null;
 	}
 
 	async list(

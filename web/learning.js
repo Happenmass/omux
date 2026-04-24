@@ -1,4 +1,5 @@
 // web/learning.js — Learning Sessions right-panel UI
+import { t } from "./i18n.js";
 
 const state = {
 	entries: [],
@@ -93,7 +94,7 @@ function renderList(pulseId) {
 		const statusCls = e.memoryFlushedAt ? "flushed" : e.status;
 		const srcLabel =
 			e.sourceType === "merged"
-				? `${e.sourceAgents.length} agents merged`
+				? `${e.sourceAgents.length} ${t("learning.merged")}`
 				: `agent: ${e.sourceAgents[0]?.sessionName ?? "?"}`;
 		const rel = relTime(e.updatedAt);
 		li.innerHTML = `
@@ -164,7 +165,7 @@ function attachListHandlers() {
 				body: JSON.stringify({ ids }),
 			});
 			if (!res.ok) {
-				alert(`Merge failed: ${await res.text()}`);
+				alert(`${t("learning.mergeFailed")}: ${await res.text()}`);
 				return;
 			}
 			state.selectedIds.clear();
@@ -221,22 +222,22 @@ function renderSummaryPane() {
 	if (!pane) return;
 	pane.innerHTML = `
 		<h2>${escape(s.title)}</h2>
-		<h4>What changed</h4>
+		<h4>${t("learning.whatChanged")}</h4>
 		<div class="markdown">${renderMd(s.what_changed)}</div>
-		<h4>Why</h4>
+		<h4>${t("learning.why")}</h4>
 		<div class="markdown">${renderMd(s.why)}</div>
-		<h4>Key files (${s.key_files.length})</h4>
+		<h4>${t("learning.keyFiles")} (${s.key_files.length})</h4>
 		<ul>${s.key_files.map((k) => `<li><code>${escape(k.path)}</code> — ${escape(k.role)}</li>`).join("")}</ul>
-		<button class="view-diff-btn">View full diff</button>
-		<h4>Design points</h4>
+		<button class="view-diff-btn">${t("learning.viewDiff")}</button>
+		<h4>${t("learning.designPoints")}</h4>
 		<ul>${s.design_points.map((p) => `<li>${escape(p)}</li>`).join("")}</ul>
-		<h4>Learning hooks</h4>
+		<h4>${t("learning.hooks")}</h4>
 		<div>${s.learning_hooks.map((h) => `<span class="learning-hook-chip" data-text="${escape(h)}">${escape(h)}</span>`).join("")}</div>
 		<div class="learning-actions">
-			<button class="regen-btn">Regenerate</button>
-			<button class="flush-btn ${e.memoryFlushedAt ? "flushed" : ""}">${e.memoryFlushedAt ? "✓ Flushed" : "Flush to memory"}</button>
-			<button class="archive-btn">${e.status === "archived" ? "Unarchive" : "Archive"}</button>
-			<button class="delete-btn" style="margin-left:auto;color:#d77;">Delete</button>
+			<button class="regen-btn">${t("learning.regenerate")}</button>
+			<button class="flush-btn ${e.memoryFlushedAt ? "flushed" : ""}">${e.memoryFlushedAt ? t("learning.flushed") : t("learning.flush")}</button>
+			<button class="archive-btn">${e.status === "archived" ? t("learning.unarchive") : t("learning.archive")}</button>
+			<button class="delete-btn" style="margin-left:auto;color:#d77;">${t("learning.delete")}</button>
 		</div>`;
 	pane.querySelector(".view-diff-btn")?.addEventListener("click", async () => {
 		const r = await fetch(`${apiBase}/${e.id}/diff`);
@@ -269,8 +270,16 @@ function renderSummaryPane() {
 		});
 	});
 	pane.querySelector(".delete-btn")?.addEventListener("click", async () => {
-		if (!confirm("Delete this learning entry? This also removes its chat and diff.")) return;
-		await fetch(`${apiBase}/${e.id}`, { method: "DELETE" });
+		if (!confirm(t("learning.deleteConfirm"))) return;
+		const res = await fetch(`${apiBase}/${e.id}`, { method: "DELETE" });
+		if (res.ok) {
+			state.entries = state.entries.filter((x) => x.id !== e.id);
+			if (state.selectedId === e.id) {
+				state.selectedId = null;
+				clearDetail();
+			}
+			renderList();
+		}
 	});
 }
 
@@ -279,7 +288,7 @@ function renderChatPane() {
 	const list = $("learning-chat-messages");
 	if (!list) return;
 	if (state.detailMessages.length === 0 && e.summaryJson.learning_hooks.length > 0) {
-		list.innerHTML = `<div class="learning-empty">Ask about what changed and why.</div>
+		list.innerHTML = `<div class="learning-empty">${t("learning.chatEmpty")}</div>
 			<div>${e.summaryJson.learning_hooks.map((h) => `<span class="learning-hook-chip" data-text="${escape(h)}">${escape(h)}</span>`).join("")}</div>`;
 		for (const c of list.querySelectorAll(".learning-hook-chip")) {
 			c.addEventListener("click", () => {
@@ -358,7 +367,7 @@ function showStreamError(message) {
 	state.streaming = false;
 	const sendBtn = $("learning-chat-send");
 	if (sendBtn) sendBtn.disabled = false;
-	alert(`Learning chat error: ${message}`);
+	alert(`${t("learning.chatError")}: ${message}`);
 }
 
 function clearDetail() {
@@ -373,7 +382,7 @@ function openDiffModal(text) {
 		"position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;";
 	overlay.innerHTML = `<div style="background:#1a1a1a;max-width:80%;max-height:80%;overflow:auto;padding:20px;border-radius:6px;">
 		<pre style="color:#ddd;white-space:pre-wrap;font-family:monospace;font-size:12px;">${escape(text)}</pre>
-		<button style="margin-top:10px;">Close</button></div>`;
+		<button style="margin-top:10px;">${t("learning.close")}</button></div>`;
 	overlay.querySelector("button").addEventListener("click", () => overlay.remove());
 	overlay.addEventListener("click", (ev) => {
 		if (ev.target === overlay) overlay.remove();
@@ -395,8 +404,8 @@ function renderMd(text) {
 
 function relTime(ms) {
 	const d = Date.now() - ms;
-	if (d < 60000) return "just now";
-	if (d < 3600000) return `${Math.floor(d / 60000)}m ago`;
-	if (d < 86400000) return `${Math.floor(d / 3600000)}h ago`;
-	return `${Math.floor(d / 86400000)}d ago`;
+	if (d < 60000) return t("time.justNow");
+	if (d < 3600000) return `${Math.floor(d / 60000)}${t("time.minutesAgo")}`;
+	if (d < 86400000) return `${Math.floor(d / 3600000)}${t("time.hoursAgo")}`;
+	return `${Math.floor(d / 86400000)}${t("time.daysAgo")}`;
 }

@@ -210,4 +210,110 @@ describe("LearningPipeline", () => {
 		const reloaded = await store.loadEntry(e!.id);
 		expect(reloaded!.memoryFlushedAt).not.toBeNull();
 	});
+
+	it("dedup: same cwd + same diff skips second ingest", async () => {
+		// First agent: create file and ingest
+		await tracker.registerAgent("sD1", repoDir);
+		await writeFile(join(repoDir, "dup.txt"), "content\n");
+		g(repoDir, "add .");
+		const first = await pipeline.ingestAgentKill({
+			sessionId: "sD1",
+			sessionName: "D1",
+			cwd: repoDir,
+			agentPrompts: [],
+		});
+		expect(first).not.toBeNull();
+
+		// Second agent: same file, same content (identical diff from same baseline)
+		// Reset repo fully so next agent gets a clean baseline
+		g(repoDir, "reset HEAD -- .");
+		g(repoDir, "checkout -- .");
+		g(repoDir, "clean -fd");
+		await tracker.registerAgent("sD2", repoDir);
+		await writeFile(join(repoDir, "dup.txt"), "content\n");
+		g(repoDir, "add .");
+		const second = await pipeline.ingestAgentKill({
+			sessionId: "sD2",
+			sessionName: "D2",
+			cwd: repoDir,
+			agentPrompts: [],
+		});
+		expect(second).toBeNull(); // deduped
+
+		// Only one entry in store
+		const all = await store.list({ status: "active" });
+		expect(all).toHaveLength(1);
+	});
+
+	it("dedup: different cwd + same diff creates both entries", async () => {
+		// Create a second repo with identical content
+		const repoDir2 = join(tmpDir, "repo2");
+		await mkdir(repoDir2);
+		g(repoDir2, "init -b main");
+		g(repoDir2, "config user.email a@b.c");
+		g(repoDir2, "config user.name t");
+		await writeFile(join(repoDir2, "a.txt"), "base\n");
+		g(repoDir2, "add .");
+		g(repoDir2, "commit -m init");
+
+		// Agent in repo1
+		await tracker.registerAgent("sR1", repoDir);
+		await writeFile(join(repoDir, "same.txt"), "same\n");
+		g(repoDir, "add .");
+		const e1 = await pipeline.ingestAgentKill({
+			sessionId: "sR1",
+			sessionName: "R1",
+			cwd: repoDir,
+			agentPrompts: [],
+		});
+
+		// Agent in repo2 with identical file change
+		await tracker.registerAgent("sR2", repoDir2);
+		await writeFile(join(repoDir2, "same.txt"), "same\n");
+		g(repoDir2, "add .");
+		const e2 = await pipeline.ingestAgentKill({
+			sessionId: "sR2",
+			sessionName: "R2",
+			cwd: repoDir2,
+			agentPrompts: [],
+		});
+
+		expect(e1).not.toBeNull();
+		expect(e2).not.toBeNull();
+		expect(e1!.id).not.toBe(e2!.id);
+	});
+
+	it("dedup: deleted entry does not block new creation", async () => {
+		// First ingest
+		await tracker.registerAgent("sDel1", repoDir);
+		await writeFile(join(repoDir, "del.txt"), "v1\n");
+		g(repoDir, "add .");
+		const first = await pipeline.ingestAgentKill({
+			sessionId: "sDel1",
+			sessionName: "Del1",
+			cwd: repoDir,
+			agentPrompts: [],
+		});
+		expect(first).not.toBeNull();
+
+		// Delete it
+		await store.delete(first!.id);
+
+		// Reset repo fully (unstage + clean) so next agent sees a clean baseline
+		g(repoDir, "reset HEAD -- .");
+		g(repoDir, "checkout -- .");
+		g(repoDir, "clean -fd");
+
+		// Same change again — should create since old one is deleted
+		await tracker.registerAgent("sDel2", repoDir);
+		await writeFile(join(repoDir, "del.txt"), "v1\n");
+		g(repoDir, "add .");
+		const second = await pipeline.ingestAgentKill({
+			sessionId: "sDel2",
+			sessionName: "Del2",
+			cwd: repoDir,
+			agentPrompts: [],
+		});
+		expect(second).not.toBeNull();
+	});
 });

@@ -112,6 +112,8 @@ describe("startServer", () => {
 			state: "idle",
 			messageCount: 0,
 			clients: 0,
+			learningEnabled: false,
+			locale: "en-US",
 		});
 	});
 

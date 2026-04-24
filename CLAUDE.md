@@ -200,6 +200,21 @@ Memory-related config under `config.memory`:
 - `vectorWeight` — hybrid search vector weight (default 0.7, keyword = 1 - vectorWeight)
 - `decayHalfLifeDays` — time decay for daily memories (default 30)
 - `skills.disabled` — list of skill names to disable
+- `learning.enabled` — enable Learning Sessions feature (default `false`). When disabled, no learning components are initialized and the Learning tab is hidden in the UI
+
+## i18n / Language
+
+Cliclaw auto-detects the system language and supports `zh-CN` and `en-US`. Language resolution order:
+1. `config.locale` override in `~/.cliclaw/config.json` (e.g. `"locale": "zh-CN"`)
+2. Node: `LC_ALL` → `LANG` → `LANGUAGE` env vars; Browser: `navigator.language`
+3. Fallback: `en-US`
+
+Chinese locales (`zh*`) map to `zh-CN`; everything else maps to `en-US`.
+
+- **Frontend**: `web/i18n.js` provides `t(key)` lookups. HTML elements use `data-i18n` / `data-i18n-placeholder` attributes. Locale comes from `/api/status` response, with browser detection as fallback.
+- **Backend LLM prompts**: `learning-summary.md` and `learning-chat.md` use a `{{language_instruction}}` variable injected by `getLanguageInstruction(locale)` from `src/utils/locale.ts`.
+- **Skeleton fallback strings**: `LearningSummarizer` skeleton uses locale-appropriate text.
+- Internal logs, code comments, and CLAUDE.md documentation remain in English.
 
 ## WebSocket Message Protocol
 

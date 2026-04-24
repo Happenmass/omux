@@ -109,6 +109,13 @@ export class ConfigView implements Component {
 				description: "Log every MainAgent LLM response for debugging",
 				type: "cycle",
 			},
+			{
+				key: "learning",
+				label: "Learning Sessions",
+				getValue: () => (this.config.learning?.enabled ? chalk.green("ON") : chalk.dim("OFF")),
+				description: "Track sub-agent changes and generate learning entries",
+				type: "cycle",
+			},
 		];
 	}
 
@@ -236,6 +243,9 @@ export class ConfigView implements Component {
 			this.config.defaultAgent = agents[(currentIdx + 1) % agents.length];
 		} else if (key === "debug") {
 			this.config.debug = !this.config.debug;
+		} else if (key === "learning") {
+			if (!this.config.learning) this.config.learning = { enabled: false };
+			this.config.learning.enabled = !this.config.learning.enabled;
 		}
 		this.cached = null;
 		this.box.invalidate();

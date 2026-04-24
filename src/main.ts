@@ -53,6 +53,7 @@ import {
 	type ServerRuntimeState,
 	saveServerRuntimeState,
 } from "./utils/config.js";
+import { resolveLocale } from "./utils/locale.js";
 import { logger } from "./utils/logger.js";
 
 function createMemorySyncRunner(params: {
@@ -412,6 +413,21 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 	// Best-effort: cascade ESC to cliclaw tmux panes before stopping server process.
 	await triggerTmuxEscapeCascade();
 
+	// Best-effort: kill cliclaw-* tmux sessions left over
+	try {
+		const bridge = new TmuxBridge();
+		const cliclawSessions = await bridge.listCliclawAgents();
+		for (const session of cliclawSessions) {
+			try {
+				await bridge.killSession(session.name);
+			} catch {
+				/* best-effort */
+			}
+		}
+	} catch {
+		/* tmux may not be available */
+	}
+
 	try {
 		process.kill(state.pid, "SIGTERM");
 	} catch (err: any) {
@@ -568,6 +584,9 @@ async function main(): Promise<void> {
 
 	const config = await loadConfig();
 
+	// Resolve locale from config or system environment
+	const locale = resolveLocale(config.locale);
+
 	// Resolve agent: CLI --agent flag takes precedence over config.defaultAgent
 	const agentName = args.agent ?? config.defaultAgent;
 
@@ -683,27 +702,38 @@ async function main(): Promise<void> {
 	const broadcaster = new ChatBroadcaster();
 	const uiEventStore = new UiEventStore({ db: memoryStore.getDb() });
 
-	// Initialize Learning components
-	// memoryStore.getDb() returns the same Database instance used by ConversationStore and AgentStore
-	const learningDiffDir = join(homedir(), ".cliclaw", "learning", "diffs");
-	const learningStore = new LearningStore(memoryStore.getDb(), learningDiffDir);
-	const changeTracker = new ChangeTracker();
-	const promptTracker = new PromptTracker();
-	const learningSummarizer = new LearningSummarizer(llmClient, promptLoader);
-	const learningPipeline = new LearningPipeline({
-		store: learningStore,
-		tracker: changeTracker,
-		summarizer: learningSummarizer,
-		memoryStore,
-		broadcaster,
-		promptLoader,
-	});
-	const learningChat = new LearningChat({
-		store: learningStore,
-		broadcaster,
-		llm: llmClient,
-		promptLoader,
-	});
+	// Initialize Learning components (only when enabled via config)
+	let learningStore: LearningStore | undefined;
+	let changeTracker: ChangeTracker | undefined;
+	let promptTracker: PromptTracker | undefined;
+	let learningPipeline: LearningPipeline | undefined;
+	let learningChat: LearningChat | undefined;
+
+	if (config.learning.enabled) {
+		const learningDiffDir = join(homedir(), ".cliclaw", "learning", "diffs");
+		learningStore = new LearningStore(memoryStore.getDb(), learningDiffDir);
+		changeTracker = new ChangeTracker();
+		promptTracker = new PromptTracker();
+		const learningSummarizer = new LearningSummarizer(llmClient, promptLoader, locale);
+		learningPipeline = new LearningPipeline({
+			store: learningStore,
+			tracker: changeTracker,
+			summarizer: learningSummarizer,
+			memoryStore,
+			broadcaster,
+			promptLoader,
+		});
+		learningChat = new LearningChat({
+			store: learningStore,
+			broadcaster,
+			llm: llmClient,
+			promptLoader,
+			locale,
+		});
+		logger.info("main", "Learning Sessions enabled");
+	} else {
+		logger.info("main", "Learning Sessions disabled (enable via `cliclaw config`)");
+	}
 
 	// Initialize ContextManager with conversation persistence
 	const contextManager = new ContextManager({
@@ -958,6 +988,8 @@ async function main(): Promise<void> {
 		learningStore,
 		learningPipeline,
 		learningChat,
+		learningEnabled: config.learning.enabled,
+		locale,
 	});
 
 	// Notify connected clients about restored conversation
@@ -983,7 +1015,12 @@ async function main(): Promise<void> {
 
 	// ─── Graceful Shutdown ──────────────────────────────
 
+	let shutdownInProgress = false;
+
 	const shutdown = async () => {
+		if (shutdownInProgress) return;
+		shutdownInProgress = true;
+
 		console.log(chalk.yellow("\nShutting down..."));
 
 		mainAgent.shutdownMonitor();
@@ -995,11 +1032,34 @@ async function main(): Promise<void> {
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 
+		// Best-effort cleanup of cliclaw-* tmux sessions
+		try {
+			const cliclawSessions = await bridge.listCliclawAgents();
+			for (const session of cliclawSessions) {
+				try {
+					await bridge.killSession(session.name);
+				} catch {
+					/* best-effort */
+				}
+			}
+		} catch {
+			/* tmux may not be available */
+		}
+
 		// Close server
 		await serverInstance.close();
 
 		// Close MemoryStore
 		memoryStore.close();
+
+		// Dispose embedding provider native resources (e.g. local llama context)
+		if (embeddingProvider?.dispose) {
+			try {
+				await embeddingProvider.dispose();
+			} catch {
+				/* best-effort */
+			}
+		}
 
 		// Clean up runtime state (both daemon and foreground)
 		const state = await loadServerRuntimeState();

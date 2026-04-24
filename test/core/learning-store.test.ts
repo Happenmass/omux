@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LearningStore } from "../../src/core/learning-store.js";
+import { LearningStore, computeDiffFingerprint } from "../../src/core/learning-store.js";
 import type { CreateLearningEntryInput, SummaryJson } from "../../src/core/learning-types.js";
 import { ConversationStore } from "../../src/persistence/conversation-store.js";
 
@@ -48,6 +48,13 @@ describe("learning tables schema", () => {
 	it("creates the status+updated_at index", () => {
 		const row = db
 			.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_learning_entries_status_updated'")
+			.get();
+		expect(row).toBeDefined();
+	});
+
+	it("creates the fingerprint index", () => {
+		const row = db
+			.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_learning_entries_fingerprint'")
 			.get();
 		expect(row).toBeDefined();
 	});
@@ -186,5 +193,54 @@ describe("LearningStore entries", () => {
 		await store.appendMessage(entry.id, "user", "q");
 		const loaded = await store.loadEntry(entry.id);
 		expect(loaded!.updatedAt).toBeGreaterThan(before);
+	});
+
+	it("findByFingerprint returns id for matching active entry", async () => {
+		const fp = computeDiffFingerprint("/tmp/repo", "diff content");
+		await store.create(makeInput({ rawDiff: "diff content", diffFingerprint: fp } as any));
+		expect(store.findByFingerprint(fp)).not.toBeNull();
+	});
+
+	it("findByFingerprint returns null when no match", async () => {
+		expect(store.findByFingerprint("nonexistent")).toBeNull();
+	});
+
+	it("findByFingerprint ignores deleted entries", async () => {
+		const fp = computeDiffFingerprint("/tmp/repo", "diff");
+		const entry = await store.create(makeInput({ rawDiff: "diff", diffFingerprint: fp } as any));
+		await store.delete(entry.id);
+		expect(store.findByFingerprint(fp)).toBeNull();
+	});
+});
+
+describe("computeDiffFingerprint", () => {
+	it("produces same hash for identical cwd+diff", () => {
+		const a = computeDiffFingerprint("/tmp/repo", "diff --git a/x\n+line\n");
+		const b = computeDiffFingerprint("/tmp/repo", "diff --git a/x\n+line\n");
+		expect(a).toBe(b);
+	});
+
+	it("produces different hash for different cwd", () => {
+		const a = computeDiffFingerprint("/tmp/repo-a", "diff\n");
+		const b = computeDiffFingerprint("/tmp/repo-b", "diff\n");
+		expect(a).not.toBe(b);
+	});
+
+	it("produces different hash for different diff", () => {
+		const a = computeDiffFingerprint("/tmp/repo", "diff-a\n");
+		const b = computeDiffFingerprint("/tmp/repo", "diff-b\n");
+		expect(a).not.toBe(b);
+	});
+
+	it("normalizes trailing whitespace", () => {
+		const a = computeDiffFingerprint("/tmp/repo", "line   \nanother  \n");
+		const b = computeDiffFingerprint("/tmp/repo", "line\nanother\n");
+		expect(a).toBe(b);
+	});
+
+	it("normalizes trailing newlines", () => {
+		const a = computeDiffFingerprint("/tmp/repo", "line\n\n\n\n");
+		const b = computeDiffFingerprint("/tmp/repo", "line\n");
+		expect(a).toBe(b);
 	});
 });

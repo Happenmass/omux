@@ -1,5 +1,7 @@
 You are analyzing a completed sub-agent coding task to produce a structured learning summary.
 
+**IMPORTANT: {{language_instruction}}**
+
 You will receive:
 - The task prompts that were given to the sub-agent (what was asked).
 - The git diff the sub-agent produced (what actually changed).

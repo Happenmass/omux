@@ -1,6 +1,7 @@
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
 import type { LLMMessage } from "../llm/types.js";
+import { type SupportedLocale, getLanguageInstruction } from "../utils/locale.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
 import type { LearningStore } from "./learning-store.js";
 
@@ -9,6 +10,7 @@ export interface LearningChatDeps {
 	broadcaster: ChatBroadcaster;
 	llm: LLMClient;
 	promptLoader: PromptLoader;
+	locale?: SupportedLocale;
 }
 
 interface ActiveState {
@@ -36,6 +38,7 @@ export class LearningChat {
 
 			const history = await this.deps.store.loadMessages(entryId);
 			const system = this.deps.promptLoader.resolve("learning-chat", {
+				language_instruction: getLanguageInstruction(this.deps.locale ?? "en-US"),
 				title: entry.summaryJson.title,
 				what_changed: entry.summaryJson.what_changed,
 				why: entry.summaryJson.why,

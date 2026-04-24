@@ -22,6 +22,7 @@ describe("learning REST API", () => {
 	let store: LearningStore;
 	let server: Awaited<ReturnType<typeof startServer>>;
 	let pipeline: any;
+	let broadcaster: any;
 	let baseUrl: string;
 	let cookie: string;
 
@@ -59,7 +60,7 @@ describe("learning REST API", () => {
 			ingestAgentKill: vi.fn(),
 		};
 
-		const broadcaster = {
+		broadcaster = {
 			broadcast: vi.fn(),
 			addClient: vi.fn(),
 			removeClient: vi.fn(),
@@ -198,7 +199,7 @@ describe("learning REST API", () => {
 		expect(pipeline.merge).toHaveBeenCalledWith(["lrn_a", "lrn_b"], undefined);
 	});
 
-	it("DELETE removes entry", async () => {
+	it("DELETE removes entry and broadcasts deletion", async () => {
 		const e = await makeEntry();
 		const res = await fetch(`${baseUrl}/api/learning/${e.id}`, {
 			method: "DELETE",
@@ -206,6 +207,12 @@ describe("learning REST API", () => {
 		});
 		expect(res.status).toBe(204);
 		expect(await store.loadEntry(e.id)).toBeNull();
+
+		// Verify broadcast was called with learning_entry_deleted
+		const calls = broadcaster.broadcast.mock.calls;
+		const deleteCall = calls.find((c: any) => c[0]?.type === "learning_entry_deleted");
+		expect(deleteCall).toBeDefined();
+		expect(deleteCall[0].id).toBe(e.id);
 	});
 
 	it("GET /api/learning/:id returns 404 when missing", async () => {

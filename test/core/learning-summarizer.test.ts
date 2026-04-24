@@ -60,7 +60,7 @@ describe("LearningSummarizer", () => {
 		expect(llm.complete).toHaveBeenCalledTimes(2);
 	});
 
-	it("falls back to skeleton after two parse failures", async () => {
+	it("falls back to English skeleton after two parse failures (default locale)", async () => {
 		const llm = mockLlm(["bad", "still bad"]);
 		const s = new LearningSummarizer(llm as any, mockPromptLoader() as any);
 		const out = await s.generate({
@@ -73,12 +73,33 @@ describe("LearningSummarizer", () => {
 		expect(out.key_files).toEqual([{ path: "x.ts", role: "" }]);
 	});
 
+	it("falls back to Chinese skeleton when locale is zh-CN", async () => {
+		const llm = mockLlm(["bad", "still bad"]);
+		const s = new LearningSummarizer(llm as any, mockPromptLoader() as any, "zh-CN");
+		const out = await s.generate({
+			agentPrompts: [],
+			diffForLLM: "",
+			filesList: [{ path: "x.ts", status: "modified" }],
+			mode: "agent",
+		});
+		expect(out.title).toBe("无标题（LLM 错误）");
+	});
+
 	it("strips markdown fences from LLM output", async () => {
 		const fenced = `\`\`\`json\n${validJson}\n\`\`\``;
 		const llm = mockLlm([fenced]);
 		const s = new LearningSummarizer(llm as any, mockPromptLoader() as any);
 		const out = await s.generate({ agentPrompts: [], diffForLLM: "", filesList: [], mode: "agent" });
 		expect(out.title).toBe("Refactor X");
+	});
+
+	it("passes language_instruction to prompt resolver", async () => {
+		const llm = mockLlm([validJson]);
+		const pl = mockPromptLoader();
+		const s = new LearningSummarizer(llm as any, pl as any, "zh-CN");
+		await s.generate({ agentPrompts: [], diffForLLM: "", filesList: [], mode: "agent" });
+		const ctx = pl.resolve.mock.calls[0][1];
+		expect(ctx.language_instruction).toContain("Chinese");
 	});
 
 	it("truncates diff over 2000 lines to per-file digest", async () => {

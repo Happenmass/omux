@@ -42,6 +42,8 @@ export interface ServerOptions {
 	learningStore?: LearningStore;
 	learningPipeline?: LearningPipeline;
 	learningChat?: LearningChat;
+	learningEnabled?: boolean;
+	locale?: string;
 }
 
 export interface ServerInstance {
@@ -72,6 +74,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		learningStore,
 		learningPipeline,
 		learningChat,
+		learningEnabled = false,
+		locale = "en-US",
 	} = opts;
 
 	const app = express();
@@ -111,6 +115,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			state: mainAgent.state,
 			messageCount: conversationStore.getMessageCount(),
 			clients: broadcaster.getClientCount(),
+			learningEnabled,
+			locale,
 		});
 	});
 
@@ -213,7 +219,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 
 		app.delete("/api/learning/:id", async (req, res) => {
 			try {
-				await ls.delete(req.params.id);
+				const id = req.params.id;
+				await ls.delete(id);
+				broadcaster.broadcast({ type: "learning_entry_deleted", id });
 				res.status(204).end();
 			} catch (e) {
 				res.status(500).json({ error: (e as Error).message });
@@ -224,6 +232,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 	// ─── Agent terminal snapshot helper ────────────────
 	const DEFAULT_TERMINAL_LINES = 100;
 	const TERMINAL_LINES_INCREMENT = 50;
+	const MAX_TERMINAL_LINES = 2000;
 	/** Per-agent requested line count (default 100, grows by 50 on each "terminal_more") */
 	const agentTerminalLines = new Map<string, number>();
 
@@ -233,7 +242,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 
 	function expandTerminalLines(agentId: string): void {
 		const current = getTerminalLines(agentId);
-		agentTerminalLines.set(agentId, current + TERMINAL_LINES_INCREMENT);
+		if (current < MAX_TERMINAL_LINES) {
+			agentTerminalLines.set(agentId, Math.min(current + TERMINAL_LINES_INCREMENT, MAX_TERMINAL_LINES));
+		}
 	}
 
 	async function collectAgentTerminals() {

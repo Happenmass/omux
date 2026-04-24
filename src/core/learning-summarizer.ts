@@ -1,5 +1,6 @@
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
+import { type SupportedLocale, getLanguageInstruction } from "../utils/locale.js";
 import type { DiffFileEntry, SummaryJson } from "./learning-types.js";
 
 export interface SummarizerInput {
@@ -16,11 +17,13 @@ export class LearningSummarizer {
 	constructor(
 		private llm: LLMClient,
 		private prompts: PromptLoader,
+		private locale: SupportedLocale = "en-US",
 	) {}
 
 	async generate(input: SummarizerInput): Promise<SummaryJson> {
 		const prompt = this.prompts.resolve("learning-summary", {
 			mode: input.mode,
+			language_instruction: getLanguageInstruction(this.locale),
 			agent_prompts: input.agentPrompts.map((p, i) => `[${i + 1}] ${p}`).join("\n\n"),
 			files_list: input.filesList.map((f) => `- ${f.status.toUpperCase()}  ${f.path}`).join("\n"),
 			diff: this.truncateDiff(input.diffForLLM),
@@ -84,9 +87,12 @@ export class LearningSummarizer {
 	}
 
 	private skeleton(input: SummarizerInput): SummaryJson {
+		const isZh = this.locale === "zh-CN";
 		return {
-			title: "Untitled (LLM error)",
-			what_changed: `LLM summary unavailable. ${input.filesList.length} files changed.`,
+			title: isZh ? "无标题（LLM 错误）" : "Untitled (LLM error)",
+			what_changed: isZh
+				? `LLM 摘要不可用。共 ${input.filesList.length} 个文件变更。`
+				: `LLM summary unavailable. ${input.filesList.length} file(s) changed.`,
 			why: "",
 			key_files: input.filesList.map((f) => ({ path: f.path, role: "" })),
 			design_points: [],

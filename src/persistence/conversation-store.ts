@@ -27,12 +27,16 @@ CREATE TABLE IF NOT EXISTS learning_entries (
 	diff_stats TEXT NOT NULL,
 	diff_blob_path TEXT NOT NULL,
 	memory_flushed_at INTEGER,
+	diff_fingerprint TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_learning_entries_status_updated
 	ON learning_entries(status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_learning_entries_fingerprint
+	ON learning_entries(diff_fingerprint, status);
 
 CREATE TABLE IF NOT EXISTS learning_messages (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +58,18 @@ export class ConversationStore {
 		this.db = db;
 		this.db.pragma("foreign_keys = ON");
 		this.db.exec(SCHEMA_SQL);
+		this.migrate();
 		logger.info("conversation-store", "Tables initialized");
+	}
+
+	/** Backward-compatible migrations for existing databases */
+	private migrate(): void {
+		// Add diff_fingerprint column if missing (added in v1.2)
+		const cols = this.db.pragma("table_info(learning_entries)") as Array<{ name: string }>;
+		if (cols.length > 0 && !cols.some((c) => c.name === "diff_fingerprint")) {
+			this.db.exec("ALTER TABLE learning_entries ADD COLUMN diff_fingerprint TEXT");
+			logger.info("conversation-store", "Migrated: added diff_fingerprint column");
+		}
 	}
 
 	/**

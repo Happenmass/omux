@@ -206,9 +206,14 @@ describe("TextInputComponent", () => {
 describe("ConfigView", () => {
 	const testConfig: CliclawConfig = {
 		defaultAgent: "claude-code",
+		debug: false,
 		llm: {
 			provider: "anthropic",
 			model: "claude-sonnet-4-6",
+		},
+		context: {
+			contextWindowLimit: 500000,
+			compressionThreshold: 0.7,
 		},
 		stateDetector: {
 			pollIntervalMs: 2000,
@@ -217,6 +222,23 @@ describe("ConfigView", () => {
 		},
 		tmux: {
 			sessionPrefix: "cliclaw",
+		},
+		memory: {
+			embeddingProvider: "auto",
+			chunkTokens: 400,
+			chunkOverlap: 50,
+			vectorWeight: 0.7,
+			minScore: 0.1,
+			topK: 10,
+			decayHalfLifeDays: 30,
+			flushThreshold: 0.6,
+			toolResultRetention: 20,
+		},
+		skills: {
+			disabled: [],
+		},
+		learning: {
+			enabled: false,
 		},
 	};
 
@@ -280,5 +302,31 @@ describe("ConfigView", () => {
 
 		expect(text).toContain("Navigate");
 		expect(text).toContain("Esc");
+	});
+
+	it("should show Learning Sessions item", () => {
+		const view = new ConfigView(testConfig);
+		const lines = view.render(60);
+		const text = lines.join("\n");
+
+		expect(text).toContain("Learning Sessions");
+	});
+
+	it("should cycle Learning Sessions ON/OFF", () => {
+		let savedConfig: CliclawConfig | null = null;
+		const view = new ConfigView(testConfig, {
+			onSave: (cfg) => { savedConfig = cfg; },
+		});
+
+		// Navigate to Learning Sessions item (last item, index 6)
+		for (let i = 0; i < 6; i++) view.handleInput("\x1b[B");
+		view.handleInput("\r"); // Enter to cycle
+
+		expect(savedConfig).not.toBeNull();
+		expect(savedConfig!.learning.enabled).toBe(true);
+
+		// Cycle again to turn off
+		view.handleInput("\r");
+		expect(savedConfig!.learning.enabled).toBe(false);
 	});
 });
