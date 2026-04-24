@@ -22,7 +22,7 @@
 				<div id="execution-resize-handle" class="execution-resize-handle" title="拖拽调整面板宽度"></div>
 				<nav class="panel-tabs">
 					<button class="panel-tab active" data-panel="terminal">终端</button>
-					<button class="panel-tab" data-panel="evidence">扩展</button>
+					<button class="panel-tab" data-panel="evidence">Learning</button>
 				</nav>
 				<div id="terminal-view" class="panel-content active">
 					<div id="agent-tabs" class="agent-tabs"></div>
@@ -34,15 +34,42 @@
 					</div>
 					<div id="terminal-empty" class="terminal-empty">暂无活跃的 Agent 会话</div>
 				</div>
-				<!-- TODO: 此面板预留用于后续扩展功能（原 ExecutionEvent 执行证据卡片已移除） -->
 				<div id="evidence-view" class="panel-content">
-					<div class="execution-panel-header">
-						<h2>扩展面板</h2>
-						<p>此面板预留，待扩展功能接入。</p>
+					<div id="learning-list-section">
+						<div class="learning-list-header">
+							<input type="text" id="learning-search" placeholder="Search entries..." />
+							<div class="learning-tabs">
+								<button class="learning-tab active" data-status="active">Active</button>
+								<button class="learning-tab" data-status="archived">Archived</button>
+							</div>
+							<button id="learning-merge-btn" class="hidden">Merge selected</button>
+						</div>
+						<ul id="learning-list"></ul>
+						<div class="learning-empty" id="learning-list-empty">
+							Learning entries appear here after sub-agents finish their work.
+						</div>
+					</div>
+					<div id="learning-resize-handle"></div>
+					<div id="learning-detail-section">
+						<div class="learning-detail-tabs">
+							<button class="learning-detail-tab active" data-tab="summary">Summary</button>
+							<button class="learning-detail-tab" data-tab="chat">Chat</button>
+						</div>
+						<div id="learning-summary-pane" class="learning-detail-pane active"></div>
+						<div id="learning-chat-pane" class="learning-detail-pane hidden">
+							<div id="learning-chat-messages"></div>
+							<div class="learning-chat-input-row">
+								<textarea id="learning-chat-input" placeholder="Ask about this change..."></textarea>
+								<button id="learning-chat-send">Send</button>
+							</div>
+						</div>
+						<div class="learning-detail-empty" id="learning-detail-empty">
+							Select an entry to view its summary.
+						</div>
 					</div>
 				</div>
 			</aside>
-			<button id="execution-reopen-btn" type="button" class="execution-reopen-btn" title="打开扩展面板">扩展面板</button>
+			<button id="execution-reopen-btn" type="button" class="execution-reopen-btn" title="打开 Learning 面板">Learning</button>
 		</div>
 
 		<footer id="input-area">

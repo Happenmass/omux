@@ -678,3 +678,232 @@ body.resizing-execution-panel .execution-resize-handle::before {
 		display: none !important;
 	}
 }
+
+/* ─── Learning Sessions ─────────────────────────────────────── */
+#evidence-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
+#learning-list-section {
+	height: 33%;
+	min-height: 180px;
+	display: flex;
+	flex-direction: column;
+	border-bottom: 1px solid #333;
+	overflow: hidden;
+}
+.learning-list-header {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px;
+	border-bottom: 1px solid #2a2a2a;
+}
+.learning-list-header input {
+	background: #1a1a1a;
+	border: 1px solid #333;
+	color: #ddd;
+	padding: 4px 8px;
+	border-radius: 3px;
+}
+.learning-tabs {
+	display: flex;
+	gap: 4px;
+}
+.learning-tab {
+	background: transparent;
+	border: 1px solid #333;
+	color: #888;
+	padding: 3px 10px;
+	cursor: pointer;
+	border-radius: 3px;
+	font-size: 12px;
+}
+.learning-tab.active {
+	background: #2a4a2a;
+	color: #cfc;
+	border-color: #4a7a4a;
+}
+#learning-merge-btn {
+	background: #2a4a7a;
+	color: #cfd;
+	border: none;
+	padding: 4px 10px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+#learning-merge-btn.hidden {
+	display: none;
+}
+#learning-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	flex: 1;
+}
+#learning-list li {
+	padding: 8px 10px;
+	border-bottom: 1px solid #222;
+	cursor: pointer;
+}
+#learning-list li:hover {
+	background: #1f1f1f;
+}
+#learning-list li.selected {
+	background: #262633;
+}
+#learning-list li.pulse {
+	animation: learning-pulse 1s ease-out;
+}
+@keyframes learning-pulse {
+	0% {
+		background: #3a4a3a;
+	}
+	100% {
+		background: transparent;
+	}
+}
+.learning-entry-title {
+	color: #ddd;
+	font-weight: 500;
+}
+.learning-entry-meta {
+	color: #777;
+	font-size: 11px;
+	margin-top: 2px;
+}
+.learning-entry-status {
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-right: 6px;
+}
+.learning-entry-status.active {
+	background: #4a7a4a;
+}
+.learning-entry-status.archived {
+	background: transparent;
+	border: 1px solid #555;
+}
+.learning-entry-status.flushed {
+	background: #4a9a4a;
+}
+#learning-resize-handle {
+	height: 4px;
+	background: #2a2a2a;
+	cursor: ns-resize;
+}
+#learning-detail-section {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+.learning-detail-tabs {
+	display: flex;
+	border-bottom: 1px solid #333;
+}
+.learning-detail-tab {
+	background: transparent;
+	border: none;
+	color: #888;
+	padding: 8px 16px;
+	cursor: pointer;
+}
+.learning-detail-tab.active {
+	color: #cfc;
+	border-bottom: 2px solid #4a7a4a;
+}
+.learning-detail-pane {
+	flex: 1;
+	overflow-y: auto;
+	padding: 12px;
+}
+.learning-detail-pane.hidden {
+	display: none;
+}
+.learning-empty,
+.learning-detail-empty {
+	color: #666;
+	text-align: center;
+	padding: 24px 12px;
+	font-size: 13px;
+}
+#learning-chat-pane {
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+}
+#learning-chat-messages {
+	flex: 1;
+	overflow-y: auto;
+	padding: 12px;
+}
+.learning-chat-input-row {
+	display: flex;
+	gap: 6px;
+	padding: 8px;
+	border-top: 1px solid #333;
+}
+#learning-chat-input {
+	flex: 1;
+	background: #1a1a1a;
+	border: 1px solid #333;
+	color: #ddd;
+	padding: 6px;
+	border-radius: 3px;
+	resize: vertical;
+	min-height: 40px;
+	font-family: inherit;
+}
+#learning-chat-send {
+	background: #2a4a7a;
+	color: #cfd;
+	border: none;
+	padding: 6px 14px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+#learning-chat-send:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.learning-hook-chip {
+	display: inline-block;
+	margin: 3px 4px;
+	padding: 4px 10px;
+	background: #2a2a3a;
+	border: 1px solid #3a3a4a;
+	border-radius: 12px;
+	cursor: pointer;
+	font-size: 12px;
+	color: #cdf;
+}
+.learning-hook-chip:hover {
+	background: #3a3a4a;
+}
+.learning-actions {
+	display: flex;
+	gap: 6px;
+	margin-top: 10px;
+	padding-top: 10px;
+	border-top: 1px solid #2a2a2a;
+	flex-wrap: wrap;
+}
+.learning-actions button {
+	background: #2a2a2a;
+	color: #cfc;
+	border: 1px solid #3a3a3a;
+	padding: 4px 10px;
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 12px;
+}
+.learning-actions button.flushed {
+	color: #9c9;
+	border-color: #4a7a4a;
+}

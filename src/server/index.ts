@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { ContextManager } from "../core/context-manager.js";
+import type { LearningChat } from "../core/learning-chat.js";
+import type { LearningPipeline } from "../core/learning-pipeline.js";
+import type { LearningStore } from "../core/learning-store.js";
 import type { MainAgent } from "../core/main-agent.js";
 import type { SignalRouter } from "../core/signal-router.js";
 import type { LLMClient } from "../llm/client.js";
@@ -36,6 +39,9 @@ export interface ServerOptions {
 	promptLoader?: PromptLoader;
 	memoryStore?: MemoryStore;
 	syncMemory?: () => Promise<void>;
+	learningStore?: LearningStore;
+	learningPipeline?: LearningPipeline;
+	learningChat?: LearningChat;
 }
 
 export interface ServerInstance {
@@ -63,6 +69,9 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		promptLoader,
 		memoryStore,
 		syncMemory,
+		learningStore,
+		learningPipeline,
+		learningChat,
 	} = opts;
 
 	const app = express();
@@ -115,6 +124,102 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		const limit = Number.isFinite(limitRaw) ? limitRaw : 200;
 		res.json(uiEventStore.listRecent(limit));
 	});
+
+	// ─── Learning entries API ───────────────────────────
+	if (learningStore && learningPipeline) {
+		const ls = learningStore;
+		const lp = learningPipeline;
+
+		app.get("/api/learning", async (req, res) => {
+			try {
+				const status = (req.query.status as "active" | "archived") ?? "active";
+				const limit = Number(req.query.limit) || 100;
+				const offset = Number(req.query.offset) || 0;
+				const entries = await ls.list({ status, limit, offset });
+				res.json(entries);
+			} catch (e) {
+				res.status(500).json({ error: (e as Error).message });
+			}
+		});
+
+		app.get("/api/learning/:id", async (req, res) => {
+			const e = await ls.loadEntry(req.params.id);
+			if (!e) {
+				res.status(404).json({ error: "not found" });
+				return;
+			}
+			res.json(e);
+		});
+
+		app.get("/api/learning/:id/diff", async (req, res) => {
+			try {
+				const content = await ls.readDiffBlob(req.params.id);
+				res.type("text/plain").send(content);
+			} catch (e) {
+				res.status(404).json({ error: (e as Error).message });
+			}
+		});
+
+		app.get("/api/learning/:id/messages", async (req, res) => {
+			const msgs = await ls.loadMessages(req.params.id);
+			res.json(msgs);
+		});
+
+		app.patch("/api/learning/:id", async (req, res) => {
+			try {
+				const { title, status } = req.body ?? {};
+				if (typeof title === "string") await ls.updateTitle(req.params.id, title);
+				if (status === "active" || status === "archived") await ls.setStatus(req.params.id, status);
+				const updated = await ls.loadEntry(req.params.id);
+				if (!updated) {
+					res.status(404).json({ error: "not found" });
+					return;
+				}
+				res.json(updated);
+			} catch (e) {
+				res.status(500).json({ error: (e as Error).message });
+			}
+		});
+
+		app.post("/api/learning/merge", async (req, res) => {
+			try {
+				const { ids, title } = req.body ?? {};
+				if (!Array.isArray(ids) || ids.length < 2) {
+					res.status(400).json({ error: "ids array of at least 2 required" });
+					return;
+				}
+				const merged = await lp.merge(ids, title);
+				res.json(merged);
+			} catch (e) {
+				res.status(400).json({ error: (e as Error).message });
+			}
+		});
+
+		app.post("/api/learning/:id/regenerate", async (req, res) => {
+			try {
+				res.json(await lp.regenerate(req.params.id));
+			} catch (e) {
+				res.status(400).json({ error: (e as Error).message });
+			}
+		});
+
+		app.post("/api/learning/:id/flush-to-memory", async (req, res) => {
+			try {
+				res.json(await lp.flushToMemory(req.params.id));
+			} catch (e) {
+				res.status(400).json({ error: (e as Error).message });
+			}
+		});
+
+		app.delete("/api/learning/:id", async (req, res) => {
+			try {
+				await ls.delete(req.params.id);
+				res.status(204).end();
+			} catch (e) {
+				res.status(500).json({ error: (e as Error).message });
+			}
+		});
+	}
 
 	// ─── Agent terminal snapshot helper ────────────────
 	const DEFAULT_TERMINAL_LINES = 100;
@@ -232,7 +337,14 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			ws.close(1008, "Unauthorized");
 			return;
 		}
-		handleWebSocket(ws, { mainAgent, broadcaster, commandRouter, bridge, onTerminalMore: expandTerminalLines });
+		handleWebSocket(ws, {
+			mainAgent,
+			broadcaster,
+			commandRouter,
+			bridge,
+			onTerminalMore: expandTerminalLines,
+			learningChat,
+		});
 	});
 
 	// ─── Scheduled nightly tidy (23:30) ────────────────

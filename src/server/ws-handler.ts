@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import type { LearningChat } from "../core/learning-chat.js";
 import type { MainAgent } from "../core/main-agent.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import { logger } from "../utils/logger.js";
@@ -20,6 +21,7 @@ export function handleWebSocket(
 		commandRouter: CommandRouter;
 		bridge: TmuxBridge;
 		onTerminalMore?: (agentId: string) => void;
+		learningChat?: LearningChat;
 	},
 ): void {
 	const { mainAgent, broadcaster, commandRouter, bridge } = opts;
@@ -151,6 +153,28 @@ export function handleWebSocket(
 				}
 				if (opts.onTerminalMore) {
 					opts.onTerminalMore(agentId);
+				}
+				break;
+			}
+
+			case "learning_message": {
+				if (opts.learningChat && typeof parsed.entryId === "string" && typeof parsed.content === "string") {
+					opts.learningChat.handleMessage(parsed.entryId, parsed.content).catch((err) => {
+						ws.send(
+							JSON.stringify({
+								type: "learning_error",
+								entryId: parsed.entryId,
+								message: (err as Error).message,
+							}),
+						);
+					});
+				}
+				break;
+			}
+
+			case "learning_stop": {
+				if (opts.learningChat && typeof parsed.entryId === "string") {
+					opts.learningChat.stop(parsed.entryId);
 				}
 				break;
 			}

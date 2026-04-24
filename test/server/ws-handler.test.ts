@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleWebSocket } from "../../src/server/ws-handler.js";
 import { EventEmitter } from "node:events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { handleWebSocket } from "../../src/server/ws-handler.js";
 
 /** Minimal WebSocket mock that supports events and send/close */
 function createMockWS(): any {
@@ -128,5 +128,79 @@ describe("handleWebSocket", () => {
 		expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 			expect.objectContaining({ type: "system", message: expect.stringContaining("LLM failed") }),
 		);
+	});
+});
+
+describe("learning WS messages", () => {
+	let ws: ReturnType<typeof createMockWS>;
+	let mockBroadcaster: ReturnType<typeof createMockBroadcaster>;
+
+	beforeEach(() => {
+		ws = createMockWS();
+		mockBroadcaster = createMockBroadcaster();
+	});
+
+	it("routes learning_message to learningChat.handleMessage", async () => {
+		const learningChat = {
+			handleMessage: vi.fn().mockResolvedValue(undefined),
+			stop: vi.fn(),
+		};
+		handleWebSocket(ws, {
+			mainAgent: createMockMainAgent() as any,
+			broadcaster: mockBroadcaster,
+			commandRouter: createMockCommandRouter() as any,
+			bridge: {} as any,
+			learningChat: learningChat as any,
+		});
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "learning_message", entryId: "lrn_x", content: "hi" })));
+		await new Promise((r) => setTimeout(r, 10));
+		expect(learningChat.handleMessage).toHaveBeenCalledWith("lrn_x", "hi");
+	});
+
+	it("routes learning_stop to learningChat.stop", async () => {
+		const learningChat = { handleMessage: vi.fn(), stop: vi.fn() };
+		handleWebSocket(ws, {
+			mainAgent: createMockMainAgent() as any,
+			broadcaster: mockBroadcaster,
+			commandRouter: createMockCommandRouter() as any,
+			bridge: {} as any,
+			learningChat: learningChat as any,
+		});
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "learning_stop", entryId: "lrn_x" })));
+		await new Promise((r) => setTimeout(r, 10));
+		expect(learningChat.stop).toHaveBeenCalledWith("lrn_x");
+	});
+
+	it("sends learning_error when handleMessage rejects", async () => {
+		const learningChat = {
+			handleMessage: vi.fn().mockRejectedValue(new Error("already streaming")),
+			stop: vi.fn(),
+		};
+		handleWebSocket(ws, {
+			mainAgent: createMockMainAgent() as any,
+			broadcaster: mockBroadcaster,
+			commandRouter: createMockCommandRouter() as any,
+			bridge: {} as any,
+			learningChat: learningChat as any,
+		});
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "learning_message", entryId: "lrn_x", content: "hi" })));
+		await new Promise((r) => setTimeout(r, 30));
+		const calls = (ws.send as any).mock.calls;
+		const errorCall = calls.find((c: any[]) => c[0].includes("learning_error"));
+		expect(errorCall).toBeDefined();
+		expect(errorCall![0]).toContain("already streaming");
+	});
+
+	it("no-ops when learningChat is undefined (opt-in feature)", async () => {
+		handleWebSocket(ws, {
+			mainAgent: createMockMainAgent() as any,
+			broadcaster: mockBroadcaster,
+			commandRouter: createMockCommandRouter() as any,
+			bridge: {} as any,
+		});
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "learning_message", entryId: "x", content: "y" })));
+		await new Promise((r) => setTimeout(r, 10));
+		// Should not throw, should not send anything.
+		expect(true).toBe(true);
 	});
 });

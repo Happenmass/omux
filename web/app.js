@@ -1,4 +1,5 @@
 // ─── Cliclaw Chat UI ──────────────────────────────
+import { initLearning, handleLearningMessage } from "./learning.js";
 
 let messagesEl;
 let contentEl;
@@ -276,6 +277,7 @@ function connect() {
 		loadHistory();
 		loadAgentTerminals();
 		fetchCommands();
+		initLearning(ws);
 	};
 
 	ws.onmessage = function (event) {
@@ -385,6 +387,10 @@ function loadHistory() {
 }
 
 function handleServerMessage(data) {
+	if (data.type && data.type.startsWith("learning_")) {
+		handleLearningMessage(data);
+		return;
+	}
 	switch (data.type) {
 		case "assistant_delta":
 			if (!currentAssistantEl) {
@@ -952,4 +958,8 @@ function initApp() {
 
 if (typeof document !== "undefined") {
 	initApp();
+}
+
+if (typeof renderMarkdown === "function") {
+	window.renderMarkdown = renderMarkdown;
 }

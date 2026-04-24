@@ -3,14 +3,21 @@
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { CodexAdapter } from "./agents/codex.js";
 import { parseCliArgs, printHelp, printVersion } from "./cli.js";
+import { ChangeTracker } from "./core/change-tracker.js";
 import { ContextManager } from "./core/context-manager.js";
+import { LearningChat } from "./core/learning-chat.js";
+import { LearningPipeline } from "./core/learning-pipeline.js";
+import { LearningStore } from "./core/learning-store.js";
+import { LearningSummarizer } from "./core/learning-summarizer.js";
 import { MainAgent } from "./core/main-agent.js";
+import { PromptTracker } from "./core/prompt-tracker.js";
 import { SignalRouter } from "./core/signal-router.js";
 import { runDoctor } from "./doctor/run.js";
 import { LLMClient } from "./llm/client.js";
@@ -676,6 +683,28 @@ async function main(): Promise<void> {
 	const broadcaster = new ChatBroadcaster();
 	const uiEventStore = new UiEventStore({ db: memoryStore.getDb() });
 
+	// Initialize Learning components
+	// memoryStore.getDb() returns the same Database instance used by ConversationStore and AgentStore
+	const learningDiffDir = join(homedir(), ".cliclaw", "learning", "diffs");
+	const learningStore = new LearningStore(memoryStore.getDb(), learningDiffDir);
+	const changeTracker = new ChangeTracker();
+	const promptTracker = new PromptTracker();
+	const learningSummarizer = new LearningSummarizer(llmClient, promptLoader);
+	const learningPipeline = new LearningPipeline({
+		store: learningStore,
+		tracker: changeTracker,
+		summarizer: learningSummarizer,
+		memoryStore,
+		broadcaster,
+		promptLoader,
+	});
+	const learningChat = new LearningChat({
+		store: learningStore,
+		broadcaster,
+		llm: llmClient,
+		promptLoader,
+	});
+
 	// Initialize ContextManager with conversation persistence
 	const contextManager = new ContextManager({
 		llmClient,
@@ -770,6 +799,9 @@ async function main(): Promise<void> {
 				halfLifeDays: config.memory.decayHalfLifeDays,
 			},
 		},
+		promptTracker,
+		learningPipeline,
+		changeTracker,
 	});
 
 	mainAgent.setupAgentMonitor();
@@ -923,6 +955,9 @@ async function main(): Promise<void> {
 		promptLoader,
 		memoryStore,
 		syncMemory,
+		learningStore,
+		learningPipeline,
+		learningChat,
 	});
 
 	// Notify connected clients about restored conversation

@@ -15,6 +15,36 @@ CREATE TABLE IF NOT EXISTS chat_context_state (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS learning_entries (
+	id TEXT PRIMARY KEY,
+	title TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'active',
+	source_type TEXT NOT NULL,
+	source_agents TEXT NOT NULL,
+	agent_prompts TEXT NOT NULL,
+	summary_json TEXT NOT NULL,
+	diff_stats TEXT NOT NULL,
+	diff_blob_path TEXT NOT NULL,
+	memory_flushed_at INTEGER,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_entries_status_updated
+	ON learning_entries(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS learning_messages (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	entry_id TEXT NOT NULL,
+	role TEXT NOT NULL,
+	content TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	FOREIGN KEY (entry_id) REFERENCES learning_entries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_messages_entry
+	ON learning_messages(entry_id, id);
 `;
 
 export class ConversationStore {
@@ -22,6 +52,7 @@ export class ConversationStore {
 
 	constructor(db: Database.Database) {
 		this.db = db;
+		this.db.pragma("foreign_keys = ON");
 		this.db.exec(SCHEMA_SQL);
 		logger.info("conversation-store", "Tables initialized");
 	}
