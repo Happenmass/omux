@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+export const VERSION: string = pkg.version;
 
 export interface CLIArgs {
 	subcommand: string | undefined;
@@ -126,5 +130,5 @@ Environment variables:
 }
 
 export function printVersion(): void {
-	console.log("cliclaw v0.2.0");
+	console.log(`cliclaw v${VERSION}`);
 }

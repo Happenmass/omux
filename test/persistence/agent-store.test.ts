@@ -352,4 +352,73 @@ describe("AgentStore", () => {
 			expect(store.loadAgents()).toHaveLength(0);
 		});
 	});
+
+	describe("server stop preserves agents", () => {
+		it("should retain all agents across a simulated stop-restart cycle", () => {
+			// Agents created during a running session
+			store.saveAgent("cliclaw-front", { paneTarget: "cliclaw-front:0.0", workingDir: "/front" });
+			store.saveAgent("cliclaw-back", { paneTarget: "cliclaw-back:0.0", workingDir: "/back" });
+			store.setTakenOver("cliclaw-front", true);
+
+			// Simulate `cliclaw stop`: server process exits but does NOT
+			// clear the agent store or kill tmux sessions.
+			// (No store.deleteAgent calls here — that's the contract.)
+
+			// Simulate restart: load agents from the same DB
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(2);
+			expect(agents.map((a) => a.agentId)).toEqual(["cliclaw-front", "cliclaw-back"]);
+			// takenOver state must also survive
+			expect(agents.find((a) => a.agentId === "cliclaw-front")!.takenOver).toBe(true);
+			expect(agents.find((a) => a.agentId === "cliclaw-back")!.takenOver).toBe(false);
+		});
+	});
+
+	describe("orphan tmux discovery on startup", () => {
+		it("should allow saving discovered orphan agents not in the store", () => {
+			// Simulate: store has agent-a, but tmux also has agent-b (orphan)
+			store.saveAgent("cliclaw-a", { paneTarget: "cliclaw-a:0.0", workingDir: "/a" });
+
+			// Orphan discovered via tmux — save it
+			store.saveAgent("cliclaw-b", { paneTarget: "cliclaw-b:0.0", workingDir: "/fallback" });
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(2);
+			expect(agents.map((a) => a.agentId)).toContain("cliclaw-a");
+			expect(agents.map((a) => a.agentId)).toContain("cliclaw-b");
+		});
+
+		it("should reconcile: restore known + add orphans + discard dead", () => {
+			// Previous run persisted 2 agents
+			store.saveAgent("cliclaw-known-alive", { paneTarget: "cliclaw-known-alive:0.0", workingDir: "/ka" });
+			store.saveAgent("cliclaw-known-dead", { paneTarget: "cliclaw-known-dead:0.0", workingDir: "/kd" });
+
+			// Simulate tmux discovery: known-alive is alive, known-dead is gone, orphan is new
+			const tmuxSessions = ["cliclaw-known-alive", "cliclaw-orphan"];
+			const persisted = store.loadAgents();
+			const restoredIds = new Set<string>();
+
+			// Step 1: check persisted agents against tmux
+			for (const a of persisted) {
+				if (tmuxSessions.includes(a.agentId)) {
+					restoredIds.add(a.agentId);
+				} else {
+					store.deleteAgent(a.agentId);
+				}
+			}
+
+			// Step 2: add orphan tmux sessions not in persisted
+			for (const name of tmuxSessions) {
+				if (!restoredIds.has(name)) {
+					store.saveAgent(name, { paneTarget: `${name}:0.0`, workingDir: "/cwd" });
+					restoredIds.add(name);
+				}
+			}
+
+			// Final state: known-alive + orphan, known-dead removed
+			const final = store.loadAgents();
+			expect(final).toHaveLength(2);
+			expect(final.map((a) => a.agentId).sort()).toEqual(["cliclaw-known-alive", "cliclaw-orphan"]);
+		});
+	});
 });

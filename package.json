@@ -1,6 +1,6 @@
 {
 	"name": "@happenmass/cliclaw",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Chat-based meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"license": "MIT",

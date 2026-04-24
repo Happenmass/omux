@@ -1881,4 +1881,99 @@ describe("MainAgent State Machine", () => {
 			expect(agent.getAgentPaneTarget("cliclaw-none")).toBeUndefined();
 		});
 	});
+
+	describe("agent recovery across restart", () => {
+		it("restoreAgent should make agents visible via list_agents tool", async () => {
+			// Simulate startup recovery: restore an agent, then use list_agents
+			const agent = setupAgent(
+				[toolCallResponse("list_agents", {}), textResponse("Found agents.")],
+				{},
+			);
+
+			// list_agents queries tmux via bridge.listCliclawAgents()
+			mockBridge.listCliclawAgents.mockResolvedValue([
+				{ name: "cliclaw-recovered", windows: 1, created: 1000, attached: false },
+			]);
+
+			agent.restoreAgent("cliclaw-recovered", {
+				paneTarget: "cliclaw-recovered:0.0",
+				workingDir: "/project",
+			});
+
+			await agent.handleMessage("list agents");
+
+			// list_agents queries tmux, so check the tool result mentions the agent
+			const toolResults = mockCtx.addMessage.mock.calls.filter(
+				(c: any) => c[0].role === "tool" && typeof c[0].content === "string",
+			);
+			const listResult = toolResults.find((c: any) => c[0].content.includes("cliclaw-recovered"));
+			expect(listResult).toBeTruthy();
+		});
+
+		it("restoreAgent should allow inspect_agent to work on recovered agent", async () => {
+			const agent = setupAgent(
+				[toolCallResponse("inspect_agent", { lines: 50 }), textResponse("Got it.")],
+				{},
+			);
+			agent.restoreAgent("cliclaw-recovered", {
+				paneTarget: "cliclaw-recovered:0.0",
+				workingDir: "/project",
+			});
+
+			await agent.handleMessage("inspect agent");
+
+			expect(mockBridge.capturePane).toHaveBeenCalledWith("cliclaw-recovered:0.0", { startLine: -50 });
+		});
+
+		it("restoreAgent should allow send_to_agent to route to recovered agent", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("send_to_agent", { prompt: "continue work", summary: "Resuming" }),
+					textResponse("Done."),
+				],
+				{},
+				{ withMonitor: true },
+			);
+			agent.restoreAgent("cliclaw-recovered", {
+				paneTarget: "cliclaw-recovered:0.0",
+				workingDir: "/project",
+			});
+
+			await agent.handleMessage("continue work on recovered agent");
+
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(
+				mockBridge,
+				"cliclaw-recovered:0.0",
+				"continue work",
+			);
+		});
+
+		it("multiple restored agents should all be accessible", () => {
+			const agent = setupAgent([]);
+			agent.restoreAgent("cliclaw-a", { paneTarget: "cliclaw-a:0.0", workingDir: "/a" });
+			agent.restoreAgent("cliclaw-b", { paneTarget: "cliclaw-b:0.0", workingDir: "/b" });
+			agent.restoreAgent("cliclaw-c", { paneTarget: "cliclaw-c:0.0", workingDir: "/c" });
+
+			const agents = agent.getActiveAgents();
+			expect(agents).toHaveLength(3);
+			expect(agents.map((a: any) => a.agentId).sort()).toEqual([
+				"cliclaw-a",
+				"cliclaw-b",
+				"cliclaw-c",
+			]);
+			// Last restored should be active
+			expect((agent as any).activeAgentId).toBe("cliclaw-c");
+		});
+
+		it("recovered agents should have idle status (no running task)", () => {
+			const agent = setupAgent([], {}, { withMonitor: true });
+			agent.restoreAgent("cliclaw-recovered", {
+				paneTarget: "cliclaw-recovered:0.0",
+				workingDir: "/project",
+			});
+
+			const agents = agent.getActiveAgents();
+			expect(agents[0].status).toBe("idle");
+		});
+	});
 });

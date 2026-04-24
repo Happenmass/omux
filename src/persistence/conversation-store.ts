@@ -57,14 +57,13 @@ export class ConversationStore {
 	constructor(db: Database.Database) {
 		this.db = db;
 		this.db.pragma("foreign_keys = ON");
-		this.db.exec(SCHEMA_SQL);
 		this.migrate();
+		this.db.exec(SCHEMA_SQL);
 		logger.info("conversation-store", "Tables initialized");
 	}
 
-	/** Backward-compatible migrations for existing databases */
+	/** Backward-compatible migrations for existing databases. Must run before SCHEMA_SQL: the index on diff_fingerprint references a column older DBs lack. */
 	private migrate(): void {
-		// Add diff_fingerprint column if missing (added in v1.2)
 		const cols = this.db.pragma("table_info(learning_entries)") as Array<{ name: string }>;
 		if (cols.length > 0 && !cols.some((c) => c.name === "diff_fingerprint")) {
 			this.db.exec("ALTER TABLE learning_entries ADD COLUMN diff_fingerprint TEXT");

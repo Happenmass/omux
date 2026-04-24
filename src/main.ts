@@ -9,7 +9,7 @@ import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { CodexAdapter } from "./agents/codex.js";
-import { parseCliArgs, printHelp, printVersion } from "./cli.js";
+import { VERSION, parseCliArgs, printHelp, printVersion } from "./cli.js";
 import { ChangeTracker } from "./core/change-tracker.js";
 import { ContextManager } from "./core/context-manager.js";
 import { LearningChat } from "./core/learning-chat.js";
@@ -105,40 +105,6 @@ function createMemorySyncRunner(params: {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function triggerTmuxEscapeCascade(opts?: { repeats?: number; intervalMs?: number }): Promise<void> {
-	const repeats = Math.max(1, opts?.repeats ?? 2);
-	const intervalMs = Math.max(0, opts?.intervalMs ?? 80);
-	const bridge = new TmuxBridge();
-
-	const tmuxInstalled = await bridge.checkInstalled();
-	if (!tmuxInstalled) {
-		return;
-	}
-
-	const sessions = await bridge.listCliclawAgents();
-	for (const session of sessions) {
-		let panes = [];
-		try {
-			panes = await bridge.listPanes(session.name);
-		} catch {
-			continue;
-		}
-
-		for (const pane of panes) {
-			for (let i = 0; i < repeats; i++) {
-				try {
-					await bridge.sendEscape(pane.id);
-				} catch {
-					break;
-				}
-				if (intervalMs > 0) {
-					await sleep(intervalMs);
-				}
-			}
-		}
-	}
 }
 
 function isProcessRunning(pid: number): boolean {
@@ -410,23 +376,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 		return;
 	}
 
-	// Best-effort: cascade ESC to cliclaw tmux panes before stopping server process.
-	await triggerTmuxEscapeCascade();
-
-	// Best-effort: kill cliclaw-* tmux sessions left over
-	try {
-		const bridge = new TmuxBridge();
-		const cliclawSessions = await bridge.listCliclawAgents();
-		for (const session of cliclawSessions) {
-			try {
-				await bridge.killSession(session.name);
-			} catch {
-				/* best-effort */
-			}
-		}
-	} catch {
-		/* tmux may not be available */
-	}
+	// Preserve cliclaw-* tmux sessions — they will be rediscovered on next startup.
 
 	try {
 		process.kill(state.pid, "SIGTERM");
@@ -450,9 +400,6 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 		}
 		await sleep(200);
 	}
-
-	// Try one more ESC cascade before forcing SIGKILL.
-	await triggerTmuxEscapeCascade({ repeats: 1, intervalMs: 40 });
 
 	try {
 		process.kill(state.pid, "SIGKILL");
@@ -590,7 +537,7 @@ async function main(): Promise<void> {
 	// Resolve agent: CLI --agent flag takes precedence over config.defaultAgent
 	const agentName = args.agent ?? config.defaultAgent;
 
-	console.log(`${chalk.bold("Cliclaw")} v0.2.0\n`);
+	console.log(`${chalk.bold("Cliclaw")} v${VERSION}\n`);
 
 	// Check prerequisites
 	const bridge = new TmuxBridge();
@@ -838,22 +785,41 @@ async function main(): Promise<void> {
 
 	// Restore persisted agents (verify tmux is still alive, discard dead ones)
 	const persistedAgents = agentStore.loadAgents();
+	const restoredAgentIds = new Set<string>();
 	if (persistedAgents.length > 0) {
-		let restoredCount = 0;
 		for (const a of persistedAgents) {
 			const alive = await bridge.hasSession(a.agentId);
 			if (alive) {
 				mainAgent.restoreAgent(a.agentId, { paneTarget: a.paneTarget, workingDir: a.workingDir }, a.takenOver);
-				restoredCount++;
+				restoredAgentIds.add(a.agentId);
 			} else {
 				agentStore.deleteAgent(a.agentId);
 				logger.info("main", `Discarded dead agent: ${a.agentId}`);
 			}
 		}
-		if (restoredCount > 0) {
-			logger.info("main", `Restored ${restoredCount} agent(s)`);
-			console.log(chalk.dim(`Restored ${restoredCount} agent(s) from previous run`));
+	}
+
+	// Discover live cliclaw-* tmux sessions not already restored from AgentStore.
+	// This handles agents that survived a crash or were created before persistence existed.
+	try {
+		const liveSessions = await bridge.listCliclawAgents();
+		for (const session of liveSessions) {
+			if (restoredAgentIds.has(session.name)) continue;
+			// Construct a default pane target for the discovered session
+			const paneTarget = `${session.name}:0.0`;
+			const workingDir = args.cwd; // best-effort default
+			agentStore.saveAgent(session.name, { paneTarget, workingDir });
+			mainAgent.restoreAgent(session.name, { paneTarget, workingDir });
+			restoredAgentIds.add(session.name);
+			logger.info("main", `Discovered orphan tmux agent: ${session.name}`);
 		}
+	} catch {
+		/* tmux listing may fail — non-fatal */
+	}
+
+	if (restoredAgentIds.size > 0) {
+		logger.info("main", `Restored ${restoredAgentIds.size} agent(s)`);
+		console.log(chalk.dim(`Restored ${restoredAgentIds.size} agent(s) from previous run`));
 	}
 
 	// Log state changes
@@ -1032,19 +998,8 @@ async function main(): Promise<void> {
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 
-		// Best-effort cleanup of cliclaw-* tmux sessions
-		try {
-			const cliclawSessions = await bridge.listCliclawAgents();
-			for (const session of cliclawSessions) {
-				try {
-					await bridge.killSession(session.name);
-				} catch {
-					/* best-effort */
-				}
-			}
-		} catch {
-			/* tmux may not be available */
-		}
+		// Preserve cliclaw-* tmux sessions across shutdown/restart — they are
+		// persisted in AgentStore and will be rediscovered on next startup.
 
 		// Close server
 		await serverInstance.close();

@@ -274,7 +274,9 @@ export function createLocalEmbeddingProvider(params: { modelPath: string; modelC
 				ramPadding: 512 * 1024 * 1024,
 			});
 			const model = await llama.loadModel({ modelPath: resolvedPath });
-			embeddingContext = await model.createEmbeddingContext();
+			embeddingContext = await model.createEmbeddingContext({
+				contextSize: 2048,
+			});
 		} catch (err: any) {
 			throw new Error(`Failed to load local embedding model: ${err.message}`);
 		}
