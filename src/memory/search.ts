@@ -1,5 +1,5 @@
 import { logger } from "../utils/logger.js";
-import { type MemoryStore } from "./store.js";
+import { type MemoryStore, vectorToBlob } from "./store.js";
 import type {
 	EmbeddingProvider,
 	HybridKeywordResult,
@@ -36,6 +36,12 @@ export async function searchMemory(
 	const maxResults = opts.maxResults ?? 10;
 	const minScore = opts.minScore ?? 0.1;
 	const candidates = maxResults * (config.candidateMultiplier ?? 3);
+
+	// An explicit-but-empty category filter means "the user asked for a category that
+	// has no matching files". Returning all-files results would be wrong; return [].
+	if (opts.categoryPathFilter !== undefined && opts.categoryPathFilter.length === 0) {
+		return [];
+	}
 
 	// FTS-only mode when no embedding provider
 	if (!provider) {
@@ -106,7 +112,6 @@ function searchVectorKNN(
 	categoryPathFilter?: string[],
 ): HybridVectorResult[] {
 	try {
-		const { vectorToBlob } = require("./store.js");
 		const vecBlob = vectorToBlob(queryVec);
 
 		let sql = `

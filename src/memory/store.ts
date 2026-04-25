@@ -129,6 +129,12 @@ export class MemoryStore {
 			this.vecAvailable = this.loadVecExtension(config.vectorExtensionPath);
 		}
 
+		// Restore vec table name if a chunks_vec_* virtual table already exists
+		// (e.g. after server restart with no file changes — sync would otherwise never call initVecTable).
+		if (this.vecAvailable) {
+			this.detectExistingVecTable();
+		}
+
 		logger.info("memory-store", `Initialized: vec=${this.vecAvailable}, fts=${this.ftsAvailable}`);
 	}
 
@@ -216,6 +222,34 @@ export class MemoryStore {
 			return true;
 		} catch {
 			return false;
+		}
+	}
+
+	/**
+	 * Restore vecTableName by scanning sqlite_master for an existing main vec0 table.
+	 * Helper tables (_info, _chunks, _rowids, _vector_chunks*) are excluded.
+	 * If exactly one main table is found, adopt it; if zero or multiple, leave null
+	 * so initVecTable can create/select deterministically once dims are known.
+	 */
+	private detectExistingVecTable(): void {
+		try {
+			const rows = this.db
+				.prepare(
+					`SELECT name FROM sqlite_master
+					 WHERE type = 'table'
+					   AND name LIKE 'chunks_vec_%'
+					   AND name NOT LIKE '%_info'
+					   AND name NOT LIKE '%_chunks'
+					   AND name NOT LIKE '%_rowids'
+					   AND name NOT LIKE '%_vector_chunks%'`,
+				)
+				.all() as { name: string }[];
+			if (rows.length === 1) {
+				this.vecTableName = rows[0].name;
+				logger.info("memory-store", `Restored existing vec table: ${this.vecTableName}`);
+			}
+		} catch (err: any) {
+			logger.warn("memory-store", `Failed to detect existing vec table: ${err.message}`);
 		}
 	}
 

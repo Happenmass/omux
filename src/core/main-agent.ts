@@ -11,7 +11,7 @@ import type { LLMMessage, LLMStreamEvent, MessageContent, ToolCallContent, ToolD
 import { buildCategoryPathFilter } from "../memory/category.js";
 import { loadPersistentMemory, readPersistentMemory, updatePersistentMemory } from "../memory/persistent.js";
 import { searchMemory } from "../memory/search.js";
-import type { MemoryStore } from "../memory/store.js";
+import { isMemoryPath, type MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
 import type { AgentStore } from "../persistence/agent-store.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
@@ -985,6 +985,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 		const normalizedPath = rawPath.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 
+		// Reject path traversal and any path outside memory/. isMemoryPath alone is not
+		// enough because "memory/../secret.txt" also starts with "memory/" — explicitly
+		// block any ".." segment.
+		const segments = normalizedPath.split("/");
+		if (!isMemoryPath(normalizedPath) || segments.includes("..")) {
+			throw new Error("Only .md files under memory/ directory are allowed");
+		}
+
 		return {
 			storageDir: this.memoryStore.getStorageDir(),
 			relativePath: normalizedPath,
@@ -1244,7 +1252,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				const rawPath = args.path as string;
 				const from = args.from as number | undefined;
 				const lineCount = args.lines as number | undefined;
-				const { storageDir, relativePath: memGetPath } = this.resolveMemoryGetTarget(rawPath);
+				let storageDir: string;
+				let memGetPath: string;
+				try {
+					({ storageDir, relativePath: memGetPath } = this.resolveMemoryGetTarget(rawPath));
+				} catch (err: any) {
+					return { output: `Memory get error: ${err.message}`, terminal: false };
+				}
 
 				try {
 					const absPath = join(storageDir, memGetPath);

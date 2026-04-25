@@ -210,6 +210,42 @@ describe("MainAgent memory tools", () => {
 			expect(result.output).toContain("File not found");
 			expect(result.terminal).toBe(false);
 		});
+
+		it("should reject path traversal attempts (../) and not read outside memory/", async () => {
+			// Place a sensitive file next to the workspace's memory dir; ensure memory_get
+			// can't reach it via "../" path components.
+			await writeFile(join(tmpDir, "secret.txt"), "TOP-SECRET");
+
+			const mockStore = createMockMemoryStore(tmpDir);
+			const agent = createAgent({ memoryStore: mockStore });
+
+			for (const path of ["../secret.txt", "memory/../secret.txt", "../../etc/passwd"]) {
+				const result = await (agent as any).executeTool({
+					type: "tool_call",
+					id: "tc1",
+					name: "memory_get",
+					arguments: { path },
+				});
+				expect(result.output).toContain("Memory get error");
+				expect(result.output).not.toContain("TOP-SECRET");
+				expect(result.terminal).toBe(false);
+			}
+		});
+
+		it("should reject non-.md and non-memory-prefixed paths", async () => {
+			const mockStore = createMockMemoryStore(tmpDir);
+			const agent = createAgent({ memoryStore: mockStore });
+
+			for (const path of ["config.json", "memory/data.bin", "src/main.ts"]) {
+				const result = await (agent as any).executeTool({
+					type: "tool_call",
+					id: "tc1",
+					name: "memory_get",
+					arguments: { path },
+				});
+				expect(result.output).toContain("Memory get error");
+			}
+		});
 	});
 
 	describe("memory_write", () => {
