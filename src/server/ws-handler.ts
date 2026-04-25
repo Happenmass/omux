@@ -30,7 +30,13 @@ export function handleWebSocket(
 	broadcaster.addClient(ws);
 
 	// Send current state on connect
-	ws.send(JSON.stringify({ type: "state", state: mainAgent.state }));
+	ws.send(
+		JSON.stringify({
+			type: "state",
+			state: mainAgent.state,
+			queueSize: mainAgent.getPendingUserMessageCount(),
+		}),
+	);
 
 	ws.on("message", async (data) => {
 		let parsed: any;
@@ -141,6 +147,26 @@ export function handleWebSocket(
 					}
 				} catch (err: any) {
 					logger.error("ws-handler", `terminal_input error: ${err.message}`);
+				}
+				break;
+			}
+
+			case "agent_abort": {
+				const agentId = parsed.agentId as string;
+				if (!agentId) {
+					logger.warn("ws-handler", "agent_abort missing agentId");
+					return;
+				}
+				const paneTarget = mainAgent.getAgentPaneTarget(agentId);
+				if (!paneTarget) {
+					logger.warn("ws-handler", `agent_abort: agent ${agentId} not found`);
+					return;
+				}
+				try {
+					await bridge.sendEscape(paneTarget);
+					logger.info("ws-handler", `agent_abort: sent ESC to ${agentId}`);
+				} catch (err: any) {
+					logger.error("ws-handler", `agent_abort error: ${err.message}`);
 				}
 				break;
 			}

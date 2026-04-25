@@ -14,6 +14,8 @@ export interface CLIArgs {
 	contextWindow: number | undefined;
 	host: string;
 	port: number;
+	mdns: boolean | undefined;
+	mdnsName: string | undefined;
 	listProviders: boolean;
 	help: boolean;
 	version: boolean;
@@ -32,8 +34,11 @@ export function parseCliArgs(): CLIArgs {
 			model: { type: "string", short: "m" },
 			"base-url": { type: "string" },
 			"context-window": { type: "string" },
-			host: { type: "string", default: "127.0.0.1" },
+			host: { type: "string", default: "0.0.0.0" },
 			port: { type: "string", default: "3120" },
+			mdns: { type: "boolean" },
+			"no-mdns": { type: "boolean" },
+			"mdns-name": { type: "string" },
 			"list-providers": { type: "boolean", default: false },
 			help: { type: "boolean", short: "h", default: false },
 			version: { type: "boolean", short: "v", default: false },
@@ -58,6 +63,8 @@ export function parseCliArgs(): CLIArgs {
 		contextWindow: values["context-window"] ? Number.parseInt(values["context-window"] as string, 10) : undefined,
 		host: values.host as string,
 		port: Number.parseInt(values.port as string, 10) || 3120,
+		mdns: values["no-mdns"] ? false : (values.mdns as boolean | undefined),
+		mdnsName: values["mdns-name"] as string | undefined,
 		listProviders: values["list-providers"] as boolean,
 		help: values.help as boolean,
 		version: values.version as boolean,
@@ -99,8 +106,10 @@ Options:
   --base-url <url>        Custom API base URL (for self-hosted or custom endpoints)
   --context-window <n>    Context window size in tokens (default: 500000)
                           Match this to the model's actual context limit
-  --host <host>           Bind address for the HTTP/WebSocket server (default: 127.0.0.1)
+  --host <host>           Bind address for the HTTP/WebSocket server (default: 0.0.0.0)
   --port <number>         Server port (default: 3120)
+  --mdns-name <name>      mDNS hostname (default: cliclaw → cliclaw.local)
+  --no-mdns               Disable mDNS / Bonjour advertising
   --list-providers        List all available LLM providers
   --cwd <path>            Working directory (default: current)
   -h, --help              Show this help
@@ -110,7 +119,8 @@ Examples:
   cliclaw                                            # Start foreground server on default port
   cliclaw start                                      # Start background server
   cliclaw stop                                       # Stop background server
-  cliclaw --host 0.0.0.0 --port 3120                 # Expose server on all interfaces
+  cliclaw --host 127.0.0.1 --no-mdns                 # Localhost only, no mDNS broadcast
+  cliclaw --mdns-name happen                         # Reachable as http://happen.local:3120
   cliclaw --port 8080                                # Start server on port 8080
   cliclaw -p openai -m gpt-5.4                        # Start with specific LLM
   cliclaw remember "This project uses PostgreSQL"    # Save a memory note

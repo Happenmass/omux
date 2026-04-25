@@ -2,83 +2,125 @@
 <html lang="zh-CN">
 <head>
 	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Cliclaw Chat</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+	<title>Cliclaw</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 	<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 	<div id="app">
 		<header id="header">
+			<span class="logo-mark" aria-hidden="true">
+				<svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+					<path d="M11 2.5c-1.5 2.4-1.5 4.5 0 8.5-3-1-5.5-1-7.5 0 2.4 1.5 4.5 1.5 8.5 0-1 3-1 5.5 0 7.5 1.5-2.4 1.5-4.5 0-8.5 3 1 5.5 1 7.5 0-2.4-1.5-4.5-1.5-8.5 0 1-3 1-5.5 0-7.5z" fill="currentColor" opacity=".95"/>
+				</svg>
+			</span>
 			<h1>Cliclaw</h1>
+			<span class="header-divider">|</span>
 			<div id="status-indicator">
 				<span id="status-dot"></span>
-				<span id="status-text">连接中...</span>
+				<span class="status-state-label" id="status-text">connecting</span>
+				<span class="queue-pill" id="queue-pill" title="Queued user messages">actions queued</span>
 			</div>
+			<div class="header-spacer"></div>
+			<button class="theme-toggle" id="theme-toggle" type="button" title="切换主题" aria-label="切换主题">
+				<svg id="theme-icon-sun" width="14" height="14" viewBox="0 0 14 14" fill="none">
+					<circle cx="7" cy="7" r="2.6" stroke="currentColor" stroke-width="1.3"/>
+					<g stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+						<path d="M7 1.2v1.6"/><path d="M7 11.2v1.6"/>
+						<path d="M1.2 7h1.6"/><path d="M11.2 7h1.6"/>
+						<path d="M2.85 2.85l1.13 1.13"/><path d="M10.02 10.02l1.13 1.13"/>
+						<path d="M2.85 11.15l1.13-1.13"/><path d="M10.02 3.98l1.13-1.13"/>
+					</g>
+				</svg>
+				<svg id="theme-icon-moon" width="14" height="14" viewBox="0 0 14 14" fill="none" style="display:none">
+					<path d="M11.4 8.4A4.4 4.4 0 0 1 5.6 2.6a.5.5 0 0 0-.7-.6A5.4 5.4 0 1 0 12 9.1a.5.5 0 0 0-.6-.7z" fill="currentColor"/>
+				</svg>
+			</button>
 		</header>
 
 		<div id="content">
-			<main id="messages"></main>
-			<aside id="execution-panel">
-				<div id="execution-resize-handle" class="execution-resize-handle" title="拖拽调整面板宽度"></div>
-				<nav class="panel-tabs">
-					<button class="panel-tab active" data-panel="terminal">终端</button>
-					<button class="panel-tab" data-panel="evidence" data-i18n="learning.tab">Learning</button>
-				</nav>
-				<div id="terminal-view" class="panel-content active">
-					<div id="agent-tabs" class="agent-tabs"></div>
-					<div id="terminal-content" class="terminal-content"></div>
-					<div id="terminal-input-bar" class="terminal-input-bar" style="display:none">
-						<input id="terminal-input" type="text" placeholder="输入命令后按回车发送..." />
-						<button id="terminal-ctrl-c-btn" title="Ctrl+C">Ctrl+C</button>
-						<button id="terminal-esc-btn" title="Escape">Esc</button>
-					</div>
-					<div id="terminal-empty" class="terminal-empty">暂无活跃的 Agent 会话</div>
+			<main id="chat-card">
+				<div class="chat-header">
+					<span class="chat-overline">Conversation</span>
 				</div>
-				<div id="evidence-view" class="panel-content">
-					<div id="learning-list-section">
-						<div class="learning-list-header">
-							<input type="text" id="learning-search" placeholder="Search entries..." data-i18n-placeholder="learning.search" />
-							<div class="learning-tabs">
-								<button class="learning-tab active" data-status="active" data-i18n="learning.active">Active</button>
-								<button class="learning-tab" data-status="archived" data-i18n="learning.archived">Archived</button>
-							</div>
-							<button id="learning-merge-btn" class="hidden" data-i18n="learning.merge">Merge selected</button>
-						</div>
-						<ul id="learning-list"></ul>
-						<div class="learning-empty" id="learning-list-empty">
-							<span data-i18n="learning.empty">Learning entries appear here after sub-agents finish their work.</span>
-						</div>
+				<div id="messages"></div>
+				<footer id="input-area">
+					<div id="command-dropdown" class="command-dropdown hidden"></div>
+					<div id="input-wrapper">
+						<textarea id="input" rows="1" placeholder="输入消息或 /指令…" autofocus></textarea>
+						<button id="send-btn" type="button" title="发送">
+							<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+								<path d="M7 11.5V2.5M3 6.5L7 2.5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+							Send
+						</button>
 					</div>
-					<div id="learning-resize-handle"></div>
-					<div id="learning-detail-section">
-						<div class="learning-detail-tabs">
-							<button class="learning-detail-tab active" data-tab="summary" data-i18n="learning.summary">Summary</button>
-							<button class="learning-detail-tab" data-tab="chat" data-i18n="learning.chat">Chat</button>
-						</div>
-						<div id="learning-summary-pane" class="learning-detail-pane active"></div>
-						<div id="learning-chat-pane" class="learning-detail-pane hidden">
-							<div id="learning-chat-messages"></div>
-							<div class="learning-chat-input-row">
-								<textarea id="learning-chat-input" placeholder="Ask about this change..." data-i18n-placeholder="learning.chatPlaceholder"></textarea>
-								<button id="learning-chat-send" data-i18n="learning.send">Send</button>
+					<div class="input-meta">
+						<span>/ 唤起命令 · Shift + ↵ 换行</span>
+						<span class="input-meta-model" id="input-meta-model"></span>
+					</div>
+				</footer>
+			</main>
+
+			<aside id="execution-panel" class="peek">
+				<div id="execution-resize-handle" class="execution-resize-handle" title="拖拽调整面板宽度"></div>
+				<div class="terminal-stack-back" aria-hidden="true"></div>
+				<div class="terminal-stack-front" aria-hidden="true"></div>
+				<div class="terminal-card">
+					<div id="mobile-drag-handle" class="mobile-drag-handle" title="拖动展开/收起"><span></span></div>
+					<button id="mobile-peek-row" type="button" class="mobile-peek-row" aria-label="展开终端面板">
+						<span class="mobile-peek-icon" aria-hidden="true">
+							<svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+								<path d="M2 4l2.4 2.4L2 8.8M6.4 9.2H11.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+						</span>
+						<div class="mobile-peek-info">
+							<div class="mobile-peek-line1">
+								<span id="mobile-peek-dot" class="agent-tab-dot status-idle"></span>
+								<span id="mobile-peek-name" class="cli-mono">—</span>
+								<span id="mobile-peek-meta" class="mobile-peek-meta"></span>
 							</div>
+							<div id="mobile-peek-tail" class="mobile-peek-tail">暂无活跃的 Agent 会话</div>
 						</div>
-						<div class="learning-detail-empty" id="learning-detail-empty">
-							<span data-i18n="learning.detailEmpty">Select an entry to view its summary.</span>
-						</div>
+						<span class="mobile-peek-chev" aria-hidden="true">
+							<svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+								<path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+						</span>
+					</button>
+					<div id="agent-tabs-bar" class="agent-tabs-bar" role="tablist">
+						<div id="agent-tabs"></div>
+						<div class="agent-tabs-spacer"></div>
+						<button id="abort-btn" class="abort-btn" type="button" title="发送 ESC 中止当前任务" style="display:none">
+							<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+								<rect x="3.5" y="3.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4"/>
+							</svg>
+							<span>中止</span>
+						</button>
+						<button id="takeover-btn" class="takeover-btn" type="button" style="display:none">
+							<svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+								<path d="M5 7V3.2a1 1 0 0 1 2 0V6m0-2.5a1 1 0 0 1 2 0V6m0-1a1 1 0 0 1 2 0v3.5c0 2-1.6 3.5-3.5 3.5h-1c-1.4 0-2-.5-2.5-1.5L2.5 8a1 1 0 0 1 1.6-1.2L5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+							<span id="takeover-btn-label">接管</span>
+						</button>
+					</div>
+					<div id="terminal-content" class="terminal-content" tabindex="0"></div>
+				<input id="terminal-ime-input" class="terminal-ime-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-hidden="true" tabindex="-1" />
+					<div id="terminal-empty" class="terminal-empty">暂无活跃的 Agent 会话</div>
+					<div id="terminal-statusbar" class="terminal-statusbar" style="display:none">
+						<span class="terminal-statusbar-status">
+							<span id="terminal-statusbar-state">agent</span>
+						</span>
+						<span>·</span>
+						<span class="terminal-statusbar-cwd" id="terminal-statusbar-cwd"></span>
 					</div>
 				</div>
 			</aside>
 			<button id="execution-reopen-btn" type="button" class="execution-reopen-btn" title="打开终端面板">Terminal</button>
 		</div>
-
-		<footer id="input-area">
-			<div id="command-dropdown" class="command-dropdown hidden"></div>
-			<div id="input-wrapper">
-				<textarea id="input" rows="1" placeholder="输入消息或 /指令..." autofocus></textarea>
-				<button id="send-btn" title="发送">&#9654;</button>
-			</div>
-		</footer>
 	</div>
 
 	<script type="module" src="app.js"></script>

@@ -177,13 +177,26 @@ export class ContextManager {
 			}
 		}
 
-		// 6. Inject restart context so LLM knows it was restored
+		// 6. Inject restart context so LLM knows it was restored — but skip if
+		// the previous message is already a restore notice (avoids piling up
+		// identical injections when the server restarts repeatedly without
+		// any new conversation activity in between).
 		const restoredCount = messages.length;
 		if (restoredCount > 0) {
-			const restoreNotice = `[SESSION_RESTORED] 服务已重启。上次会话的 ${restoredCount} 条消息已从数据库恢复到对话上下文中。你可以继续之前的工作。${this.modules.has("compressed_history") ? "此前的对话已压缩并保存在 compressed_history 中。" : ""}`;
-			this.conversation.push({ role: "user", content: restoreNotice });
-			// Persist the restore notice so it becomes part of the conversation
-			store.saveMessage({ role: "user", content: restoreNotice });
+			const last = this.conversation[this.conversation.length - 1];
+			const lastIsRestore =
+				last &&
+				last.role === "user" &&
+				typeof last.content === "string" &&
+				last.content.startsWith("[SESSION_RESTORED]");
+			if (!lastIsRestore) {
+				const restoreNotice = `[SESSION_RESTORED] 服务已重启。上次会话的 ${restoredCount} 条消息已从数据库恢复到对话上下文中。你可以继续之前的工作。${this.modules.has("compressed_history") ? "此前的对话已压缩并保存在 compressed_history 中。" : ""}`;
+				this.conversation.push({ role: "user", content: restoreNotice });
+				// Persist the restore notice so it becomes part of the conversation
+				store.saveMessage({ role: "user", content: restoreNotice });
+			} else {
+				logger.info("context-manager", "Skipped restore notice — last message already is one");
+			}
 		}
 
 		logger.info("context-manager", `Restored ${restoredCount} messages, compactionCount=${this.compactionCount}`);

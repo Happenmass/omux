@@ -1,5 +1,6 @@
 // ─── Cliclaw Chat UI ──────────────────────────────
-import { initLearning, handleLearningMessage } from "./learning.js";
+// Note: Learning Sessions panel is hidden in this UI (deprecated).
+// Backend learning REST/WS endpoints still exist; they're simply not surfaced.
 import { initI18n } from "./i18n.js";
 
 let messagesEl;
@@ -8,63 +9,82 @@ let executionPanelEl;
 let executionResizeHandleEl;
 let executionReopenBtn;
 let inputEl;
+let inputAreaEl;
 let sendBtn;
 let statusDot;
 let statusText;
+let queuePillEl;
+let inputMetaModelEl;
 let dropdownEl;
-let terminalViewEl;
-let evidenceViewEl;
 let agentTabsEl;
 let terminalContentEl;
 let terminalEmptyEl;
-let terminalInputBarEl;
-let terminalInputEl;
+let terminalStatusbarEl;
+let terminalCardEl;
+let terminalImeInputEl;
+let imeComposing = false;
+let mobileDragHandleEl;
+let mobilePeekRowEl;
+let mobilePeekDotEl;
+let mobilePeekNameEl;
+let mobilePeekMetaEl;
+let mobilePeekTailEl;
+let sheetState = "peek"; // "peek" | "full"
+let terminalStatusbarStateEl;
+let terminalStatusbarCwdEl;
+let takeoverBtnEl;
+let takeoverBtnLabelEl;
+let abortBtnEl;
+let themeToggleEl;
+let themeIconSunEl;
+let themeIconMoonEl;
 
 let ws = null;
 let currentAssistantEl = null;
 let reconnectTimer = null;
 let agentState = "idle";
+let queueSize = 0;
 let commands = [];
 let activeIndex = -1;
 let isDropdownOpen = false;
 let isExecutionPanelResizing = false;
 let executionPanelHidden = false;
-let lastExecutionPanelWidth = 420;
-let activePanelTab = "terminal";
-let learningEnabled = false;
+let lastExecutionPanelWidth = 480;
 const agentTerminals = new Map();
 let activeAgentTab = null;
 let terminalMoreLoading = false;
 let lastRenderedTerminalContent = "";
-const EXECUTION_PANEL_DEFAULT_WIDTH = 420;
-const EXECUTION_PANEL_MIN_WIDTH = 320;
-const EXECUTION_PANEL_HIDE_THRESHOLD = 180;
+const EXECUTION_PANEL_DEFAULT_WIDTH = 480;
+const EXECUTION_PANEL_MIN_WIDTH = 360;
+const EXECUTION_PANEL_HIDE_THRESHOLD = 200;
+
+const THEME_KEY = "cliclaw.theme";
 
 const ANSI_STYLES = {
-	30: "color:#1f2430",
-	31: "color:#ef5350",
-	32: "color:#8bc34a",
-	33: "color:#ffca28",
-	34: "color:#64b5f6",
-	35: "color:#ba68c8",
-	36: "color:#4dd0e1",
-	37: "color:#f5f5f5",
-	90: "color:#90a4ae",
-	91: "color:#ff8a80",
-	92: "color:#ccff90",
-	93: "color:#ffe082",
-	94: "color:#82b1ff",
-	95: "color:#ea80fc",
-	96: "color:#84ffff",
-	97: "color:#ffffff",
-	40: "background-color:#1f2430",
-	41: "background-color:#b71c1c",
-	42: "background-color:#33691e",
-	43: "background-color:#f57f17",
-	44: "background-color:#0d47a1",
-	45: "background-color:#4a148c",
-	46: "background-color:#006064",
-	47: "background-color:#cfd8dc",
+	30: "color:#3a2f23",
+	31: "color:#b54426",
+	32: "color:#658c4a",
+	33: "color:#c8911f",
+	34: "color:#3878b8",
+	35: "color:#9558b5",
+	36: "color:#3aa6a0",
+	37: "color:#e8dfce",
+	90: "color:#9a8a72",
+	91: "color:#d4654a",
+	92: "color:#a8c98c",
+	93: "color:#e2b75a",
+	94: "color:#7aa9da",
+	95: "color:#c08bd0",
+	96: "color:#7ec5be",
+	97: "color:#f5f0e2",
+	40: "background-color:#3a2f23",
+	41: "background-color:#7c2c18",
+	42: "background-color:#3d5a26",
+	43: "background-color:#a06614",
+	44: "background-color:#1f4877",
+	45: "background-color:#552e6b",
+	46: "background-color:#1a4f4b",
+	47: "background-color:#d6cfbe",
 };
 
 export function escapeHtml(text) {
@@ -113,12 +133,8 @@ function applyAnsiCodes(codes, state) {
 }
 
 export function renderAnsiToHtml(text) {
-	const ansiPattern = /\u001b\[([0-9;]*)m/g;
-	const state = {
-		color: "",
-		background: "",
-		weight: "",
-	};
+	const ansiPattern = /\[([0-9;]*)m/g;
+	const state = { color: "", background: "", weight: "" };
 
 	let html = "";
 	let cursor = 0;
@@ -145,10 +161,6 @@ export function renderAnsiToHtml(text) {
 	return html;
 }
 
-function stripAnsi(text) {
-	return text.replace(/\u001b\[[0-9;]*m/g, "");
-}
-
 function extractText(content) {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
@@ -165,7 +177,7 @@ export function clampExecutionPanelWidth(width, minWidth, maxWidth) {
 }
 
 export function getExecutionPanelWidthBounds(containerWidth, minWidth = EXECUTION_PANEL_MIN_WIDTH) {
-	const maxWidth = Math.max(minWidth, Math.floor(containerWidth / 2));
+	const maxWidth = Math.max(minWidth, Math.floor(containerWidth * 0.6));
 	return { minWidth, maxWidth };
 }
 
@@ -175,6 +187,22 @@ export function shouldHideExecutionPanel(rawWidth, hideThreshold = EXECUTION_PAN
 
 function supportsFloatingExecutionPanel() {
 	return window.matchMedia("(min-width: 981px)").matches;
+}
+
+function syncSheetForViewport() {
+	if (!executionPanelEl) return;
+	if (isMobileViewport()) {
+		// Reset desktop-only inline width
+		executionPanelEl.style.removeProperty("--exec-panel-width");
+		// Default to peek on mobile
+		if (!executionPanelEl.classList.contains("peek") && !executionPanelEl.classList.contains("full")) {
+			setSheetState("peek");
+		}
+	} else {
+		// Strip mobile sheet classes on desktop
+		executionPanelEl.classList.remove("peek");
+		executionPanelEl.classList.remove("full");
+	}
 }
 
 function updateExecutionPanelVisibilityControls() {
@@ -189,14 +217,11 @@ function updateExecutionPanelVisibilityControls() {
 function hideExecutionPanel() {
 	if (!executionPanelEl || executionPanelHidden) return;
 	if (supportsFloatingExecutionPanel()) {
-		const containerWidth = contentEl ? contentEl.getBoundingClientRect().width : window.innerWidth;
-		const bounds = getExecutionPanelWidthBounds(containerWidth);
-		const inlineWidth = Number.parseFloat(executionPanelEl.style.getPropertyValue("--execution-panel-width"));
-		const measuredWidth = Number.isFinite(inlineWidth) ? inlineWidth : executionPanelEl.getBoundingClientRect().width;
+		const measuredWidth = executionPanelEl.getBoundingClientRect().width;
 		lastExecutionPanelWidth = clampExecutionPanelWidth(
 			measuredWidth || EXECUTION_PANEL_DEFAULT_WIDTH,
-			bounds.minWidth,
-			bounds.maxWidth,
+			EXECUTION_PANEL_MIN_WIDTH,
+			Math.max(EXECUTION_PANEL_MIN_WIDTH, contentEl ? contentEl.getBoundingClientRect().width * 0.6 : EXECUTION_PANEL_DEFAULT_WIDTH),
 		);
 	}
 	executionPanelHidden = true;
@@ -215,22 +240,20 @@ function applyExecutionPanelWidth(nextWidth) {
 	const bounds = getExecutionPanelWidthBounds(contentEl.getBoundingClientRect().width);
 	const width = clampExecutionPanelWidth(nextWidth, bounds.minWidth, bounds.maxWidth);
 	lastExecutionPanelWidth = width;
-	executionPanelEl.style.setProperty("--execution-panel-width", `${width}px`);
+	executionPanelEl.style.setProperty("--exec-panel-width", `${width}px`);
 }
 
 function syncExecutionPanelWidth() {
 	if (!executionPanelEl) return;
 	if (!supportsFloatingExecutionPanel()) {
 		executionPanelHidden = false;
-		executionPanelEl.style.removeProperty("--execution-panel-width");
+		executionPanelEl.style.removeProperty("--exec-panel-width");
 		updateExecutionPanelVisibilityControls();
 		return;
 	}
 	updateExecutionPanelVisibilityControls();
 	if (executionPanelHidden) return;
-	const currentWidth =
-		Number.parseFloat(executionPanelEl.style.getPropertyValue("--execution-panel-width")) || lastExecutionPanelWidth;
-	applyExecutionPanelWidth(currentWidth);
+	applyExecutionPanelWidth(lastExecutionPanelWidth);
 }
 
 function updateExecutionPanelWidthFromPointer(clientX) {
@@ -270,33 +293,63 @@ function reopenExecutionPanel() {
 	showExecutionPanel();
 }
 
-function fetchLearningStatus(wsRef) {
+// ─── Theme ─────────────────────────────────────────
+function getStoredTheme() {
+	try { return localStorage.getItem(THEME_KEY); } catch { return null; }
+}
+
+function setStoredTheme(value) {
+	try {
+		if (value) localStorage.setItem(THEME_KEY, value);
+		else localStorage.removeItem(THEME_KEY);
+	} catch {}
+}
+
+function effectiveTheme() {
+	const stored = getStoredTheme();
+	if (stored === "light" || stored === "dark") return stored;
+	return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme, persist) {
+	if (theme === "light" || theme === "dark") {
+		document.documentElement.setAttribute("data-theme", theme);
+	} else {
+		document.documentElement.removeAttribute("data-theme");
+	}
+	if (persist !== undefined) {
+		setStoredTheme(persist ? theme : null);
+	}
+	updateThemeIcon();
+}
+
+function updateThemeIcon() {
+	const cur = effectiveTheme();
+	if (themeIconSunEl) themeIconSunEl.style.display = cur === "dark" ? "" : "none";
+	if (themeIconMoonEl) themeIconMoonEl.style.display = cur === "dark" ? "none" : "";
+}
+
+function toggleTheme() {
+	const next = effectiveTheme() === "dark" ? "light" : "dark";
+	applyTheme(next, true);
+}
+
+// ─── Status bar ────────────────────────────────────
+function fetchInitStatus() {
 	fetch("/api/status")
 		.then(function (res) { return res.json(); })
 		.then(function (data) {
 			initI18n(data.locale);
-			learningEnabled = !!data.learningEnabled;
-			applyLearningVisibility();
-			if (learningEnabled) {
-				initLearning(wsRef);
+			if (inputMetaModelEl) {
+				const parts = [];
+				if (data.model) parts.push(data.model);
+				if (data.provider) parts.push(data.provider);
+				inputMetaModelEl.textContent = parts.join(" · ");
 			}
 		})
 		.catch(function () {
 			initI18n();
-			learningEnabled = false;
-			applyLearningVisibility();
 		});
-}
-
-function applyLearningVisibility() {
-	const panelTabs = document.querySelector(".panel-tabs");
-	const learningTab = panelTabs ? panelTabs.querySelector('[data-panel="evidence"]') : null;
-	if (learningTab) learningTab.style.display = learningEnabled ? "" : "none";
-	if (evidenceViewEl) evidenceViewEl.style.display = learningEnabled ? "" : "none";
-	// If learning is hidden and currently selected, switch to terminal
-	if (!learningEnabled && activePanelTab === "evidence") {
-		switchPanelTab("terminal");
-	}
 }
 
 function connect() {
@@ -308,16 +361,12 @@ function connect() {
 		loadHistory();
 		loadAgentTerminals();
 		fetchCommands();
-		fetchLearningStatus(ws);
+		fetchInitStatus();
 	};
 
 	ws.onmessage = function (event) {
 		let data;
-		try {
-			data = JSON.parse(event.data);
-		} catch {
-			return;
-		}
+		try { data = JSON.parse(event.data); } catch { return; }
 		handleServerMessage(data);
 	};
 
@@ -326,9 +375,7 @@ function connect() {
 		scheduleReconnect();
 	};
 
-	ws.onerror = function () {
-		// onclose will fire after this
-	};
+	ws.onerror = function () {};
 }
 
 function scheduleReconnect() {
@@ -340,14 +387,21 @@ function scheduleReconnect() {
 }
 
 function setConnectionStatus(status) {
+	if (!statusDot) return;
 	statusDot.className = "";
 	if (status === "connected") {
 		statusDot.classList.add(agentState);
-		statusText.textContent = agentState === "idle" ? "空闲" : "执行中...";
+		statusText.textContent = agentState;
 	} else {
 		statusDot.classList.add("disconnected");
-		statusText.textContent = "连接断开，正在重连...";
+		statusText.textContent = "disconnected";
 	}
+	updateQueuePill();
+}
+
+function updateQueuePill() {
+	if (!queuePillEl) return;
+	queuePillEl.classList.toggle("visible", queueSize > 0);
 }
 
 function loadHistory() {
@@ -391,41 +445,39 @@ function loadHistory() {
 			});
 
 			for (const entry of entries) {
+				const ts = entry.createdAt;
 				if (entry.kind === "chat") {
 					const msg = entry.payload;
 					if (msg.role === "user") {
 						const content = typeof msg.content === "string" ? msg.content : "[complex content]";
 						if (content.startsWith("[HUMAN]") || content.startsWith("[RESUME]")) continue;
-						addMessageBubble("user", content);
+						addMessageBubble("user", content, ts);
 					} else if (msg.role === "assistant") {
 						const text = extractText(msg.content);
-						if (text) addMessageBubble("assistant", text);
+						if (text) addMessageBubble("assistant", text, ts);
 					}
 					continue;
 				}
 
 				if (entry.payload.type === "agent_update") {
-					addMessageBubble("agent-update", entry.payload.summary);
+					addMessageBubble("agent-update", entry.payload.summary, ts);
 				} else if (entry.payload.type === "tool_activity") {
-					addMessageBubble("tool-activity", entry.payload.summary);
+					addMessageBubble("tool-activity", entry.payload.summary, ts);
 				}
 			}
 			scrollToBottom();
 		})
-		.catch(function () {
-			// Silently fail — history is optional
-		});
+		.catch(function () {});
 }
 
 function handleServerMessage(data) {
-	if (data.type && data.type.startsWith("learning_")) {
-		if (learningEnabled) handleLearningMessage(data);
-		return;
-	}
+	// Learning panel is hidden in this UI; ignore learning_* events.
+	if (data.type && data.type.startsWith("learning_")) return;
+
 	switch (data.type) {
 		case "assistant_delta":
 			if (!currentAssistantEl) {
-				currentAssistantEl = addMessageBubble("assistant", "");
+				currentAssistantEl = addMessageBubble("assistant", "", Date.now());
 			}
 			currentAssistantEl.textContent += data.delta;
 			scrollToBottom();
@@ -439,20 +491,22 @@ function handleServerMessage(data) {
 			break;
 
 		case "agent_update":
-			addMessageBubble("agent-update", data.summary);
+			addMessageBubble("agent-update", data.summary, Date.now());
 			scrollToBottom();
 			break;
 
 		case "tool_activity":
-			addMessageBubble("tool-activity", data.summary);
+			addMessageBubble("tool-activity", data.summary, Date.now());
 			scrollToBottom();
 			break;
 
 		case "state": {
 			const prevState = agentState;
 			agentState = data.state;
+			if (typeof data.queueSize === "number") {
+				queueSize = data.queueSize;
+			}
 			setConnectionStatus("connected");
-			// Notify when task execution finishes (executing → idle)
 			if (prevState === "executing" && data.state === "idle") {
 				notifyTaskComplete();
 			}
@@ -460,7 +514,7 @@ function handleServerMessage(data) {
 		}
 
 		case "system":
-			addMessageBubble("system", data.message);
+			addMessageBubble("system", data.message, Date.now());
 			scrollToBottom();
 			break;
 
@@ -471,22 +525,46 @@ function handleServerMessage(data) {
 		case "clear":
 			messagesEl.innerHTML = "";
 			currentAssistantEl = null;
-			addMessageBubble("system", "对话已清空");
+			addMessageBubble("system", "对话已清空", Date.now());
 			break;
 	}
 }
 
-function addMessageBubble(type, text) {
+function formatTimestamp(ts) {
+	if (!Number.isFinite(ts)) return "";
+	const d = new Date(ts);
+	if (Number.isNaN(d.getTime())) return "";
+	const hh = String(d.getHours()).padStart(2, "0");
+	const mm = String(d.getMinutes()).padStart(2, "0");
+	return `${hh}:${mm}`;
+}
+
+function addMessageBubble(type, text, ts) {
+	const row = document.createElement("div");
+	row.className = "msg-row " + type + "-row";
+
+	const time = document.createElement("div");
+	time.className = "msg-time";
+	time.textContent = formatTimestamp(ts);
+	row.appendChild(time);
+
+	const body = document.createElement("div");
+	body.className = "msg-body";
+
 	const el = document.createElement("div");
 	el.className = "msg " + type;
-
 	if (type === "assistant" && text) {
 		el.innerHTML = renderMarkdown(text);
 	} else {
 		el.textContent = text;
 	}
+	body.appendChild(el);
+	row.appendChild(body);
 
-	messagesEl.appendChild(el);
+	const tail = document.createElement("div");
+	row.appendChild(tail);
+
+	messagesEl.appendChild(row);
 	return el;
 }
 
@@ -612,7 +690,7 @@ function sendMessage() {
 		ws.send(JSON.stringify({ type: "command", name }));
 	} else {
 		ws.send(JSON.stringify({ type: "message", content: text }));
-		addMessageBubble("user", text);
+		addMessageBubble("user", text, Date.now());
 		scrollToBottom();
 	}
 
@@ -627,28 +705,162 @@ function initDomReferences() {
 	executionResizeHandleEl = document.getElementById("execution-resize-handle");
 	executionReopenBtn = document.getElementById("execution-reopen-btn");
 	inputEl = document.getElementById("input");
+	inputAreaEl = document.getElementById("input-area");
 	sendBtn = document.getElementById("send-btn");
 	statusDot = document.getElementById("status-dot");
 	statusText = document.getElementById("status-text");
+	queuePillEl = document.getElementById("queue-pill");
+	inputMetaModelEl = document.getElementById("input-meta-model");
 	dropdownEl = document.getElementById("command-dropdown");
-	terminalViewEl = document.getElementById("terminal-view");
-	evidenceViewEl = document.getElementById("evidence-view");
 	agentTabsEl = document.getElementById("agent-tabs");
 	terminalContentEl = document.getElementById("terminal-content");
 	terminalEmptyEl = document.getElementById("terminal-empty");
-	terminalInputBarEl = document.getElementById("terminal-input-bar");
-	terminalInputEl = document.getElementById("terminal-input");
+	terminalCardEl = document.querySelector(".terminal-card");
+	terminalImeInputEl = document.getElementById("terminal-ime-input");
+	terminalStatusbarEl = document.getElementById("terminal-statusbar");
+	terminalStatusbarStateEl = document.getElementById("terminal-statusbar-state");
+	terminalStatusbarCwdEl = document.getElementById("terminal-statusbar-cwd");
+	takeoverBtnEl = document.getElementById("takeover-btn");
+	takeoverBtnLabelEl = document.getElementById("takeover-btn-label");
+	abortBtnEl = document.getElementById("abort-btn");
+	themeToggleEl = document.getElementById("theme-toggle");
+	themeIconSunEl = document.getElementById("theme-icon-sun");
+	themeIconMoonEl = document.getElementById("theme-icon-moon");
+	mobileDragHandleEl = document.getElementById("mobile-drag-handle");
+	mobilePeekRowEl = document.getElementById("mobile-peek-row");
+	mobilePeekDotEl = document.getElementById("mobile-peek-dot");
+	mobilePeekNameEl = document.getElementById("mobile-peek-name");
+	mobilePeekMetaEl = document.getElementById("mobile-peek-meta");
+	mobilePeekTailEl = document.getElementById("mobile-peek-tail");
+}
+
+function isMobileViewport() {
+	return window.matchMedia("(max-width: 768px)").matches;
+}
+
+function setSheetState(next) {
+	if (next !== "peek" && next !== "full") return;
+	sheetState = next;
+	if (executionPanelEl) {
+		executionPanelEl.classList.toggle("peek", next === "peek");
+		executionPanelEl.classList.toggle("full", next === "full");
+	}
+	// When opening to full on mobile, ensure terminal content scrolls to bottom
+	if (next === "full" && terminalContentEl && isMobileViewport()) {
+		requestAnimationFrame(function () {
+			terminalContentEl.scrollTop = terminalContentEl.scrollHeight;
+		});
+	}
+}
+
+function toggleSheet() {
+	setSheetState(sheetState === "peek" ? "full" : "peek");
+}
+
+const PEEK_HEIGHT = 96;
+function getFullHeight() {
+	return Math.max(220, window.innerHeight - 240);
+}
+
+let sheetDrag = null;
+
+function clearSheetInlineHeight() {
+	if (!executionPanelEl) return;
+	executionPanelEl.style.height = "";
+	executionPanelEl.style.transition = "";
+}
+
+function onSheetPointerDown(e) {
+	if (!executionPanelEl || !isMobileViewport()) return;
+	if (e.pointerType === "mouse" && e.button !== 0) return;
+	sheetDrag = {
+		pointerId: e.pointerId,
+		startY: e.clientY,
+		startHeight: executionPanelEl.getBoundingClientRect().height,
+		moved: false,
+		target: e.currentTarget,
+	};
+	try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+	executionPanelEl.style.transition = "none";
+	e.preventDefault();
+}
+
+function onSheetPointerMove(e) {
+	if (!sheetDrag || e.pointerId !== sheetDrag.pointerId) return;
+	const dy = e.clientY - sheetDrag.startY;
+	if (Math.abs(dy) > 4) sheetDrag.moved = true;
+	const next = Math.min(getFullHeight(), Math.max(PEEK_HEIGHT, sheetDrag.startHeight - dy));
+	executionPanelEl.style.height = `${next}px`;
+}
+
+function onSheetPointerUp(e) {
+	if (!sheetDrag || e.pointerId !== sheetDrag.pointerId) return;
+	const drag = sheetDrag;
+	sheetDrag = null;
+	try { drag.target.releasePointerCapture(e.pointerId); } catch {}
+
+	if (!drag.moved) {
+		clearSheetInlineHeight();
+		toggleSheet();
+		return;
+	}
+
+	const currentHeight = executionPanelEl.getBoundingClientRect().height;
+	const fullH = getFullHeight();
+	const midpoint = PEEK_HEIGHT + (fullH - PEEK_HEIGHT) / 2;
+	const target = currentHeight >= midpoint ? "full" : "peek";
+	clearSheetInlineHeight();
+	setSheetState(target);
+}
+
+function onSheetPointerCancel(e) {
+	if (!sheetDrag || e.pointerId !== sheetDrag.pointerId) return;
+	sheetDrag = null;
+	clearSheetInlineHeight();
+}
+
+function lastNonEmptyLine(text) {
+	if (!text) return "";
+	const lines = text.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const stripped = lines[i].replace(/\x1b\[[0-9;]*m/g, "").trim();
+		if (stripped) return stripped;
+	}
+	return "";
+}
+
+function updateMobilePeek() {
+	if (!mobilePeekRowEl) return;
+	if (!activeAgentTab || !agentTerminals.has(activeAgentTab)) {
+		if (mobilePeekDotEl) mobilePeekDotEl.className = "agent-tab-dot status-idle";
+		if (mobilePeekNameEl) mobilePeekNameEl.textContent = "—";
+		if (mobilePeekMetaEl) mobilePeekMetaEl.textContent = "";
+		if (mobilePeekTailEl) mobilePeekTailEl.textContent = "暂无活跃的 Agent 会话";
+		return;
+	}
+	const data = agentTerminals.get(activeAgentTab);
+	if (mobilePeekDotEl) {
+		mobilePeekDotEl.className = "agent-tab-dot status-" + (data.takenOver ? "taken_over" : data.status);
+	}
+	if (mobilePeekNameEl) {
+		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
+		mobilePeekNameEl.textContent = displayName;
+	}
+	if (mobilePeekMetaEl) {
+		const count = agentTerminals.size;
+		mobilePeekMetaEl.textContent = count > 1 ? "· " + count + " tmux" : "";
+	}
+	if (mobilePeekTailEl) {
+		const tail = lastNonEmptyLine(data.paneContent);
+		mobilePeekTailEl.textContent = tail || "(no output)";
+	}
 }
 
 function loadAgentTerminals() {
 	fetch("/api/agents/terminals")
 		.then(function (res) { return res.json(); })
-		.then(function (sessions) {
-			handleAgentTerminals(sessions);
-		})
-		.catch(function () {
-			// Silently fail — terminals are optional
-		});
+		.then(function (sessions) { handleAgentTerminals(sessions); })
+		.catch(function () {});
 }
 
 function handleAgentTerminals(sessions) {
@@ -662,68 +874,64 @@ function handleAgentTerminals(sessions) {
 			status: s.status,
 			paneContent: s.paneContent,
 			takenOver: s.takenOver || false,
+			workingDir: s.workingDir || "",
 		});
 	}
 
-	// Remove agents that disappeared
 	for (const id of previousIds) {
 		if (!incomingIds.has(id)) {
 			agentTerminals.delete(id);
 		}
 	}
 
-	// Detect new agents — auto-switch to the last new one
 	let newAgentId = null;
 	for (const id of incomingIds) {
-		if (!previousIds.has(id)) {
-			newAgentId = id;
-		}
+		if (!previousIds.has(id)) newAgentId = id;
 	}
-	if (newAgentId) {
-		activeAgentTab = newAgentId;
-	}
+	if (newAgentId) activeAgentTab = newAgentId;
 
-	// If active tab gone, switch to first remaining
 	if (activeAgentTab && !agentTerminals.has(activeAgentTab)) {
 		const first = agentTerminals.keys().next().value;
 		activeAgentTab = first || null;
 	}
 
-	// If nothing selected but agents exist, pick first
 	if (!activeAgentTab && agentTerminals.size > 0) {
 		activeAgentTab = agentTerminals.keys().next().value;
 	}
 
 	renderAgentTabs();
 	renderTerminalContent();
+	updateMobilePeek();
 }
 
 function renderAgentTabs() {
 	if (!agentTabsEl) return;
 	if (agentTerminals.size === 0) {
 		agentTabsEl.innerHTML = "";
-		agentTabsEl.style.display = "none";
 		if (terminalContentEl) terminalContentEl.style.display = "none";
 		if (terminalEmptyEl) terminalEmptyEl.classList.add("visible");
+		if (terminalStatusbarEl) terminalStatusbarEl.style.display = "none";
+		if (takeoverBtnEl) takeoverBtnEl.style.display = "none";
+		if (abortBtnEl) abortBtnEl.style.display = "none";
 		return;
 	}
 
-	agentTabsEl.style.display = "flex";
 	if (terminalContentEl) terminalContentEl.style.display = "";
 	if (terminalEmptyEl) terminalEmptyEl.classList.remove("visible");
 
 	agentTabsEl.innerHTML = "";
+	agentTabsEl.style.display = "flex";
 	for (const [id, data] of agentTerminals) {
 		const btn = document.createElement("button");
-		btn.className = "agent-tab" + (id === activeAgentTab ? " active" : "");
+		btn.className = "agent-tab" + (id === activeAgentTab ? " active" : "") + (data.takenOver ? " taken-over" : "");
 		btn.dataset.agentId = id;
+		btn.type = "button";
 
 		const dot = document.createElement("span");
 		dot.className = "agent-tab-dot status-" + (data.takenOver ? "taken_over" : data.status);
 
 		const label = document.createElement("span");
 		label.className = "agent-tab-label";
-		// Strip cliclaw- prefix for display
 		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
 		label.textContent = displayName;
 
@@ -731,23 +939,12 @@ function renderAgentTabs() {
 		btn.appendChild(label);
 
 		if (data.takenOver) {
-			const badge = document.createElement("span");
-			badge.className = "takeover-badge";
-			badge.textContent = "已接管";
-			btn.appendChild(badge);
+			const marker = document.createElement("span");
+			marker.className = "takeover-marker";
+			marker.title = "已被人工接管";
+			marker.textContent = "●";
+			btn.appendChild(marker);
 		}
-
-		// Takeover/release action button
-		const actionBtn = document.createElement("span");
-		actionBtn.className = "takeover-btn" + (data.takenOver ? " release" : "");
-		actionBtn.textContent = data.takenOver ? "释放" : "接管";
-		actionBtn.addEventListener("click", function (e) {
-			e.stopPropagation();
-			if (ws && ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: data.takenOver ? "release" : "takeover", agentId: id }));
-			}
-		});
-		btn.appendChild(actionBtn);
 
 		btn.addEventListener("click", function () {
 			activeAgentTab = this.dataset.agentId;
@@ -757,28 +954,74 @@ function renderAgentTabs() {
 		});
 		agentTabsEl.appendChild(btn);
 	}
+
+	updateTakeoverButton();
+}
+
+function updateTakeoverButton() {
+	if (!takeoverBtnEl || !takeoverBtnLabelEl) return;
+	if (!activeAgentTab || !agentTerminals.has(activeAgentTab)) {
+		takeoverBtnEl.style.display = "none";
+		if (abortBtnEl) abortBtnEl.style.display = "none";
+		return;
+	}
+	const data = agentTerminals.get(activeAgentTab);
+	takeoverBtnEl.style.display = "inline-flex";
+	if (data.takenOver) {
+		takeoverBtnEl.classList.add("release");
+		takeoverBtnLabelEl.textContent = "释放";
+	} else {
+		takeoverBtnEl.classList.remove("release");
+		takeoverBtnLabelEl.textContent = "接管";
+	}
+	if (abortBtnEl) abortBtnEl.style.display = data.takenOver ? "inline-flex" : "none";
+}
+
+function sendAbortToActiveAgent() {
+	if (!ws || ws.readyState !== WebSocket.OPEN || !activeAgentTab) return;
+	ws.send(JSON.stringify({ type: "agent_abort", agentId: activeAgentTab }));
 }
 
 function renderTerminalContent() {
 	if (!terminalContentEl) return;
+
 	if (!activeAgentTab || !agentTerminals.has(activeAgentTab)) {
 		terminalContentEl.innerHTML = "";
 		terminalContentEl.classList.remove("takeover-active");
-		if (terminalInputBarEl) terminalInputBarEl.style.display = "none";
+		if (terminalStatusbarEl) terminalStatusbarEl.style.display = "none";
 		return;
 	}
 
 	const data = agentTerminals.get(activeAgentTab);
 	const el = terminalContentEl;
+	const isTakenOver = data.takenOver || false;
 
-	// Skip DOM update when content is unchanged — avoids breaking text selection / copy
-	if (data.paneContent === lastRenderedTerminalContent) {
-		// Still update takeover state (lightweight, no innerHTML rewrite)
-		const isTakenOver = data.takenOver || false;
-		el.classList.toggle("takeover-active", isTakenOver);
-		if (terminalInputBarEl) {
-			terminalInputBarEl.style.display = isTakenOver ? "flex" : "none";
+	// When entering takeover mode, auto-focus the hidden IME input
+	// so the user can immediately type (and IME-compose) without an extra click.
+	if (isTakenOver && terminalImeInputEl && document.activeElement !== terminalImeInputEl) {
+		terminalImeInputEl.focus({ preventScroll: true });
+	}
+
+	// Status bar
+	if (terminalStatusbarEl) {
+		terminalStatusbarEl.style.display = "flex";
+		if (terminalStatusbarStateEl) {
+			const stateLabel = isTakenOver
+				? "user · taking over"
+				: data.status === "active"
+					? "agent · running"
+					: data.status === "waiting_input"
+						? "agent · awaiting input"
+						: "agent · idle";
+			terminalStatusbarStateEl.textContent = stateLabel;
 		}
+		if (terminalStatusbarCwdEl) {
+			terminalStatusbarCwdEl.textContent = data.workingDir || "";
+		}
+	}
+
+	if (data.paneContent === lastRenderedTerminalContent) {
+		el.classList.toggle("takeover-active", isTakenOver);
 		return;
 	}
 	lastRenderedTerminalContent = data.paneContent;
@@ -788,58 +1031,60 @@ function renderTerminalContent() {
 	const prevScrollTop = el.scrollTop;
 
 	el.innerHTML = renderAnsiToHtml(data.paneContent);
-
-	// Takeover mode: show input bar and highlight terminal
-	const isTakenOver = data.takenOver || false;
 	el.classList.toggle("takeover-active", isTakenOver);
-	if (terminalInputBarEl) {
-		terminalInputBarEl.style.display = isTakenOver ? "flex" : "none";
-	}
 
 	if (isAtBottom) {
 		el.scrollTop = el.scrollHeight;
 	} else {
-		// Preserve scroll position when content grows at the top (history loaded)
 		const delta = el.scrollHeight - prevScrollHeight;
-		if (delta > 0) {
-			el.scrollTop = prevScrollTop + delta;
-		}
+		if (delta > 0) el.scrollTop = prevScrollTop + delta;
 	}
 
-	// Clear loading state after content is updated
-	if (terminalMoreLoading) {
-		terminalMoreLoading = false;
-	}
+	if (terminalMoreLoading) terminalMoreLoading = false;
 }
 
-function switchPanelTab(tab) {
-	activePanelTab = tab;
-	const tabs = document.querySelectorAll(".panel-tab");
-	for (const t of tabs) {
-		t.classList.toggle("active", t.dataset.panel === tab);
-	}
-	if (terminalViewEl) terminalViewEl.classList.toggle("active", tab === "terminal");
-	if (evidenceViewEl) evidenceViewEl.classList.toggle("active", tab === "evidence");
+function sendTakeoverToggle() {
+	if (!activeAgentTab || !ws || ws.readyState !== WebSocket.OPEN) return;
+	const data = agentTerminals.get(activeAgentTab);
+	if (!data) return;
+	ws.send(JSON.stringify({ type: data.takenOver ? "release" : "takeover", agentId: activeAgentTab }));
+}
+
+function sendTerminalInput(inputType, data) {
+	if (!ws || ws.readyState !== WebSocket.OPEN || !activeAgentTab) return;
+	ws.send(JSON.stringify({ type: "terminal_input", agentId: activeAgentTab, inputType, data: data || "" }));
+}
+
+function activeTabIsTakenOver() {
+	if (!activeAgentTab) return false;
+	const data = agentTerminals.get(activeAgentTab);
+	return !!(data && data.takenOver);
 }
 
 function initApp() {
 	initDomReferences();
+
+	const stored = getStoredTheme();
+	applyTheme(stored === "light" || stored === "dark" ? stored : null, undefined);
+	if (window.matchMedia) {
+		try {
+			const mq = window.matchMedia("(prefers-color-scheme: dark)");
+			mq.addEventListener("change", function () {
+				if (!getStoredTheme()) updateThemeIcon();
+			});
+		} catch {}
+	}
+
 	syncExecutionPanelWidth();
 
-	// Request notification permission early
 	if ("Notification" in window && Notification.permission === "default") {
 		Notification.requestPermission();
 	}
 
-	// Panel tab switching
-	const panelTabs = document.querySelectorAll(".panel-tab");
-	for (const tab of panelTabs) {
-		tab.addEventListener("click", function () {
-			switchPanelTab(this.dataset.panel);
-		});
+	if (themeToggleEl) {
+		themeToggleEl.addEventListener("click", toggleTheme);
 	}
 
-	// Terminal scroll-to-top: load more history
 	if (terminalContentEl) {
 		terminalContentEl.addEventListener("scroll", function () {
 			if (this.scrollTop > 0) return;
@@ -847,6 +1092,92 @@ function initApp() {
 			if (!ws || ws.readyState !== WebSocket.OPEN) return;
 			terminalMoreLoading = true;
 			ws.send(JSON.stringify({ type: "terminal_more", agentId: activeAgentTab }));
+		});
+
+		// Click on terminal in takeover mode → focus the hidden IME input so
+		// IME composition (e.g. Chinese pinyin) routes through it correctly.
+		terminalContentEl.addEventListener("mousedown", function () {
+			if (!activeTabIsTakenOver()) return;
+			// Defer so default focus behavior doesn't steal it back
+			setTimeout(function () {
+				if (terminalImeInputEl) terminalImeInputEl.focus({ preventScroll: true });
+			}, 0);
+		});
+	}
+
+	if (terminalImeInputEl) {
+		terminalImeInputEl.addEventListener("focus", function () {
+			if (terminalCardEl) terminalCardEl.classList.add("ime-focused");
+		});
+		terminalImeInputEl.addEventListener("blur", function () {
+			if (terminalCardEl) terminalCardEl.classList.remove("ime-focused");
+			imeComposing = false;
+		});
+
+		terminalImeInputEl.addEventListener("compositionstart", function () {
+			imeComposing = true;
+		});
+		terminalImeInputEl.addEventListener("compositionend", function (e) {
+			imeComposing = false;
+			const text = e.data || "";
+			if (text && activeTabIsTakenOver()) {
+				sendTerminalInput("text", text);
+			}
+			// Clear the input value to keep it as a transient buffer
+			terminalImeInputEl.value = "";
+		});
+
+		// Direct (non-IME) typed characters arrive via input event with
+		// inputType "insertText" and isComposing === false.
+		terminalImeInputEl.addEventListener("input", function (e) {
+			if (e.isComposing || imeComposing) return;
+			if (!activeTabIsTakenOver()) {
+				terminalImeInputEl.value = "";
+				return;
+			}
+			const text = terminalImeInputEl.value;
+			terminalImeInputEl.value = "";
+			if (!text) return;
+			// Only forward if it's a plain text insertion (skip composition leftovers)
+			if (e.inputType && e.inputType !== "insertText" && e.inputType !== "insertFromPaste") return;
+			sendTerminalInput("text", text);
+		});
+
+		terminalImeInputEl.addEventListener("keydown", function (e) {
+			if (!activeTabIsTakenOver()) return;
+			// During IME composition, let the browser handle everything
+			if (e.isComposing || imeComposing || e.keyCode === 229) return;
+
+			// Control keys: intercept and forward to tmux
+			if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
+				e.preventDefault();
+				sendTerminalInput("ctrl-c");
+			} else if (e.key === "Enter") {
+				e.preventDefault();
+				sendTerminalInput("enter");
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				sendTerminalInput("escape");
+			} else if (e.key === "ArrowUp") {
+				e.preventDefault();
+				sendTerminalInput("keys", "Up");
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				sendTerminalInput("keys", "Down");
+			} else if (e.key === "ArrowLeft") {
+				e.preventDefault();
+				sendTerminalInput("keys", "Left");
+			} else if (e.key === "ArrowRight") {
+				e.preventDefault();
+				sendTerminalInput("keys", "Right");
+			} else if (e.key === "Backspace") {
+				e.preventDefault();
+				sendTerminalInput("keys", "BSpace");
+			} else if (e.key === "Tab") {
+				e.preventDefault();
+				sendTerminalInput("keys", "Tab");
+			}
+			// Plain printable characters fall through to the input event handler.
 		});
 	}
 
@@ -858,13 +1189,33 @@ function initApp() {
 	}
 	document.addEventListener("mousemove", handleExecutionPanelResizeMove);
 	document.addEventListener("mouseup", stopExecutionPanelResize);
-	window.addEventListener("resize", syncExecutionPanelWidth);
+	window.addEventListener("resize", function () {
+		syncExecutionPanelWidth();
+		syncSheetForViewport();
+	});
 	window.addEventListener("blur", stopExecutionPanelResize);
 
+	function attachSheetDrag(el) {
+		if (!el) return;
+		el.addEventListener("pointerdown", onSheetPointerDown);
+		el.addEventListener("pointermove", onSheetPointerMove);
+		el.addEventListener("pointerup", onSheetPointerUp);
+		el.addEventListener("pointercancel", onSheetPointerCancel);
+	}
+	attachSheetDrag(mobileDragHandleEl);
+	attachSheetDrag(mobilePeekRowEl);
+
+	syncSheetForViewport();
+
+	if (takeoverBtnEl) {
+		takeoverBtnEl.addEventListener("click", sendTakeoverToggle);
+	}
+	if (abortBtnEl) {
+		abortBtnEl.addEventListener("click", sendAbortToActiveAgent);
+	}
+
 	document.addEventListener("click", function (e) {
-		if (!dropdownEl.contains(e.target) && e.target !== inputEl) {
-			closeDropdown();
-		}
+		if (!dropdownEl.contains(e.target) && e.target !== inputEl) closeDropdown();
 	});
 
 	inputEl.addEventListener("keydown", function (e) {
@@ -915,7 +1266,7 @@ function initApp() {
 
 	inputEl.addEventListener("input", function () {
 		this.style.height = "auto";
-		this.style.height = Math.min(this.scrollHeight, 120) + "px";
+		this.style.height = Math.min(this.scrollHeight, 140) + "px";
 
 		if (this.value.startsWith("/")) {
 			activeIndex = -1;
@@ -925,63 +1276,13 @@ function initApp() {
 		}
 	});
 
-	// ─── Terminal input for takeover mode ──────────────
-	function sendTerminalInput(inputType, data) {
-		if (!ws || ws.readyState !== WebSocket.OPEN || !activeAgentTab) return;
-		ws.send(JSON.stringify({ type: "terminal_input", agentId: activeAgentTab, inputType, data: data || "" }));
-	}
-
-	if (terminalInputEl) {
-		terminalInputEl.addEventListener("keydown", function (e) {
-			if (e.key === "Enter" && !e.shiftKey) {
-				e.preventDefault();
-				const text = terminalInputEl.value;
-				if (text) {
-					sendTerminalInput("text", text);
-				}
-				sendTerminalInput("enter");
-				terminalInputEl.value = "";
-			}
+	if (inputAreaEl && typeof ResizeObserver !== "undefined") {
+		const ro = new ResizeObserver(function () {
+			const h = inputAreaEl.offsetHeight;
+			document.documentElement.style.setProperty("--input-area-h", h + "px");
 		});
-	}
-
-	const ctrlCBtn = document.getElementById("terminal-ctrl-c-btn");
-	if (ctrlCBtn) ctrlCBtn.addEventListener("click", function () { sendTerminalInput("ctrl-c"); });
-
-	const escBtn = document.getElementById("terminal-esc-btn");
-	if (escBtn) escBtn.addEventListener("click", function () { sendTerminalInput("escape"); });
-
-	// Keyboard capture on terminal content (when taken over and focused)
-	if (terminalContentEl) {
-		terminalContentEl.setAttribute("tabindex", "0");
-		terminalContentEl.addEventListener("keydown", function (e) {
-			if (!activeAgentTab) return;
-			const data = agentTerminals.get(activeAgentTab);
-			if (!data || !data.takenOver) return;
-
-			e.preventDefault();
-			if (e.ctrlKey && e.key === "c") {
-				sendTerminalInput("ctrl-c");
-			} else if (e.key === "Enter") {
-				sendTerminalInput("enter");
-			} else if (e.key === "Escape") {
-				sendTerminalInput("escape");
-			} else if (e.key === "ArrowUp") {
-				sendTerminalInput("keys", "Up");
-			} else if (e.key === "ArrowDown") {
-				sendTerminalInput("keys", "Down");
-			} else if (e.key === "ArrowLeft") {
-				sendTerminalInput("keys", "Left");
-			} else if (e.key === "ArrowRight") {
-				sendTerminalInput("keys", "Right");
-			} else if (e.key === "Backspace") {
-				sendTerminalInput("keys", "BSpace");
-			} else if (e.key === "Tab") {
-				sendTerminalInput("keys", "Tab");
-			} else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-				sendTerminalInput("text", e.key);
-			}
-		});
+		ro.observe(inputAreaEl);
+		document.documentElement.style.setProperty("--input-area-h", inputAreaEl.offsetHeight + "px");
 	}
 
 	connect();

@@ -60,6 +60,13 @@ export interface LearningConfig {
 	enabled: boolean;
 }
 
+export interface MdnsConfig {
+	/** Whether to advertise the server over mDNS so it's reachable as `<name>.local`. Default true. */
+	enabled: boolean;
+	/** Bare hostname without ".local" suffix (e.g. "cliclaw" → "cliclaw.local"). */
+	name: string;
+}
+
 export interface ContextConfig {
 	/** Context window size in tokens. Should match the model's actual context limit. Default 500000. */
 	contextWindowLimit: number;
@@ -80,6 +87,7 @@ export interface CliclawConfig {
 	memory: MemoryConfig;
 	skills: SkillsConfig;
 	learning: LearningConfig;
+	mdns: MdnsConfig;
 }
 
 const CONFIG_DIR = join(homedir(), ".cliclaw");
@@ -93,6 +101,10 @@ export interface ServerRuntimeState {
 	url: string;
 	cwd: string;
 	startedAt: string;
+	/** URL via mDNS (e.g. http://cliclaw.local:3120) when advertising is enabled. */
+	mdnsUrl?: string;
+	/** LAN IPv4 URLs the server is reachable at. */
+	lanUrls?: string[];
 }
 
 const DEFAULT_CONFIG: CliclawConfig = {
@@ -130,6 +142,10 @@ const DEFAULT_CONFIG: CliclawConfig = {
 	},
 	learning: {
 		enabled: false,
+	},
+	mdns: {
+		enabled: true,
+		name: "cliclaw",
 	},
 };
 
@@ -169,6 +185,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			memory: { ...DEFAULT_CONFIG.memory, ...userConfig.memory },
 			skills: { ...DEFAULT_CONFIG.skills, ...userConfig.skills },
 			learning: { ...DEFAULT_CONFIG.learning, ...userConfig.learning },
+			mdns: { ...DEFAULT_CONFIG.mdns, ...userConfig.mdns },
 		};
 	} catch {
 		return { ...DEFAULT_CONFIG };
@@ -205,6 +222,10 @@ export async function loadServerRuntimeState(): Promise<ServerRuntimeState | nul
 			url: parsed.url,
 			cwd: parsed.cwd,
 			startedAt: parsed.startedAt,
+			mdnsUrl: typeof parsed.mdnsUrl === "string" ? parsed.mdnsUrl : undefined,
+			lanUrls: Array.isArray(parsed.lanUrls)
+				? parsed.lanUrls.filter((u): u is string => typeof u === "string")
+				: undefined,
 		};
 	} catch {
 		return null;

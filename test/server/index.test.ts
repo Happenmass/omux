@@ -12,6 +12,7 @@ function createMainAgentMock() {
 		waitForIdle: async () => undefined,
 		setOnAgentChange: () => undefined,
 		getActiveAgents: () => [],
+		getPendingUserMessageCount: () => 0,
 	} as any;
 }
 
@@ -114,6 +115,8 @@ describe("startServer", () => {
 			clients: 0,
 			learningEnabled: false,
 			locale: "en-US",
+			provider: undefined,
+			model: undefined,
 		});
 	});
 
@@ -139,7 +142,9 @@ describe("startServer", () => {
 			headers: { Cookie: cookie },
 		});
 
-		await expect(waitForWsMessage(authorizedWs)).resolves.toBe(JSON.stringify({ type: "state", state: "idle" }));
+		await expect(waitForWsMessage(authorizedWs)).resolves.toBe(
+			JSON.stringify({ type: "state", state: "idle", queueSize: 0 }),
+		);
 		authorizedWs.close();
 	});
 

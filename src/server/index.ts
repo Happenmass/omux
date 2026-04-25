@@ -117,6 +117,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			clients: broadcaster.getClientCount(),
 			learningEnabled,
 			locale,
+			provider: llmClient?.getProviderName(),
+			model: llmClient?.getModel(),
 		});
 	});
 
@@ -262,6 +264,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			status: string;
 			paneContent: string;
 			takenOver: boolean;
+			workingDir: string;
 		}> = [];
 		for (const a of activeAgents) {
 			let paneContent = "";
@@ -281,6 +284,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 				status: a.status,
 				paneContent,
 				takenOver: a.takenOver,
+				workingDir: a.workingDir,
 			});
 		}
 		return agents;

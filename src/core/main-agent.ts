@@ -386,6 +386,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// ─── State Machine ─────────────────────────────────
 	state: AgentState = "idle";
 
+	getPendingUserMessageCount(): number {
+		return this.workQueue.pendingUserMessages();
+	}
+
 	constructor(opts: {
 		contextManager: ContextManager;
 		signalRouter: SignalRouter;
@@ -450,6 +454,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		agentName: string;
 		agentId: string;
 		paneTarget: string;
+		workingDir: string;
 		status: string;
 		takenOver: boolean;
 	}> {
@@ -457,6 +462,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			agentName: string;
 			agentId: string;
 			paneTarget: string;
+			workingDir: string;
 			status: string;
 			takenOver: boolean;
 		}> = [];
@@ -474,6 +480,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				agentName: id,
 				agentId: id,
 				paneTarget: entry.paneTarget,
+				workingDir: entry.workingDir,
 				status,
 				takenOver: this.takenOverAgents.has(id),
 			});
@@ -603,7 +610,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private setState(newState: AgentState): void {
 		if (this.state !== newState) {
 			this.state = newState;
-			this.broadcaster.broadcast({ type: "state", state: newState });
+			this.broadcastState();
 			this.emit("state_change", newState);
 			logger.info("main-agent", `State: ${newState}`);
 
@@ -611,6 +618,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				queueMicrotask(() => this.dispatchNext());
 			}
 		}
+	}
+
+	private broadcastState(): void {
+		this.broadcaster.broadcast({
+			type: "state",
+			state: this.state,
+			queueSize: this.workQueue.pendingUserMessages(),
+		});
 	}
 
 	// ─── handleMessage — main entry point ──────────────
@@ -623,6 +638,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				type: "system",
 				message: "消息已排队，将在当前操作完成后处理",
 			});
+			this.broadcastState();
 			return;
 		}
 
@@ -859,6 +875,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			while (!this.workQueue.isEmpty() && this.state === "idle") {
 				const item = this.workQueue.dequeue()!;
 				if (item.kind === "user_message") {
+					this.broadcastState();
 					await this.processUserMessage(item.content);
 				} else {
 					await this.processAgentEventItem(item.event);

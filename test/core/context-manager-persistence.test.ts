@@ -150,6 +150,30 @@ describe("ContextManager Persistence", () => {
 			// No SESSION_RESTORED notice when there are no messages
 			expect(cm.getConversationLength()).toBe(0);
 		});
+
+		it("should not stack restore notices when last message already is one", () => {
+			// First restart: seed real conversation, then restore
+			store.saveMessage({ role: "user", content: "msg1" });
+			store.saveMessage({ role: "assistant", content: "msg2" });
+
+			const cm1 = new ContextManager({ llmClient: mockLLM, promptLoader: mockPromptLoader });
+			cm1.restore(store);
+			expect(cm1.getConversationLength()).toBe(3);
+			expect(cm1.getMessages()[2].content).toContain("[SESSION_RESTORED]");
+
+			// Second restart with no new activity: previous restore notice is now
+			// the tail of the persisted conversation. Restoring again must not
+			// append another notice.
+			const cm2 = new ContextManager({ llmClient: mockLLM, promptLoader: mockPromptLoader });
+			cm2.restore(store);
+			expect(cm2.getConversationLength()).toBe(3);
+			expect(cm2.getMessages()[2].content).toContain("[SESSION_RESTORED]");
+
+			// Third restart — still no growth.
+			const cm3 = new ContextManager({ llmClient: mockLLM, promptLoader: mockPromptLoader });
+			cm3.restore(store);
+			expect(cm3.getConversationLength()).toBe(3);
+		});
 	});
 
 	describe("clear", () => {

@@ -268,8 +268,8 @@ describe("MainAgent State Machine", () => {
 			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter(
 				(c: any) => c[0].type === "state",
 			);
-			expect(stateCalls).toContainEqual([{ type: "state", state: "executing" }]);
-			expect(stateCalls).toContainEqual([{ type: "state", state: "idle" }]);
+			expect(stateCalls).toContainEqual([{ type: "state", state: "executing", queueSize: expect.any(Number) }]);
+			expect(stateCalls).toContainEqual([{ type: "state", state: "idle", queueSize: expect.any(Number) }]);
 		});
 
 		it("should serialize concurrent idle messages", async () => {
@@ -560,8 +560,8 @@ describe("MainAgent State Machine", () => {
 			// dispatchNext catches and recovers from errors internally
 			await agent.handleMessage("check status");
 			expect(agent.state).toBe("idle");
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "executing" });
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "idle" });
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "executing", queueSize: expect.any(Number) });
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "idle", queueSize: expect.any(Number) });
 		});
 
 		it("should recover to idle when handleResume fails", async () => {
@@ -1197,6 +1197,7 @@ describe("MainAgent State Machine", () => {
 				agentName: "cliclaw-auth",
 				agentId: "cliclaw-auth",
 				paneTarget: "sess:0.0",
+				workingDir: expect.any(String),
 				status: "idle",
 				takenOver: false,
 			});

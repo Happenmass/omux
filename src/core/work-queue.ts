@@ -51,6 +51,11 @@ export class WorkQueue extends EventEmitter {
 		return this.queue.length;
 	}
 
+	/** Number of pending user messages in the queue (excludes agent_event items). */
+	pendingUserMessages(): number {
+		return this.queue.reduce((n, item) => n + (item.kind === "user_message" ? 1 : 0), 0);
+	}
+
 	/** Remove all agent_event items matching agentId. Returns count removed. */
 	removeAgentEventsByAgentId(agentId: string): number {
 		const before = this.queue.length;

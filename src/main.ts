@@ -32,6 +32,7 @@ import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
+import { type MdnsHandle, isValidMdnsName, startMdns } from "./server/mdns.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
@@ -245,6 +246,15 @@ function buildDaemonChildArgs(args: ReturnType<typeof parseCliArgs>): string[] {
 	return childArgs;
 }
 
+function printAccessUrls(state: ServerRuntimeState): void {
+	if (state.mdnsUrl) {
+		console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(state.mdnsUrl)}`);
+	}
+	if (state.lanUrls && state.lanUrls.length > 0) {
+		console.log(`${chalk.dim("Also at:  ")}${state.lanUrls.join(", ")}`);
+	}
+}
+
 async function waitForServerState(pid: number, timeoutMs = 10000): Promise<ServerRuntimeState | null> {
 	const deadline = Date.now() + timeoutMs;
 
@@ -302,6 +312,7 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 		const state = await waitForServerState(child.pid);
 		if (state) {
 			console.log(`Cliclaw started in background: ${state.url}`);
+			printAccessUrls(state);
 			console.log(`Log file: ${logFile}`);
 			return;
 		}
@@ -328,6 +339,7 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 		const retryState = await waitForServerState(child.pid, 3000);
 		if (retryState) {
 			console.log(`Cliclaw started in background: ${retryState.url}`);
+			printAccessUrls(retryState);
 			console.log(`Log file: ${logFile}`);
 			return;
 		}
@@ -958,6 +970,36 @@ async function main(): Promise<void> {
 		locale,
 	});
 
+	// ─── Start mDNS / Bonjour advertising ───────────────
+	let mdnsHandle: MdnsHandle | null = null;
+	let mdnsUrl: string | undefined;
+	let lanUrls: string[] = [];
+	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
+	const mdnsName = args.mdnsName ?? config.mdns.name;
+	if (mdnsEnabled) {
+		if (!isValidMdnsName(mdnsName)) {
+			logger.warn("main", `Invalid mDNS name "${mdnsName}", skipping advertisement`);
+		} else if (args.host === "127.0.0.1" || args.host === "localhost") {
+			logger.warn("main", "mDNS skipped: server is bound to localhost only");
+		} else {
+			try {
+				mdnsHandle = startMdns({ name: mdnsName, port: serverInstance.port });
+				mdnsUrl = `http://${mdnsHandle.hostname}:${serverInstance.port}`;
+				lanUrls = mdnsHandle.ips.map((ip) => `http://${ip}:${serverInstance.port}`);
+				console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(mdnsUrl)}`);
+				if (lanUrls.length > 0) {
+					console.log(`${chalk.dim("Also at:  ")}${lanUrls.join(", ")}`);
+				}
+				logger.info(
+					"main",
+					`mDNS advertising ${mdnsHandle.hostname} on port ${serverInstance.port} via ${mdnsHandle.backend}`,
+				);
+			} catch (err: any) {
+				logger.warn("main", `mDNS advertising failed (non-fatal): ${err?.message ?? err}`);
+			}
+		}
+	}
+
 	// Notify connected clients about restored conversation
 	if (restoredMessageCount > 0) {
 		// Delay slightly to let WebSocket clients connect first
@@ -977,6 +1019,8 @@ async function main(): Promise<void> {
 		url: `http://${args.host}:${serverInstance.port}`,
 		cwd: args.cwd,
 		startedAt: new Date().toISOString(),
+		mdnsUrl,
+		lanUrls,
 	});
 
 	// ─── Graceful Shutdown ──────────────────────────────
@@ -1000,6 +1044,15 @@ async function main(): Promise<void> {
 
 		// Preserve cliclaw-* tmux sessions across shutdown/restart — they are
 		// persisted in AgentStore and will be rediscovered on next startup.
+
+		// Stop mDNS advertising
+		if (mdnsHandle) {
+			try {
+				await mdnsHandle.stop();
+			} catch {
+				/* best-effort */
+			}
+		}
 
 		// Close server
 		await serverInstance.close();
