@@ -393,6 +393,69 @@ body.resizing-execution-panel {
 	text-align: center;
 }
 
+/* Thinking indicator — shimmer variant: pulsing blob + sweeping label + mono timer */
+@keyframes cliShimmer {
+	0%   { background-position: 200% 0; }
+	100% { background-position: -200% 0; }
+}
+@keyframes cliBlobPulse {
+	0%, 100% { transform: scale(1);    opacity: .9; }
+	50%      { transform: scale(0.86); opacity: 1;  }
+}
+
+.thinking-indicator {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 2px 0;
+	margin-bottom: 12px;
+	white-space: nowrap;
+}
+
+.thinking-indicator .thinking-blob {
+	color: var(--accent);
+	flex-shrink: 0;
+	transform-origin: center;
+	animation: cliBlobPulse 1.6s ease-in-out infinite;
+}
+
+.thinking-indicator .thinking-label {
+	font-size: 13.5px;
+	font-weight: 500;
+	background: linear-gradient(
+		90deg,
+		var(--text-muted) 0%,
+		var(--text-muted) 35%,
+		var(--accent) 50%,
+		var(--text-muted) 65%,
+		var(--text-muted) 100%
+	);
+	background-size: 200% 100%;
+	-webkit-background-clip: text;
+	background-clip: text;
+	-webkit-text-fill-color: transparent;
+	color: transparent;
+	animation: cliShimmer 2.4s linear infinite;
+}
+
+.thinking-indicator .thinking-timer {
+	font-size: 11px;
+	color: var(--text-muted);
+	font-family: var(--font-mono);
+	letter-spacing: .02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.thinking-indicator .thinking-blob,
+	.thinking-indicator .thinking-label {
+		animation: none;
+	}
+	.thinking-indicator .thinking-label {
+		color: var(--text-muted);
+		-webkit-text-fill-color: var(--text-muted);
+	}
+}
+
 /* Markdown styles inside assistant bubbles */
 .msg.assistant code,
 .msg.user code {

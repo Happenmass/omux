@@ -28,7 +28,7 @@ describe("CodexAdapter.launch", () => {
 		vi.useRealTimers();
 	});
 
-	it("should launch with plain 'codex' command for fresh session", async () => {
+	it("should launch with 'codex --full-auto' command for fresh session", async () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
@@ -38,11 +38,11 @@ describe("CodexAdapter.launch", () => {
 		await launchPromise;
 
 		expect(bridge.createSession).toHaveBeenCalledWith("cliclaw-test", { cwd: "/tmp/test" });
-		expect(bridge.sendText).toHaveBeenCalledWith("cliclaw-test:0.0", "codex");
+		expect(bridge.sendText).toHaveBeenCalledWith("cliclaw-test:0.0", "codex --full-auto");
 		expect(bridge.sendEnter).toHaveBeenCalledWith("cliclaw-test:0.0");
 	});
 
-	it("should launch with 'codex resume <id>' subcommand for resume", async () => {
+	it("should launch with 'codex resume <id> --full-auto' subcommand for resume", async () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
@@ -54,7 +54,7 @@ describe("CodexAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"cliclaw-test:0.0",
-			"codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6",
+			"codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --full-auto",
 		);
 	});
 });

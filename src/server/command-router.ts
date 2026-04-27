@@ -136,6 +136,12 @@ export class CommandRouter {
 			await this.mainAgent.waitForIdle();
 		}
 
+		// Pre-flight notice: clear() does a memory-flush LLM call that can take seconds
+		this.broadcaster.broadcast({
+			type: "system",
+			message: "正在清理对话并提取记忆...",
+		});
+
 		// Clear context (runs memory flush → clears memory → clears SQLite)
 		await this.contextManager.clear();
 		this.uiEventStore?.clear();
@@ -182,6 +188,12 @@ export class CommandRouter {
 			this.signalRouter.stop();
 			await this.mainAgent.waitForIdle();
 		}
+
+		// Pre-flight notice: reset triggers reload + memory-flush LLM call
+		this.broadcaster.broadcast({
+			type: "system",
+			message: "正在重置：重新加载提示词与技能，并清理对话...",
+		});
 
 		// Reload prompts, skills, tools, and commands
 		if (this.onReset) {
