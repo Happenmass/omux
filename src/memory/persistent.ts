@@ -1,5 +1,5 @@
-import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 
 // ─── Constants ──────────────────────────────────────────
 
@@ -23,6 +23,62 @@ const TEMPLATE = `# Memory
 
 ## Active Notes
 `;
+
+// ─── Project Root Validation ────────────────────────────
+
+const PROJECT_MARKERS = [
+	".git",
+	".cliclaw",
+	"package.json",
+	"pyproject.toml",
+	"Cargo.toml",
+	"go.mod",
+	"pom.xml",
+	"build.gradle",
+	"build.gradle.kts",
+	"composer.json",
+	"Gemfile",
+	"mix.exs",
+	"CMakeLists.txt",
+];
+
+export type ProjectRootValidation =
+	| { ok: true }
+	| { ok: false; reason: "not_absolute" | "not_found" | "not_directory" | "no_marker"; detail: string };
+
+/**
+ * Validate that a path is an absolute, existing directory containing a
+ * recognizable project marker (`.git`, `package.json`, `.cliclaw`, ...).
+ * Used by `persistent_memory` to prevent the agent from writing to the
+ * wrong directory when it supplies an explicit `project_dir`.
+ */
+export async function validateProjectDir(dir: string): Promise<ProjectRootValidation> {
+	if (!isAbsolute(dir)) {
+		return { ok: false, reason: "not_absolute", detail: dir };
+	}
+	try {
+		await access(dir);
+	} catch {
+		return { ok: false, reason: "not_found", detail: dir };
+	}
+	try {
+		const st = await stat(dir);
+		if (!st.isDirectory()) {
+			return { ok: false, reason: "not_directory", detail: dir };
+		}
+	} catch {
+		return { ok: false, reason: "not_found", detail: dir };
+	}
+	for (const marker of PROJECT_MARKERS) {
+		try {
+			await access(join(dir, marker));
+			return { ok: true };
+		} catch {
+			// keep looking
+		}
+	}
+	return { ok: false, reason: "no_marker", detail: dir };
+}
 
 // ─── Read Operations ────────────────────────────────────
 

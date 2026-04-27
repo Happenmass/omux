@@ -232,9 +232,7 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent([textResponse("Hello!")]);
 			await agent.handleMessage("hi");
 
-			expect(mockCtx.addMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ role: "user", content: "hi" }),
-			);
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "user", content: "hi" }));
 		});
 
 		it("should stream text response and stay idle", async () => {
@@ -242,9 +240,7 @@ describe("MainAgent State Machine", () => {
 			await agent.handleMessage("hi");
 
 			// Should broadcast deltas
-			const deltaCalls = mockBroadcaster.broadcast.mock.calls.filter(
-				(c: any) => c[0].type === "assistant_delta",
-			);
+			const deltaCalls = mockBroadcaster.broadcast.mock.calls.filter((c: any) => c[0].type === "assistant_delta");
 			expect(deltaCalls.length).toBeGreaterThan(0);
 
 			// Should broadcast assistant_done
@@ -255,9 +251,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should enter executing state when LLM returns tool calls", async () => {
-			const agent = setupAgent([
-				toolCallResponse("mark_failed", { reason: "test" }),
-			]);
+			const agent = setupAgent([toolCallResponse("mark_failed", { reason: "test" })]);
 
 			await agent.handleMessage("do something");
 
@@ -265,9 +259,7 @@ describe("MainAgent State Machine", () => {
 			expect(agent.state).toBe("idle");
 
 			// Should have been in executing state (verified by state broadcast)
-			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter(
-				(c: any) => c[0].type === "state",
-			);
+			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter((c: any) => c[0].type === "state");
 			expect(stateCalls).toContainEqual([{ type: "state", state: "executing", queueSize: expect.any(Number) }]);
 			expect(stateCalls).toContainEqual([{ type: "state", state: "idle", queueSize: expect.any(Number) }]);
 		});
@@ -426,7 +418,6 @@ describe("MainAgent State Machine", () => {
 				summary: "Adding JWT auth",
 			});
 		});
-
 	});
 
 	describe("stopRequested between rounds", () => {
@@ -463,18 +454,14 @@ describe("MainAgent State Machine", () => {
 
 	describe("terminal tools return to IDLE", () => {
 		it("mark_failed should return to idle", async () => {
-			const agent = setupAgent([
-				toolCallResponse("mark_failed", { reason: "Cannot proceed" }),
-			]);
+			const agent = setupAgent([toolCallResponse("mark_failed", { reason: "Cannot proceed" })]);
 
 			await agent.handleMessage("do task");
 			expect(agent.state).toBe("idle");
 		});
 
 		it("escalate_to_human should return to idle", async () => {
-			const agent = setupAgent([
-				toolCallResponse("escalate_to_human", { reason: "Need confirmation" }),
-			]);
+			const agent = setupAgent([toolCallResponse("escalate_to_human", { reason: "Need confirmation" })]);
 
 			await agent.handleMessage("do dangerous thing");
 			expect(agent.state).toBe("idle");
@@ -486,11 +473,7 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_agent", {}, "tc0"),
-					toolCallResponse(
-						"interrupt_agent",
-						{ summary: "Agent is modifying wrong file" },
-						"tc1",
-					),
+					toolCallResponse("interrupt_agent", { summary: "Agent is modifying wrong file" }, "tc1"),
 					textResponse("Interrupted, will redirect."),
 				],
 				{},
@@ -534,10 +517,7 @@ describe("MainAgent State Machine", () => {
 
 	describe("compression check between tool rounds", () => {
 		it("should trigger compression when threshold exceeded", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_agent", {}, "tc0"),
-				textResponse("Done"),
-			]);
+			const agent = setupAgent([toolCallResponse("create_agent", {}, "tc0"), textResponse("Done")]);
 
 			mockCtx.shouldCompress.mockReturnValue(true);
 
@@ -549,9 +529,7 @@ describe("MainAgent State Machine", () => {
 
 	describe("error recovery", () => {
 		it("should recover to idle when handleMessage fails during executing", async () => {
-			const agent = setupAgent([
-				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
-			]);
+			const agent = setupAgent([toolCallResponse("inspect_agent", { lines: 100 }, "tc1")]);
 			agent.setPaneTarget("test:0.0");
 
 			mockCtx.shouldRunMemoryFlush.mockReturnValueOnce(false).mockReturnValue(true);
@@ -560,14 +538,20 @@ describe("MainAgent State Machine", () => {
 			// dispatchNext catches and recovers from errors internally
 			await agent.handleMessage("check status");
 			expect(agent.state).toBe("idle");
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "executing", queueSize: expect.any(Number) });
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "state", state: "idle", queueSize: expect.any(Number) });
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
+				type: "state",
+				state: "executing",
+				queueSize: expect.any(Number),
+			});
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
+				type: "state",
+				state: "idle",
+				queueSize: expect.any(Number),
+			});
 		});
 
 		it("should recover to idle when handleResume fails", async () => {
-			const agent = setupAgent([
-				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
-			]);
+			const agent = setupAgent([toolCallResponse("inspect_agent", { lines: 100 }, "tc1")]);
 			agent.setPaneTarget("test:0.0");
 
 			mockCtx.shouldRunMemoryFlush.mockReturnValue(true);
@@ -614,10 +598,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should succeed without exitAgent by falling back to tmux kill", async () => {
-			const agent = setupAgent([
-				toolCallResponse("kill_agent", { summary: "Exiting" }),
-				textResponse("Killed."),
-			]);
+			const agent = setupAgent([toolCallResponse("kill_agent", { summary: "Exiting" }), textResponse("Killed.")]);
 			agent.setPaneTarget("test:0.0");
 
 			// Ensure no exitAgent on adapter
@@ -632,10 +613,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should succeed even if exitAgent throws", async () => {
-			const agent = setupAgent([
-				toolCallResponse("kill_agent", { summary: "Exiting" }),
-				textResponse("Killed."),
-			]);
+			const agent = setupAgent([toolCallResponse("kill_agent", { summary: "Exiting" }), textResponse("Killed.")]);
 			agent.setPaneTarget("test:0.0");
 
 			mockAdapter.exitAgent = vi.fn().mockRejectedValue(new Error("agent crashed"));
@@ -675,7 +653,8 @@ describe("MainAgent State Machine", () => {
 				// Tool result should contain the memory content
 				const addMessageCalls = mockCtx.addMessage.mock.calls;
 				const toolResultCall = addMessageCalls.find(
-					(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("Test user"),
+					(c: any) =>
+						c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("Test user"),
 				);
 				expect(toolResultCall).toBeTruthy();
 			} finally {
@@ -699,6 +678,7 @@ describe("MainAgent State Machine", () => {
 						toolCallResponse("persistent_memory", {
 							action: "update",
 							scope: "project",
+							project_dir: workspaceDir,
 							section: "active_notes",
 							operation: "append",
 							content: "Remember this",
@@ -710,8 +690,142 @@ describe("MainAgent State Machine", () => {
 
 				await agent.handleMessage("remember this");
 
-				// Should have called updateModule to hot-reload
+				// Should have called updateModule to hot-reload (project_dir matches launch workspace)
 				expect(mockCtx.updateModule).toHaveBeenCalledWith("memory", expect.stringContaining("Remember this"));
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should reject project scope without project_dir", async () => {
+			const { mkdtemp, rm, mkdir } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const workspaceDir = join(tempDir, "workspace");
+				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", {
+							action: "update",
+							scope: "project",
+							section: "active_notes",
+							operation: "append",
+							content: "should fail",
+						}),
+						textResponse("Tried."),
+					],
+					{ globalDir, workspaceDir },
+				);
+
+				await agent.handleMessage("remember this");
+
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultCall = addMessageCalls.find(
+					(c: any) =>
+						c[0].role === "tool" &&
+						typeof c[0].content === "string" &&
+						c[0].content.includes("'project_dir' is required"),
+				);
+				expect(toolResultCall).toBeTruthy();
+				// Hot-reload must not run on a rejected write
+				expect(mockCtx.updateModule).not.toHaveBeenCalled();
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should write to a different project without polluting current session memory", async () => {
+			const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const workspaceDir = join(tempDir, "workspace");
+				const otherProject = join(tempDir, "other-project");
+				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+				await mkdir(otherProject, { recursive: true });
+				// Project marker so validation passes
+				await writeFile(join(otherProject, "package.json"), "{}");
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", {
+							action: "update",
+							scope: "project",
+							project_dir: otherProject,
+							section: "active_notes",
+							operation: "append",
+							content: "Cross-project note",
+						}),
+						textResponse("Recorded."),
+					],
+					{ globalDir, workspaceDir },
+				);
+
+				await agent.handleMessage("remember in other project");
+
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultCall = addMessageCalls.find(
+					(c: any) =>
+						c[0].role === "tool" &&
+						typeof c[0].content === "string" &&
+						c[0].content.includes("current session memory not modified"),
+				);
+				expect(toolResultCall).toBeTruthy();
+				// Cross-project writes do not refresh the current {{memory}} module
+				expect(mockCtx.updateModule).not.toHaveBeenCalled();
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should reject project_dir that lacks a project marker", async () => {
+			const { mkdtemp, rm, mkdir } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const workspaceDir = join(tempDir, "workspace");
+				const bareDir = join(tempDir, "bare");
+				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+				await mkdir(bareDir, { recursive: true });
+				// Intentionally no project marker
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", {
+							action: "update",
+							scope: "project",
+							project_dir: bareDir,
+							section: "active_notes",
+							operation: "append",
+							content: "should be rejected",
+						}),
+						textResponse("Done."),
+					],
+					{ globalDir, workspaceDir },
+				);
+
+				await agent.handleMessage("remember somewhere weird");
+
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultCall = addMessageCalls.find(
+					(c: any) =>
+						c[0].role === "tool" &&
+						typeof c[0].content === "string" &&
+						c[0].content.includes("no project marker"),
+				);
+				expect(toolResultCall).toBeTruthy();
+				expect(mockCtx.updateModule).not.toHaveBeenCalled();
 			} finally {
 				await rm(tempDir, { recursive: true, force: true });
 			}
@@ -809,9 +923,44 @@ describe("MainAgent State Machine", () => {
 			// Verify the return output contains the agent name
 			const addMessageCalls = mockCtx.addMessage.mock.calls;
 			const toolResultMsg = addMessageCalls.find(
-				(c: any) => c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("cliclaw-backend"),
+				(c: any) =>
+					c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("cliclaw-backend"),
 			);
 			expect(toolResultMsg).toBeTruthy();
+		});
+
+		it("should return target project's MEMORY.md content in create_agent result", async () => {
+			const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "create-agent-mem-"));
+
+			try {
+				await mkdir(join(tempDir, ".cliclaw"), { recursive: true });
+				await writeFile(
+					join(tempDir, ".cliclaw", "MEMORY.md"),
+					"# Memory\n\n## Project Conventions\n- Always use snake_case in DB columns\n",
+				);
+
+				const agent = setupAgent([
+					toolCallResponse("create_agent", { agent_name: "withmem", working_dir: tempDir }),
+					textResponse("Created."),
+				]);
+
+				await agent.handleMessage("create agent");
+
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultMsg = addMessageCalls.find(
+					(c: any) =>
+						c[0].role === "tool" &&
+						typeof c[0].content === "string" &&
+						c[0].content.includes("snake_case in DB columns") &&
+						c[0].content.includes("Project memory at"),
+				);
+				expect(toolResultMsg).toBeTruthy();
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
 		});
 
 		it("should pass resumeId to adapter.launch when resume_id is provided", async () => {
@@ -849,9 +998,7 @@ describe("MainAgent State Machine", () => {
 			);
 
 			// Adapter returns different pane targets for each agent
-			mockAdapter.launch
-				.mockResolvedValueOnce("cliclaw-backend:0.0")
-				.mockResolvedValueOnce("cliclaw-frontend:0.0");
+			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0").mockResolvedValueOnce("cliclaw-frontend:0.0");
 
 			await agent.handleMessage("multi session task");
 
@@ -881,11 +1028,7 @@ describe("MainAgent State Machine", () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_agent", { agent_name: "backend" }, "tc1"),
-					toolCallResponse(
-						"send_to_agent",
-						{ prompt: "test", summary: "test", agent_id: "nonexistent" },
-						"tc2",
-					),
+					toolCallResponse("send_to_agent", { prompt: "test", summary: "test", agent_id: "nonexistent" }, "tc2"),
 					textResponse("Error handled."),
 				],
 				{},
@@ -927,9 +1070,7 @@ describe("MainAgent State Machine", () => {
 				{ withMonitor: true },
 			);
 
-			mockAdapter.launch
-				.mockResolvedValueOnce("cliclaw-backend:0.0")
-				.mockResolvedValueOnce("cliclaw-frontend:0.0");
+			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0").mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			// create_agent x2 checks hasAgent (false), then kill_agent checks (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -981,9 +1122,7 @@ describe("MainAgent State Machine", () => {
 				{ withMonitor: true },
 			);
 
-			mockAdapter.launch
-				.mockResolvedValueOnce("cliclaw-backend:0.0")
-				.mockResolvedValueOnce("cliclaw-frontend:0.0");
+			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0").mockResolvedValueOnce("cliclaw-frontend:0.0");
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
 			// create_agent x2 (false), kill_agent (true)
 			mockBridge.hasSession.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -1014,9 +1153,7 @@ describe("MainAgent State Machine", () => {
 				{ withMonitor: true },
 			);
 
-			mockAdapter.launch
-				.mockResolvedValueOnce("cliclaw-backend:0.0")
-				.mockResolvedValueOnce("cliclaw-frontend:0.0");
+			mockAdapter.launch.mockResolvedValueOnce("cliclaw-backend:0.0").mockResolvedValueOnce("cliclaw-frontend:0.0");
 
 			await agent.handleMessage("switch active");
 
@@ -1043,10 +1180,7 @@ describe("MainAgent State Machine", () => {
 
 	describe("list_agent_tasks tool", () => {
 		it("returns empty message when no tasks and no pending events", async () => {
-			const agent = setupAgent([
-				toolCallResponse("list_agent_tasks", {}, "tc1"),
-				textResponse("No tasks running."),
-			]);
+			const agent = setupAgent([toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("No tasks running.")]);
 
 			await agent.handleMessage("what agents are running?");
 
@@ -1062,10 +1196,7 @@ describe("MainAgent State Machine", () => {
 
 		it("returns active tasks when agent monitor has tasks", async () => {
 			const agent = setupAgent(
-				[
-					toolCallResponse("list_agent_tasks", {}, "tc1"),
-					textResponse("Session A is waiting for input."),
-				],
+				[toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("Session A is waiting for input.")],
 				{},
 				{ withMonitor: true },
 			);
@@ -1088,9 +1219,7 @@ describe("MainAgent State Machine", () => {
 			const calls = (mockCtx.addMessage as any).mock.calls;
 			const toolResultMsg = calls.find(
 				(c: any) =>
-					c[0].role === "tool" &&
-					typeof c[0].content === "string" &&
-					c[0].content.includes("cliclaw-test-1"),
+					c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("cliclaw-test-1"),
 			);
 			expect(toolResultMsg).toBeDefined();
 			expect(toolResultMsg[0].content).toContain("waiting_input");
@@ -1283,10 +1412,7 @@ describe("MainAgent State Machine", () => {
 	describe("onAgentChange callback", () => {
 		it("should call onAgentChange after create_agent", async () => {
 			const callback = vi.fn();
-			const agent = setupAgent([
-				toolCallResponse("create_agent", { agent_name: "test" }),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent([toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")]);
 			agent.setOnAgentChange(callback);
 
 			await agent.handleMessage("create session");
@@ -1339,10 +1465,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should not throw when no callback is registered", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_agent", { agent_name: "test" }),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent([toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")]);
 
 			// No setOnAgentChange — should not throw
 			await expect(agent.handleMessage("create session")).resolves.toBeUndefined();
@@ -1465,9 +1588,7 @@ describe("MainAgent State Machine", () => {
 			// Verify the agent event was added as a user message with [AGENT_EVENT] prefix
 			const agentEventMessages = mockCtx.addMessage.mock.calls.filter(
 				(c: any) =>
-					c[0].role === "user" &&
-					typeof c[0].content === "string" &&
-					c[0].content.includes("[AGENT_EVENT"),
+					c[0].role === "user" && typeof c[0].content === "string" && c[0].content.includes("[AGENT_EVENT"),
 			);
 			expect(agentEventMessages.length).toBe(1);
 
@@ -1487,10 +1608,9 @@ describe("MainAgent State Machine", () => {
 
 		it("should call agentStore.saveAgent on create_agent", async () => {
 			const mockAgentStore = createMockAgentStore();
-			const agent = setupAgent(
-				[toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")],
-				{ agentStore: mockAgentStore },
-			);
+			const agent = setupAgent([toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")], {
+				agentStore: mockAgentStore,
+			});
 
 			await agent.handleMessage("create session");
 
@@ -1554,7 +1674,10 @@ describe("MainAgent State Machine", () => {
 				{ agentStore: mockAgentStore },
 			);
 			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
-			mockBridge.listCliclawAgents.mockResolvedValue([{ name: "cliclaw-s1", windows: 1, attached: false }, { name: "cliclaw-s2", windows: 1, attached: false }]);
+			mockBridge.listCliclawAgents.mockResolvedValue([
+				{ name: "cliclaw-s1", windows: 1, attached: false },
+				{ name: "cliclaw-s2", windows: 1, attached: false },
+			]);
 			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
 
 			await agent.handleMessage("create two and kill all");
@@ -1564,10 +1687,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("should not fail when agentStore is not provided", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_agent", { agent_name: "test" }),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent([toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")]);
 			// No agentStore — should not throw
 			await expect(agent.handleMessage("create session")).resolves.toBeUndefined();
 		});
@@ -1597,10 +1717,7 @@ describe("MainAgent State Machine", () => {
 		it("should allow restored agents to be used by send_to_agent", async () => {
 			// Restore an agent then try to send_to_agent — it should route to the restored agent
 			const agent = setupAgent(
-				[
-					toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }),
-					textResponse("Done."),
-				],
+				[toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }), textResponse("Done.")],
 				{},
 				{ withMonitor: true },
 			);
@@ -1609,11 +1726,7 @@ describe("MainAgent State Machine", () => {
 			await agent.handleMessage("send hello to agent");
 
 			// sendPrompt should have been called on the restored agent's pane
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(
-				mockBridge,
-				"cliclaw-restored:0.0",
-				expect.any(String),
-			);
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-restored:0.0", expect.any(String));
 		});
 
 		it("should allow restored agents to be killed", async () => {
@@ -1623,10 +1736,7 @@ describe("MainAgent State Machine", () => {
 				loadAgents: vi.fn().mockReturnValue([]),
 			} as any;
 			const agent = setupAgent(
-				[
-					toolCallResponse("kill_agent", { agent_id: "cliclaw-restored", summary: "kill" }),
-					textResponse("Done."),
-				],
+				[toolCallResponse("kill_agent", { agent_id: "cliclaw-restored", summary: "kill" }), textResponse("Done.")],
 				{ agentStore: mockAgentStore },
 				{ withMonitor: true },
 			);
@@ -1845,10 +1955,7 @@ describe("MainAgent State Machine", () => {
 
 		it("resolveAgent should block send_to_agent for taken-over agent", async () => {
 			const agent = setupAgent(
-				[
-					toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }),
-					textResponse("Done."),
-				],
+				[toolCallResponse("send_to_agent", { prompt: "hello", summary: "test" }), textResponse("Done.")],
 				{},
 				{ withMonitor: true },
 			);
@@ -1886,10 +1993,7 @@ describe("MainAgent State Machine", () => {
 	describe("agent recovery across restart", () => {
 		it("restoreAgent should make agents visible via list_agents tool", async () => {
 			// Simulate startup recovery: restore an agent, then use list_agents
-			const agent = setupAgent(
-				[toolCallResponse("list_agents", {}), textResponse("Found agents.")],
-				{},
-			);
+			const agent = setupAgent([toolCallResponse("list_agents", {}), textResponse("Found agents.")], {});
 
 			// list_agents queries tmux via bridge.listCliclawAgents()
 			mockBridge.listCliclawAgents.mockResolvedValue([
@@ -1912,10 +2016,7 @@ describe("MainAgent State Machine", () => {
 		});
 
 		it("restoreAgent should allow inspect_agent to work on recovered agent", async () => {
-			const agent = setupAgent(
-				[toolCallResponse("inspect_agent", { lines: 50 }), textResponse("Got it.")],
-				{},
-			);
+			const agent = setupAgent([toolCallResponse("inspect_agent", { lines: 50 }), textResponse("Got it.")], {});
 			agent.restoreAgent("cliclaw-recovered", {
 				paneTarget: "cliclaw-recovered:0.0",
 				workingDir: "/project",
@@ -1942,11 +2043,7 @@ describe("MainAgent State Machine", () => {
 
 			await agent.handleMessage("continue work on recovered agent");
 
-			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(
-				mockBridge,
-				"cliclaw-recovered:0.0",
-				"continue work",
-			);
+			expect(mockAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "cliclaw-recovered:0.0", "continue work");
 		});
 
 		it("multiple restored agents should all be accessible", () => {
@@ -1957,11 +2054,7 @@ describe("MainAgent State Machine", () => {
 
 			const agents = agent.getActiveAgents();
 			expect(agents).toHaveLength(3);
-			expect(agents.map((a: any) => a.agentId).sort()).toEqual([
-				"cliclaw-a",
-				"cliclaw-b",
-				"cliclaw-c",
-			]);
+			expect(agents.map((a: any) => a.agentId).sort()).toEqual(["cliclaw-a", "cliclaw-b", "cliclaw-c"]);
 			// Last restored should be active
 			expect((agent as any).activeAgentId).toBe("cliclaw-c");
 		});
