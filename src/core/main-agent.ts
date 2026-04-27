@@ -16,7 +16,12 @@ import type {
 	ToolDefinition,
 } from "../llm/types.js";
 import { buildCategoryPathFilter } from "../memory/category.js";
-import { loadPersistentMemory, readPersistentMemory, updatePersistentMemory } from "../memory/persistent.js";
+import {
+	loadPersistentMemory,
+	readPersistentMemory,
+	updatePersistentMemory,
+	validateProjectDir,
+} from "../memory/persistent.js";
 import { searchMemory } from "../memory/search.js";
 import { isMemoryPath, type MemoryStore } from "../memory/store.js";
 import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
@@ -289,7 +294,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "persistent_memory",
 		description:
-			"Read or update the persistent MEMORY.md that is always loaded into your system prompt. Use this when the user asks you to remember/forget something, or when you need to review current memories.",
+			"Read or update the persistent MEMORY.md that is always loaded into your system prompt. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -301,7 +306,12 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 				scope: {
 					type: "string",
 					enum: ["project", "global"],
-					description: "project: workspace-level. global: ~/.cliclaw/. Default: project.",
+					description: "project: workspace-level (requires project_dir). global: ~/.cliclaw/. Default: project.",
+				},
+				project_dir: {
+					type: "string",
+					description:
+						"Absolute path to the project root. REQUIRED when scope='project'. Must be an existing directory containing a project marker (.git, package.json, pyproject.toml, .cliclaw, etc.). Use exec_command to verify the path first if unsure. Ignored when scope='global'.",
 				},
 				section: {
 					type: "string",
@@ -1330,16 +1340,44 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			case "persistent_memory": {
 				const action = args.action as string;
 				const scope = (args.scope as string) ?? "project";
-				const filePath =
-					scope === "global"
-						? join(this.globalDir, "MEMORY.md")
-						: join(this.workspaceDir, ".cliclaw", "MEMORY.md");
+
+				let filePath: string;
+				let resolvedProjectDir: string | undefined;
+
+				if (scope === "global") {
+					filePath = join(this.globalDir, "MEMORY.md");
+				} else {
+					const projectDir = args.project_dir as string | undefined;
+					if (!projectDir) {
+						return {
+							output:
+								"Error: 'project_dir' is required when scope='project'. Pass the absolute path to the project root (the directory containing .git/package.json/pyproject.toml/etc.). Use exec_command to confirm the path before retrying.",
+							terminal: false,
+						};
+					}
+					const validation = await validateProjectDir(projectDir);
+					if (!validation.ok) {
+						const reason =
+							validation.reason === "not_absolute"
+								? `must be an absolute path, got: ${validation.detail}`
+								: validation.reason === "not_found"
+									? `directory does not exist: ${validation.detail}`
+									: `no project marker (.git, package.json, pyproject.toml, .cliclaw, etc.) found in ${validation.detail}`;
+						return {
+							output: `Error: invalid project_dir — ${reason}. Verify the path with exec_command first.`,
+							terminal: false,
+						};
+					}
+					resolvedProjectDir = projectDir;
+					filePath = join(projectDir, ".cliclaw", "MEMORY.md");
+				}
 
 				try {
 					if (action === "read") {
 						const content = await readPersistentMemory(filePath);
 						if (!content) {
-							return { output: `No MEMORY.md found at ${scope} scope.`, terminal: false };
+							const where = scope === "global" ? "global scope" : `project ${resolvedProjectDir}`;
+							return { output: `No MEMORY.md found at ${where}.`, terminal: false };
 						}
 						return { output: content, terminal: false };
 					}
@@ -1358,12 +1396,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 					await updatePersistentMemory({ filePath, section, operation, content });
 
-					// Hot-reload: re-merge and update {{memory}} module
-					const merged = await loadPersistentMemory(this.globalDir, this.workspaceDir);
-					this.contextManager.updateModule("memory", merged);
+					// Hot-reload only when the write affects the launch-time workspace.
+					// Cross-project writes succeed silently to avoid polluting the current session's {{memory}}.
+					const affectsCurrentSession = scope === "global" || resolvedProjectDir === this.workspaceDir;
+					let suffix: string;
+					if (affectsCurrentSession) {
+						const merged = await loadPersistentMemory(this.globalDir, this.workspaceDir);
+						this.contextManager.updateModule("memory", merged);
+						suffix = "System prompt refreshed.";
+					} else {
+						suffix = `Wrote to ${resolvedProjectDir} (different from launch workspace ${this.workspaceDir}); current session memory not modified.`;
+					}
 
+					const target = scope === "global" ? "global" : (resolvedProjectDir ?? "project");
 					return {
-						output: `Persistent memory updated (${scope}/${section}/${operation}). System prompt refreshed.`,
+						output: `Persistent memory updated (${target}/${section}/${operation}). ${suffix}`,
 						terminal: false,
 					};
 				} catch (err: any) {
@@ -1471,8 +1518,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					logger.info("main-agent", `Agent created: ${agentName}, pane: ${paneTarget}, cwd: ${workingDir}`);
 					this.onAgentChange?.();
 					const mcpNote = mcpConfigPath ? ` MCP servers: ${rawMcpServers!.join(", ")}.` : "";
+
+					// Surface the target project's MEMORY.md to the main agent (not the sub agent).
+					// The main agent decides whether/how to fold this into the first send_to_agent prompt.
+					const projectMemoryPath = join(workingDir, ".cliclaw", "MEMORY.md");
+					const projectMemory = await readPersistentMemory(projectMemoryPath);
+					const memorySection = projectMemory.trim()
+						? `\n\n--- Project memory at ${projectMemoryPath} ---\n${projectMemory.trim()}\n--- end project memory ---\nThis is for YOUR reference only. The sub agent has not seen it. Decide whether to surface relevant excerpts in your first send_to_agent prompt, or to point the agent at the file path so it can read on demand.`
+						: `\n\nNo project memory found at ${projectMemoryPath}.`;
+
 					return {
-						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.`,
+						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}`,
 						terminal: false,
 					};
 				} catch (err: any) {
