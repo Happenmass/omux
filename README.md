@@ -44,8 +44,8 @@ A side benefit of this layered design: **you and the MainAgent can talk in one l
 
 ## Demo
 
-<video src="https://github.com/Happenmass/Cliclaw/releases/download/V2.2.3/cliclaw_demo.mp4" controls width="720">
-  Your browser does not support embedded video. <a href="https://github.com/Happenmass/Cliclaw/releases/download/V2.2.3/cliclaw_demo.mp4">Download the demo MP4</a>.
+<video src="https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo.mp4" controls width="720">
+  Your browser does not support embedded video. <a href="https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo.mp4">Download the demo MP4</a>.
 </video>
 
 ## A real example
