@@ -596,6 +596,10 @@ body.resizing-execution-panel {
 #send-btn:hover { opacity: .9; }
 #send-btn:active { opacity: .75; }
 
+#send-btn.is-stop {
+	background: var(--danger);
+}
+
 .input-meta {
 	display: flex;
 	justify-content: space-between;
@@ -812,9 +816,17 @@ body.resizing-execution-panel .execution-resize-handle::before {
 	overflow-x: auto;
 	min-width: 0;
 	scrollbar-width: none;
+	overscroll-behavior-x: contain;
 }
 #agent-tabs::-webkit-scrollbar {
 	display: none;
+}
+#agent-tabs.dragging {
+	cursor: grabbing;
+	user-select: none;
+}
+#agent-tabs.dragging .agent-tab {
+	cursor: grabbing;
 }
 
 .agent-tabs-spacer { flex: 1; min-width: 0; }

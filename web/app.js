@@ -401,6 +401,34 @@ function setConnectionStatus(status) {
 		statusText.textContent = "disconnected";
 	}
 	updateQueuePill();
+	updateSendButtonMode();
+}
+
+const SEND_BTN_ICON_SEND =
+	'<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
+	'<path d="M7 11.5V2.5M3 6.5L7 2.5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>' +
+	"</svg>";
+const SEND_BTN_ICON_STOP =
+	'<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">' +
+	'<rect x="3.5" y="3.5" width="7" height="7" rx="1.2" fill="currentColor"/>' +
+	"</svg>";
+
+function updateSendButtonMode() {
+	if (!sendBtn) return;
+	const stopMode = agentState === "executing";
+	sendBtn.classList.toggle("is-stop", stopMode);
+	if (stopMode) {
+		sendBtn.innerHTML = SEND_BTN_ICON_STOP + "Stop";
+		sendBtn.title = "停止当前任务";
+	} else {
+		sendBtn.innerHTML = SEND_BTN_ICON_SEND + "Send";
+		sendBtn.title = "发送";
+	}
+}
+
+function sendStopCommand() {
+	if (!ws || ws.readyState !== WebSocket.OPEN) return;
+	ws.send(JSON.stringify({ type: "command", name: "stop" }));
 }
 
 function updateQueuePill() {
@@ -1141,8 +1169,77 @@ function activeTabIsTakenOver() {
 	return !!(data && data.takenOver);
 }
 
+// On PC, the vertical mouse wheel does not scroll horizontally by default, and
+// without touch we also cannot pan #agent-tabs. So when tabs overflow the bar,
+// the only visible tab is the one currently in view. Enable two affordances:
+//   1. Vertical wheel → horizontal scroll (when tabs overflow).
+//   2. Click-and-drag panning for mouse users (touch already pans natively).
+// Click on a tab still selects it; drag is detected by a 4 px threshold and
+// suppresses the trailing click event so a drag-release does not switch tabs.
+function setupAgentTabsScroll() {
+	if (!agentTabsEl) return;
+
+	agentTabsEl.addEventListener(
+		"wheel",
+		function (e) {
+			if (agentTabsEl.scrollWidth <= agentTabsEl.clientWidth) return;
+			// Trackpad horizontal scroll already produces deltaX — let it through.
+			if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+			if (e.deltaY === 0) return;
+			e.preventDefault();
+			agentTabsEl.scrollLeft += e.deltaY;
+		},
+		{ passive: false },
+	);
+
+	let drag = null;
+	agentTabsEl.addEventListener("pointerdown", function (e) {
+		if (e.pointerType !== "mouse") return;
+		if (e.button !== 0) return;
+		drag = {
+			pointerId: e.pointerId,
+			startX: e.clientX,
+			startScrollLeft: agentTabsEl.scrollLeft,
+			moved: false,
+		};
+	});
+	agentTabsEl.addEventListener("pointermove", function (e) {
+		if (!drag || e.pointerId !== drag.pointerId) return;
+		const dx = e.clientX - drag.startX;
+		if (!drag.moved && Math.abs(dx) > 4) {
+			drag.moved = true;
+			try {
+				agentTabsEl.setPointerCapture(drag.pointerId);
+			} catch {}
+			agentTabsEl.classList.add("dragging");
+		}
+		if (drag.moved) {
+			agentTabsEl.scrollLeft = drag.startScrollLeft - dx;
+		}
+	});
+	function endDrag(e) {
+		if (!drag || e.pointerId !== drag.pointerId) return;
+		const wasMoving = drag.moved;
+		drag = null;
+		agentTabsEl.classList.remove("dragging");
+		if (wasMoving) {
+			// Swallow the click that fires after a drag-release so the user
+			// does not accidentally switch tabs at the end of a pan.
+			const swallow = function (ev) {
+				ev.stopPropagation();
+				ev.preventDefault();
+				agentTabsEl.removeEventListener("click", swallow, true);
+			};
+			agentTabsEl.addEventListener("click", swallow, true);
+		}
+	}
+	agentTabsEl.addEventListener("pointerup", endDrag);
+	agentTabsEl.addEventListener("pointercancel", endDrag);
+}
+
 function initApp() {
 	initDomReferences();
+	setupAgentTabsScroll();
 
 	const stored = getStoredTheme();
 	applyTheme(stored === "light" || stored === "dark" ? stored : null, undefined);
@@ -1361,7 +1458,15 @@ function initApp() {
 		}
 	});
 
-	sendBtn.addEventListener("click", sendMessage);
+	sendBtn.addEventListener("click", function () {
+		if (sendBtn.classList.contains("is-stop")) {
+			sendStopCommand();
+		} else {
+			sendMessage();
+		}
+	});
+
+	updateSendButtonMode();
 
 	inputEl.addEventListener("input", function () {
 		this.style.height = "auto";
