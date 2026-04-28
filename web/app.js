@@ -655,6 +655,7 @@ function showThinkingIndicator() {
 	thinkingEl = row;
 	thinkingStartedAt = startedAt;
 	const timerEl = ind.querySelector(".thinking-timer");
+	if (timerEl) timerEl.setAttribute("aria-hidden", "true");
 	thinkingTimer = setInterval(function () {
 		const sec = Math.floor((Date.now() - thinkingStartedAt) / 1000);
 		timerEl.textContent = "· " + sec + "s";
