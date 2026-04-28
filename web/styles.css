@@ -394,11 +394,11 @@ body.resizing-execution-panel {
 }
 
 /* Thinking indicator — shimmer variant: pulsing blob + sweeping label + mono timer */
-@keyframes cliShimmer {
+@keyframes cli-shimmer {
 	0%   { background-position: 200% 0; }
 	100% { background-position: -200% 0; }
 }
-@keyframes cliBlobPulse {
+@keyframes cli-blob-pulse {
 	0%, 100% { transform: scale(1);    opacity: .9; }
 	50%      { transform: scale(0.86); opacity: 1;  }
 }
@@ -416,7 +416,7 @@ body.resizing-execution-panel {
 	color: var(--accent);
 	flex-shrink: 0;
 	transform-origin: center;
-	animation: cliBlobPulse 1.6s ease-in-out infinite;
+	animation: cli-blob-pulse 1.6s ease-in-out infinite;
 }
 
 .thinking-indicator .thinking-label {
@@ -435,7 +435,7 @@ body.resizing-execution-panel {
 	background-clip: text;
 	-webkit-text-fill-color: transparent;
 	color: transparent;
-	animation: cliShimmer 2.4s linear infinite;
+	animation: cli-shimmer 2.4s linear infinite;
 }
 
 .thinking-indicator .thinking-timer {
