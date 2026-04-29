@@ -39,7 +39,6 @@ export class ContextManager {
 	private flushThreshold: number;
 	private toolResultRetention: number;
 
-	private promptTemplate: string;
 	private modules: Map<string, string> = new Map();
 	private conversation: LLMMessage[] = [];
 
@@ -74,13 +73,15 @@ export class ContextManager {
 			);
 		}
 
-		this.promptTemplate = this.promptLoader.getRaw("main-agent");
 	}
 
 	// ─── System Prompt ────────────────────────────────────
 
 	getSystemPrompt(): string {
-		let prompt = this.promptTemplate;
+		// Hot-reload main-agent.md from disk if its mtime changed, so prompt
+		// edits take effect on the next LLM round without requiring /reset.
+		this.promptLoader.reloadIfChanged?.("main-agent");
+		let prompt = this.promptLoader.getRaw("main-agent");
 		for (const [key, value] of this.modules) {
 			prompt = prompt.replaceAll(`{{${key}}}`, value);
 		}
@@ -93,9 +94,9 @@ export class ContextManager {
 		this.modules.set(key, value);
 	}
 
-	/** Reload the prompt template from PromptLoader (e.g. after prompt files change on disk). */
+	/** Reload the prompt template from disk (kept for /reset back-compat). */
 	reloadPromptTemplate(): void {
-		this.promptTemplate = this.promptLoader.getRaw("main-agent");
+		this.promptLoader.reloadIfChanged?.("main-agent");
 	}
 
 	// ─── Conversation Management ──────────────────────────

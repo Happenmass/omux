@@ -662,7 +662,7 @@ describe("MainAgent State Machine", () => {
 			}
 		});
 
-		it("should update persistent memory and hot-reload", async () => {
+		it("should hot-reload {{memory}} only on global writes", async () => {
 			const { mkdtemp, rm, mkdir } = await import("node:fs/promises");
 			const { tmpdir } = await import("node:os");
 			const { join } = await import("node:path");
@@ -671,15 +671,15 @@ describe("MainAgent State Machine", () => {
 			try {
 				const globalDir = join(tempDir, "global");
 				const workspaceDir = join(tempDir, "workspace");
+				await mkdir(globalDir, { recursive: true });
 				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
 
 				const agent = setupAgent(
 					[
 						toolCallResponse("persistent_memory", {
 							action: "update",
-							scope: "project",
-							project_dir: workspaceDir,
-							section: "active_notes",
+							scope: "global",
+							section: "user_profile",
 							operation: "append",
 							content: "Remember this",
 						}),
@@ -690,8 +690,53 @@ describe("MainAgent State Machine", () => {
 
 				await agent.handleMessage("remember this");
 
-				// Should have called updateModule to hot-reload (project_dir matches launch workspace)
 				expect(mockCtx.updateModule).toHaveBeenCalledWith("memory", expect.stringContaining("Remember this"));
+			} finally {
+				await rm(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should NOT hot-reload {{memory}} on project-scope writes (even when project_dir matches launch workspace)", async () => {
+			const { mkdtemp, rm, mkdir, writeFile } = await import("node:fs/promises");
+			const { tmpdir } = await import("node:os");
+			const { join } = await import("node:path");
+			const tempDir = await mkdtemp(join(tmpdir(), "pm-test-"));
+
+			try {
+				const globalDir = join(tempDir, "global");
+				const workspaceDir = join(tempDir, "workspace");
+				await mkdir(globalDir, { recursive: true });
+				await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+				// Project marker so validateProjectDir passes
+				await writeFile(join(workspaceDir, "package.json"), "{}");
+
+				const agent = setupAgent(
+					[
+						toolCallResponse("persistent_memory", {
+							action: "update",
+							scope: "project",
+							project_dir: workspaceDir,
+							section: "active_notes",
+							operation: "append",
+							content: "Project note",
+						}),
+						textResponse("Recorded."),
+					],
+					{ globalDir, workspaceDir },
+				);
+
+				await agent.handleMessage("remember this");
+
+				const addMessageCalls = mockCtx.addMessage.mock.calls;
+				const toolResultCall = addMessageCalls.find(
+					(c: any) =>
+						c[0].role === "tool" &&
+						typeof c[0].content === "string" &&
+						c[0].content.includes("current session memory not modified"),
+				);
+				expect(toolResultCall).toBeTruthy();
+				// Project writes never refresh the always-on {{memory}} module.
+				expect(mockCtx.updateModule).not.toHaveBeenCalled();
 			} finally {
 				await rm(tempDir, { recursive: true, force: true });
 			}

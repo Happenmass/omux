@@ -82,56 +82,36 @@ describe("persistent memory", () => {
 	// ─── loadPersistentMemory ───────────────────────────
 
 	describe("loadPersistentMemory", () => {
-		it("should merge global and project MEMORY.md", async () => {
+		it("should return global MEMORY.md content", async () => {
 			const globalDir = join(tempDir, "global");
-			const workspaceDir = join(tempDir, "workspace");
-
 			await mkdir(globalDir, { recursive: true });
-			await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
-
 			await writeFile(join(globalDir, "MEMORY.md"), "# Memory\n\n## User Profile\n- Chinese replies\n");
-			await writeFile(
-				join(workspaceDir, ".cliclaw", "MEMORY.md"),
-				"# Memory\n\n## Project Conventions\n- Use Biome\n",
-			);
 
-			const result = await loadPersistentMemory(globalDir, workspaceDir);
-			expect(result).toContain("<!-- global memory -->");
+			const result = await loadPersistentMemory(globalDir);
 			expect(result).toContain("Chinese replies");
-			expect(result).toContain("---");
-			expect(result).toContain("<!-- project memory -->");
-			expect(result).toContain("Use Biome");
-		});
-
-		it("should return only global when project does not exist", async () => {
-			const globalDir = join(tempDir, "global");
-			const workspaceDir = join(tempDir, "workspace");
-			await mkdir(globalDir, { recursive: true });
-
-			await writeFile(join(globalDir, "MEMORY.md"), "# Memory\n\n## User Profile\n- Global only\n");
-
-			const result = await loadPersistentMemory(globalDir, workspaceDir);
-			expect(result).toContain("Global only");
+			// No merge markers — project memory is no longer injected here.
 			expect(result).not.toContain("<!-- global memory -->");
-		});
-
-		it("should return only project when global does not exist", async () => {
-			const globalDir = join(tempDir, "global");
-			const workspaceDir = join(tempDir, "workspace");
-			await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
-
-			await writeFile(
-				join(workspaceDir, ".cliclaw", "MEMORY.md"),
-				"# Memory\n\n## Active Notes\n- Project only\n",
-			);
-
-			const result = await loadPersistentMemory(globalDir, workspaceDir);
-			expect(result).toContain("Project only");
 			expect(result).not.toContain("<!-- project memory -->");
 		});
 
-		it("should return empty string when neither exists", async () => {
-			const result = await loadPersistentMemory(join(tempDir, "a"), join(tempDir, "b"));
+		it("should ignore project-level MEMORY.md even if it exists", async () => {
+			const globalDir = join(tempDir, "global");
+			const workspaceDir = join(tempDir, "workspace");
+			await mkdir(globalDir, { recursive: true });
+			await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+			await writeFile(join(globalDir, "MEMORY.md"), "# Memory\n\n## User Profile\n- Global content\n");
+			await writeFile(
+				join(workspaceDir, ".cliclaw", "MEMORY.md"),
+				"# Memory\n\n## Project Conventions\n- Project content\n",
+			);
+
+			const result = await loadPersistentMemory(globalDir);
+			expect(result).toContain("Global content");
+			expect(result).not.toContain("Project content");
+		});
+
+		it("should return empty string when global does not exist", async () => {
+			const result = await loadPersistentMemory(join(tempDir, "a"));
 			expect(result).toBe("");
 		});
 	});

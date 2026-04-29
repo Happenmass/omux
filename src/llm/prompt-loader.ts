@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -39,12 +40,18 @@ export class PromptLoader {
 	private adapterCapabilities: Map<string, string> = new Map();
 	private globalContext: Record<string, string> = {};
 	private builtinDir: string;
+	private projectDir?: string;
+	// mtime cache for hot-reload (per prompt name): tracks the mtime of the
+	// last-read file across layered dirs, so we skip disk reads when nothing changed.
+	private mtimeCache: Map<string, number> = new Map();
 
 	constructor(builtinDir?: string) {
 		this.builtinDir = builtinDir ?? DEFAULT_BUILTIN_DIR;
 	}
 
 	async load(projectDir?: string): Promise<void> {
+		this.projectDir = projectDir;
+
 		// Layer 1: Built-in defaults from package's prompts/ directory
 		await this.loadFromDir(this.builtinDir);
 
@@ -57,6 +64,63 @@ export class PromptLoader {
 			const projectPromptsDir = join(projectDir, ".cliclaw", "prompts");
 			await this.loadFromDir(projectPromptsDir);
 		}
+
+		// Seed mtime cache so the first reloadIfChanged() call doesn't always re-read.
+		for (const name of Object.keys(PROMPT_FILE_MAP) as PromptName[]) {
+			const mtime = this.latestMtime(name);
+			if (mtime !== undefined) this.mtimeCache.set(name, mtime);
+		}
+	}
+
+	/**
+	 * Re-read a single prompt from disk if any layered file's mtime changed.
+	 * Synchronous so it can be called from getSystemPrompt() on every render.
+	 * Layered precedence (project > user > builtin) is preserved.
+	 * Failures are swallowed — caller falls back to the cached version.
+	 */
+	reloadIfChanged(name: PromptName): void {
+		const fileName = PROMPT_FILE_MAP[name];
+		if (!fileName) return;
+
+		const mtime = this.latestMtime(name);
+		if (mtime === undefined) return;
+		if (this.mtimeCache.get(name) === mtime) return;
+
+		const dirs = this.layeredDirs();
+		let content: string | undefined;
+		for (const dir of dirs) {
+			try {
+				content = readFileSync(join(dir, fileName), "utf-8");
+			} catch {
+				// File missing in this layer — skip
+			}
+		}
+		if (content !== undefined) {
+			this.prompts.set(name, content.trim());
+			this.mtimeCache.set(name, mtime);
+		}
+	}
+
+	private layeredDirs(): string[] {
+		const dirs = [this.builtinDir, join(homedir(), ".cliclaw", "prompts")];
+		if (this.projectDir) dirs.push(join(this.projectDir, ".cliclaw", "prompts"));
+		return dirs;
+	}
+
+	/** Max mtime (ms) across layered files for `name`, or undefined if none exist. */
+	private latestMtime(name: PromptName): number | undefined {
+		const fileName = PROMPT_FILE_MAP[name];
+		if (!fileName) return undefined;
+		let latest: number | undefined;
+		for (const dir of this.layeredDirs()) {
+			try {
+				const mtime = statSync(join(dir, fileName)).mtimeMs;
+				if (latest === undefined || mtime > latest) latest = mtime;
+			} catch {
+				// Missing in this layer
+			}
+		}
+		return latest;
 	}
 
 	resolve(name: PromptName, context?: Record<string, string>): string {
