@@ -294,7 +294,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "persistent_memory",
 		description:
-			"Read or update the persistent MEMORY.md that is always loaded into your system prompt. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
+			"Read or update a persistent MEMORY.md file. Global scope (`~/.cliclaw/MEMORY.md`) is the one that's always loaded into your system prompt under {{memory}}. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -1398,16 +1398,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 					await updatePersistentMemory({ filePath, section, operation, content });
 
-					// Hot-reload only when the write affects the launch-time workspace.
-					// Cross-project writes succeed silently to avoid polluting the current session's {{memory}}.
-					const affectsCurrentSession = scope === "global" || resolvedProjectDir === this.workspaceDir;
+					// Only global writes refresh the always-on {{memory}} module.
+					// Project writes are intentionally never injected into the system prompt —
+					// they're surfaced on demand by create_agent against the matching project.
 					let suffix: string;
-					if (affectsCurrentSession) {
-						const merged = await loadPersistentMemory(this.globalDir, this.workspaceDir);
-						this.contextManager.updateModule("memory", merged);
-						suffix = "System prompt refreshed.";
+					if (scope === "global") {
+						const globalMemory = await loadPersistentMemory(this.globalDir);
+						this.contextManager.updateModule("memory", globalMemory);
+						suffix = "Global system prompt refreshed.";
 					} else {
-						suffix = `Wrote to ${resolvedProjectDir} (different from launch workspace ${this.workspaceDir}); current session memory not modified.`;
+						suffix = `Wrote to ${resolvedProjectDir}/.cliclaw/MEMORY.md; current session memory not modified (project memory is loaded by create_agent, not the system prompt).`;
 					}
 
 					const target = scope === "global" ? "global" : (resolvedProjectDir ?? "project");

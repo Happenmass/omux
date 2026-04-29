@@ -735,13 +735,14 @@ async function main(): Promise<void> {
 	// Inject configured MCP servers list so MainAgent knows what's available
 	contextManager.updateModule("available_mcp_servers", buildMcpServersSummary(config.mcpServers));
 
-	// Load persistent memory (MEMORY.md) into {{memory}} module
+	// Load global persistent memory (~/.cliclaw/MEMORY.md) into {{memory}} module.
+	// Project-level memory is fetched on demand by create_agent — see main-agent.ts.
 	const globalDir = getConfigDir();
 	try {
-		const persistentMemory = await loadPersistentMemory(globalDir, args.cwd);
+		const persistentMemory = await loadPersistentMemory(globalDir);
 		if (persistentMemory) {
 			contextManager.updateModule("memory", persistentMemory);
-			logger.info("main", "Persistent memory loaded into context");
+			logger.info("main", "Global persistent memory loaded into context");
 		}
 	} catch (err: any) {
 		logger.warn("main", `Failed to load persistent memory (non-fatal): ${err.message}`);

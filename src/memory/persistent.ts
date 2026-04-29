@@ -95,30 +95,20 @@ export async function readPersistentMemory(filePath: string): Promise<string> {
 }
 
 /**
- * Load and merge global + project-level MEMORY.md files.
- * Returns the merged content for injection into {{memory}}.
+ * Load the global MEMORY.md for injection into the {{memory}} module.
+ *
+ * Project-level MEMORY.md is intentionally NOT included here — it's surfaced
+ * to the MainAgent on demand by `create_agent` against the target project,
+ * not via the system prompt. This keeps `{{memory}}` workspace-agnostic so
+ * the same cliclaw process can drive sub-agents across multiple projects
+ * without conflating their conventions.
  *
  * @param globalDir  ~/.cliclaw/
- * @param workspaceDir  project root (e.g. /path/to/project)
  */
-export async function loadPersistentMemory(globalDir: string, workspaceDir: string): Promise<string> {
+export async function loadPersistentMemory(globalDir: string): Promise<string> {
 	const globalPath = join(globalDir, "MEMORY.md");
-	const projectPath = join(workspaceDir, ".cliclaw", "MEMORY.md");
-
-	const [globalContent, projectContent] = await Promise.all([
-		readPersistentMemory(globalPath),
-		readPersistentMemory(projectPath),
-	]);
-
-	const hasGlobal = globalContent.trim().length > 0;
-	const hasProject = projectContent.trim().length > 0;
-
-	if (hasGlobal && hasProject) {
-		return `<!-- global memory -->\n${globalContent.trim()}\n\n---\n\n<!-- project memory -->\n${projectContent.trim()}`;
-	}
-	if (hasGlobal) return globalContent.trim();
-	if (hasProject) return projectContent.trim();
-	return "";
+	const content = await readPersistentMemory(globalPath);
+	return content.trim();
 }
 
 // ─── Write Operations ───────────────────────────────────
