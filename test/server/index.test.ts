@@ -12,6 +12,7 @@ function createMainAgentMock() {
 		setOnAgentChange: () => undefined,
 		getActiveAgents: () => [],
 		getPendingUserMessageCount: () => 0,
+		getContextUsage: () => ({ tokens: 0, limit: 200000 }),
 	} as any;
 }
 
@@ -114,8 +115,7 @@ describe("startServer", () => {
 			clients: 0,
 			learningEnabled: false,
 			locale: "en-US",
-			provider: undefined,
-			model: undefined,
+			contextUsage: { tokens: 0, limit: 200000 },
 		});
 	});
 
@@ -142,7 +142,12 @@ describe("startServer", () => {
 		});
 
 		await expect(waitForWsMessage(authorizedWs)).resolves.toBe(
-			JSON.stringify({ type: "state", state: "idle", queueSize: 0 }),
+			JSON.stringify({
+				type: "state",
+				state: "idle",
+				queueSize: 0,
+				contextUsage: { tokens: 0, limit: 200000 },
+			}),
 		);
 		authorizedWs.close();
 	});

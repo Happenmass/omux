@@ -275,88 +275,132 @@ export class OpenAIResponsesProvider implements LLMProvider {
 			providerName: this.name,
 		});
 
-		// Step 2: try to derive a Layer-2 incremental wire form. Falls back transparently.
-		const decision = this.incrementalEnabled
-			? tryBuildIncremental(fullBody, this.incrementalState)
-			: { mode: "full" as const, wire: fullBody, reason: "incremental-disabled" };
+		// Stream-level retry loop. Distinct from `fetchWithRetry`'s HTTP-level retry:
+		//   - HTTP-level (status != 200, e.g. 429/5xx/network)        → handled inside fetchWithRetry
+		//   - Stream-level (HTTP 200 + SSE `response.failed`)         → handled here
+		// OpenAI returns 200 + SSE `response.failed: Our servers are currently overloaded`
+		// when the request was accepted but generation couldn't proceed. We must retry the
+		// whole POST in that case. We only retry while NO caller-visible delta has been
+		// yielded yet — once UI text/tool/reasoning deltas have flowed out, retrying would
+		// duplicate them. `decision` is recomputed each iteration: after the first failure
+		// we clear `incrementalState` so the retry naturally falls back to a full request.
+		let streamAttempt = 0;
+		while (true) {
+			const decision = this.incrementalEnabled
+				? tryBuildIncremental(fullBody, this.incrementalState)
+				: { mode: "full" as const, wire: fullBody, reason: "incremental-disabled" };
 
-		// Promoted from debug→info so /compact and regular turn shapes are visible without
-		// flipping log levels. Includes everything needed to diagnose cache misses:
-		//   - mode: incremental (delta send) vs full (whole input on the wire)
-		//   - reason: when full, WHY the incremental check failed
-		//   - input.count + tools.count + instructions.len: prefix shape
-		//   - prompt_cache_key: the L1 cache routing key
-		//   - hadIncrementalState: whether we *had* a baseline to attempt L2 against
-		const wireBytes = JSON.stringify(decision.wire).length;
-		if (decision.mode === "incremental") {
-			logger.info(
-				"llm",
-				`[${this.name}] POST /responses INCREMENTAL: prev_id=${decision.wire.previous_response_id}, input.delta=${decision.wire.input.length} item(s), wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}`,
-			);
-		} else if (this.incrementalEnabled) {
-			// L2 was enabled but the check fell through. Log the diagnostic detail so the
-			// reason is visible.
-			logger.info(
-				"llm",
-				`[${this.name}] POST /responses FULL: reason=${decision.reason}, input.count=${fullBody.input.length}, tools.count=${fullBody.tools.length}, instructions.len=${fullBody.instructions?.length ?? 0}, wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}, hadPriorState=${this.incrementalState ? `yes(prev_id=${this.incrementalState.lastResponseId})` : "no"}`,
-			);
-		} else {
-			// L2 disabled — this is the steady-state path. Single-line summary, no L2-only
-			// fields (hadPriorState etc. are meaningless here).
-			logger.info(
-				"llm",
-				`[${this.name}] POST /responses FULL: input.count=${fullBody.input.length}, tools.count=${fullBody.tools.length}, instructions.len=${fullBody.instructions?.length ?? 0}, wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}`,
-			);
-		}
-
-		const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, decision.wire, opts?.signal);
-		if (!response.body) throw new Error(`[${this.name}] No response body for streaming`);
-
-		// Step 3: parse SSE while collecting (a) what to yield to the caller, (b) state needed
-		// to seed the next turn's incremental check (only used when L2 is opt-in enabled).
-		const collector: SseCollector = { itemsAddedWire: [], responseId: null };
-
-		try {
-			yield* parseResponsesSse(response.body, this.model, this.name, opts?.thinking, collector);
-		} catch (err) {
-			// Stream-level failure: server-side state is uncertain regardless of L2 setting.
-			if (this.incrementalEnabled) {
-				logger.warn(
-					"llm",
-					`[${this.name}] stream threw — clearing L2 incremental state (next turn will go FULL): ${(err as Error).message}`,
-				);
-			}
-			this.incrementalState = null;
-			throw err;
-		}
-
-		// Step 4: update Layer-2 state, ONLY if L2 is enabled. Skipping the state update
-		// when L2 is off keeps `incrementalState = null` and avoids holding the prior
-		// request's full body in memory across turns for no benefit.
-		if (this.incrementalEnabled) {
-			if (collector.responseId) {
-				const itemTypes = collector.itemsAddedWire.map((i) => i.type).join(",");
+			// Step 2: log turn shape. Promoted from debug→info so /compact and regular turn
+			// shapes are visible without flipping log levels. Includes everything needed to
+			// diagnose cache misses:
+			//   - mode: incremental (delta send) vs full (whole input on the wire)
+			//   - reason: when full, WHY the incremental check failed
+			//   - input.count + tools.count + instructions.len: prefix shape
+			//   - prompt_cache_key: the L1 cache routing key
+			//   - hadIncrementalState: whether we *had* a baseline to attempt L2 against
+			const wireBytes = JSON.stringify(decision.wire).length;
+			if (decision.mode === "incremental") {
 				logger.info(
 					"llm",
-					`[${this.name}] stream complete: response_id=${collector.responseId}, items_added=${collector.itemsAddedWire.length} [${itemTypes}], L2 state UPDATED (next turn eligible for incremental)`,
+					`[${this.name}] POST /responses INCREMENTAL: prev_id=${decision.wire.previous_response_id}, input.delta=${decision.wire.input.length} item(s), wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}`,
 				);
-				this.incrementalState = {
-					lastFullRequest: fullBody,
-					lastResponseId: collector.responseId,
-					lastItemsAddedWire: collector.itemsAddedWire,
-				};
-			} else {
-				logger.warn(
+			} else if (this.incrementalEnabled) {
+				logger.info(
 					"llm",
-					`[${this.name}] stream complete but NO response_id surfaced (older server / malformed SSE) — clearing L2 state, next turn will go FULL`,
+					`[${this.name}] POST /responses FULL: reason=${decision.reason}, input.count=${fullBody.input.length}, tools.count=${fullBody.tools.length}, instructions.len=${fullBody.instructions?.length ?? 0}, wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}, hadPriorState=${this.incrementalState ? `yes(prev_id=${this.incrementalState.lastResponseId})` : "no"}`,
 				);
-				this.incrementalState = null;
+			} else {
+				logger.info(
+					"llm",
+					`[${this.name}] POST /responses FULL: input.count=${fullBody.input.length}, tools.count=${fullBody.tools.length}, instructions.len=${fullBody.instructions?.length ?? 0}, wire.bytes=${wireBytes}, prompt_cache_key=${fullBody.prompt_cache_key ?? "(none)"}`,
+				);
 			}
-		} else if (collector.responseId) {
-			logger.debug(
-				"llm",
-				`[${this.name}] stream complete: response_id=${collector.responseId} (L2 disabled — not tracked)`,
-			);
+
+			const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, decision.wire, opts?.signal);
+			if (!response.body) throw new Error(`[${this.name}] No response body for streaming`);
+
+			// Step 3: parse SSE while collecting (a) what to yield to the caller, (b) state
+			// needed to seed the next turn's incremental check.
+			const collector: SseCollector = { itemsAddedWire: [], responseId: null };
+			let yieldedOutput = false;
+
+			try {
+				for await (const ev of parseResponsesSse(response.body, this.model, this.name, opts?.thinking, collector)) {
+					if (
+						ev.type === "text_delta" ||
+						ev.type === "tool_call_delta" ||
+						ev.type === "reasoning_summary_delta" ||
+						ev.type === "reasoning_content_delta"
+					) {
+						yieldedOutput = true;
+					}
+					yield ev;
+				}
+			} catch (err) {
+				// Stream-level failure: server-side state is uncertain regardless of L2 setting.
+				if (this.incrementalEnabled) {
+					logger.warn(
+						"llm",
+						`[${this.name}] stream threw — clearing L2 incremental state (next turn will go FULL): ${(err as Error).message}`,
+					);
+				}
+				this.incrementalState = null;
+
+				// Retry only when (a) the error is a transient stream-level failure (e.g.
+				// overload / rate limit / 5xx), (b) no caller-visible delta has been yielded
+				// yet (otherwise we'd duplicate UI content), (c) under maxRetries, and
+				// (d) the caller hasn't aborted.
+				if (
+					!yieldedOutput &&
+					streamAttempt < this.maxRetries &&
+					isRetryableStreamError(err) &&
+					opts?.signal?.aborted !== true
+				) {
+					streamAttempt++;
+					// Fixed 3s wait between stream-level retries. `response.failed` from server
+					// overload usually clears within a few seconds; exponential backoff (2s/4s/8s)
+					// either piles on more billable retries past the recovery window or times out
+					// the user. Capped by `this.timeout` so tests can drive maxRetries quickly.
+					const delay = Math.min(3000, this.timeout);
+					logger.warn(
+						"llm",
+						`[${this.name}] stream-level failure on attempt ${streamAttempt}/${this.maxRetries}, retrying in ${delay}ms (each retry is a separate billable call): ${(err as Error).message}`,
+					);
+					await new Promise((r) => setTimeout(r, delay));
+					continue;
+				}
+				throw err;
+			}
+
+			// Step 4: update Layer-2 state, ONLY if L2 is enabled. Skipping the state update
+			// when L2 is off keeps `incrementalState = null` and avoids holding the prior
+			// request's full body in memory across turns for no benefit.
+			if (this.incrementalEnabled) {
+				if (collector.responseId) {
+					const itemTypes = collector.itemsAddedWire.map((i) => i.type).join(",");
+					logger.info(
+						"llm",
+						`[${this.name}] stream complete: response_id=${collector.responseId}, items_added=${collector.itemsAddedWire.length} [${itemTypes}], L2 state UPDATED (next turn eligible for incremental)`,
+					);
+					this.incrementalState = {
+						lastFullRequest: fullBody,
+						lastResponseId: collector.responseId,
+						lastItemsAddedWire: collector.itemsAddedWire,
+					};
+				} else {
+					logger.warn(
+						"llm",
+						`[${this.name}] stream complete but NO response_id surfaced (older server / malformed SSE) — clearing L2 state, next turn will go FULL`,
+					);
+					this.incrementalState = null;
+				}
+			} else if (collector.responseId) {
+				logger.debug(
+					"llm",
+					`[${this.name}] stream complete: response_id=${collector.responseId} (L2 disabled — not tracked)`,
+				);
+			}
+			return;
 		}
 	}
 
@@ -1065,7 +1109,15 @@ async function* parseResponsesSse(
 						const resp = evt.response;
 						const errMsg =
 							resp?.error?.message ?? resp?.incomplete_details?.reason ?? "Responses API stream failed";
-						throw new Error(`[${providerName}] ${evt.type}: ${errMsg}`);
+						const error = new Error(`[${providerName}] ${evt.type}: ${errMsg}`);
+						// `response.failed` is the carrier for transient server-side faults
+						// (overload, rate-limit, 5xx) — caller's stream-level retry checks this
+						// flag. `response.incomplete` (max_output_tokens etc.) is NOT transient
+						// and stays unmarked so the retry loop falls through to throw.
+						if (evt.type === "response.failed" && isTransientStreamFailureMessage(errMsg)) {
+							(error as { retryable?: boolean }).retryable = true;
+						}
+						throw error;
 					}
 
 					default:
@@ -1105,4 +1157,64 @@ async function* parseResponsesSse(
 			model,
 		},
 	};
+}
+
+// ─── Stream-level retry classification ────────────────────────────────────────────────
+
+/**
+ * Decide whether the given `response.failed` server message is the kind we should retry.
+ *
+ * Examples that DO match (retry):
+ *   - "Our servers are currently overloaded. Please try again later."
+ *   - "Rate limit reached for ..."
+ *   - "Internal server error"
+ *   - "Bad gateway / 502 / 503 / 504"
+ *   - "Request timed out"
+ *
+ * Examples that do NOT match (no retry — surface to caller):
+ *   - "context_window_exceeded"
+ *   - "invalid_request_error"
+ *   - "content_policy_violation"
+ *
+ * Conservative by design: we retry only on phrases that strongly imply a transient
+ * server-side fault. Unknown error text falls through to no-retry, matching the
+ * "fail fast on 4xx" stance of `fetchWithRetry`.
+ */
+export function isTransientStreamFailureMessage(message: string): boolean {
+	const m = message.toLowerCase();
+	return (
+		m.includes("overload") ||
+		m.includes("rate limit") ||
+		m.includes("rate-limit") ||
+		m.includes("ratelimit") ||
+		m.includes("try again") ||
+		m.includes("temporarily") ||
+		m.includes("temporary") ||
+		m.includes("timeout") ||
+		m.includes("timed out") ||
+		m.includes("internal server error") ||
+		m.includes("internal error") ||
+		m.includes("bad gateway") ||
+		m.includes("service unavailable") ||
+		m.includes("gateway timeout") ||
+		/\b(500|502|503|504)\b/.test(m)
+	);
+}
+
+/**
+ * True when the error from the SSE parse phase should trigger a stream-level retry.
+ *
+ * Retryable: errors thrown from `parseResponsesSse` that we tagged with `retryable=true`
+ * (currently: `response.failed` whose message matched `isTransientStreamFailureMessage`).
+ *
+ * Non-retryable: AbortError, errors carrying `nonRetryable=true` (e.g. 4xx surfaced from
+ * fetchWithRetry), and untagged errors (unknown failures fail fast — same stance as
+ * fetchWithRetry's 4xx path).
+ */
+export function isRetryableStreamError(err: unknown): boolean {
+	if (!err || typeof err !== "object") return false;
+	const e = err as { name?: string; nonRetryable?: boolean; retryable?: boolean };
+	if (e.name === "AbortError") return false;
+	if (e.nonRetryable) return false;
+	return e.retryable === true;
 }

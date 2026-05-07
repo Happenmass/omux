@@ -15,6 +15,9 @@ let statusDot;
 let statusText;
 let queuePillEl;
 let inputMetaModelEl;
+let contextRingEl;
+let contextRingProgressEl;
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * 5.5;
 let dropdownEl;
 let agentTabsEl;
 let terminalContentEl;
@@ -106,6 +109,7 @@ export function renderMarkdown(text) {
 	html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
 	html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 	html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+	html = html.replace(/\n{3,}/g, "\n\n");
 	return html;
 }
 
@@ -350,10 +354,33 @@ function fetchInitStatus() {
 				if (data.provider) parts.push(data.provider);
 				inputMetaModelEl.textContent = parts.join(" · ");
 			}
+			updateContextUsage(data.contextUsage);
 		})
 		.catch(function () {
 			initI18n();
 		});
+}
+
+function formatTokensK(n) {
+	const k = n / 1000;
+	if (k >= 100) return `${Math.round(k)} k`;
+	return `${k.toFixed(1).replace(/\.0$/, "")} k`;
+}
+
+function updateContextUsage(usage) {
+	if (!contextRingEl || !contextRingProgressEl) return;
+	if (!usage || typeof usage.tokens !== "number" || typeof usage.limit !== "number" || usage.limit <= 0) {
+		contextRingEl.hidden = true;
+		return;
+	}
+	const ratio = Math.max(0, Math.min(1, usage.tokens / usage.limit));
+	const offset = CONTEXT_RING_CIRCUMFERENCE * (1 - ratio);
+	contextRingProgressEl.setAttribute("stroke-dashoffset", String(offset.toFixed(3)));
+	contextRingEl.classList.toggle("is-warn", ratio >= 0.6 && ratio < 0.85);
+	contextRingEl.classList.toggle("is-danger", ratio >= 0.85);
+	const pct = (ratio * 100).toFixed(1);
+	contextRingEl.dataset.tooltip = `${formatTokensK(usage.tokens)} / ${formatTokensK(usage.limit)}  ${pct}%`;
+	contextRingEl.hidden = false;
 }
 
 function connect() {
@@ -524,6 +551,7 @@ function handleServerMessage(data) {
 			if (agentState === "executing") {
 				showThinkingIndicator();
 			}
+			if (data.contextUsage) updateContextUsage(data.contextUsage);
 			break;
 
 		case "agent_update":
@@ -553,6 +581,7 @@ function handleServerMessage(data) {
 			if (prevState === "executing" && data.state === "idle") {
 				notifyTaskComplete();
 			}
+			if (data.contextUsage) updateContextUsage(data.contextUsage);
 			break;
 		}
 
@@ -817,6 +846,12 @@ function initDomReferences() {
 	statusText = document.getElementById("status-text");
 	queuePillEl = document.getElementById("queue-pill");
 	inputMetaModelEl = document.getElementById("input-meta-model");
+	contextRingEl = document.getElementById("context-ring");
+	contextRingProgressEl = document.getElementById("context-ring-progress");
+	if (contextRingProgressEl) {
+		contextRingProgressEl.setAttribute("stroke-dasharray", String(CONTEXT_RING_CIRCUMFERENCE));
+		contextRingProgressEl.setAttribute("stroke-dashoffset", String(CONTEXT_RING_CIRCUMFERENCE));
+	}
 	dropdownEl = document.getElementById("command-dropdown");
 	agentTabsEl = document.getElementById("agent-tabs");
 	terminalContentEl = document.getElementById("terminal-content");

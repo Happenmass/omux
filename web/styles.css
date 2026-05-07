@@ -53,7 +53,7 @@
 	--danger:       #e08163;
 	--user-bg:      #2c2620;
 	--user-ink:     #f1ebde;
-	--code-bg:      #1f1c17;
+	--code-bg:      #0e0c09;
 	--code-ink:     #dbcfb6;
 	--term-bg:      #0f0d0a;
 	--term-text:    #e8dfce;
@@ -81,7 +81,7 @@
 		--danger:       #e08163;
 		--user-bg:      #2c2620;
 		--user-ink:     #f1ebde;
-		--code-bg:      #1f1c17;
+		--code-bg:      #0e0c09;
 		--code-ink:     #dbcfb6;
 		--term-bg:      #0f0d0a;
 		--term-text:    #e8dfce;
@@ -314,12 +314,12 @@ body.resizing-execution-panel {
 .msg {
 	max-width: 100%;
 	font-size: 13.5px;
-	line-height: 1.65;
+	line-height: 1.5;
 	word-wrap: break-word;
 	overflow-wrap: anywhere;
 	word-break: break-word;
 	white-space: pre-wrap;
-	margin-bottom: 12px;
+	margin-bottom: 8px;
 }
 
 .msg.user {
@@ -469,12 +469,13 @@ body.resizing-execution-panel {
 
 .msg.assistant pre {
 	background: var(--code-bg);
-	padding: 10px 12px;
+	padding: 8px 12px;
 	border-radius: var(--radius-sm);
 	overflow-x: auto;
-	margin: 6px 0;
+	margin: 2px 0;
 	font-family: var(--font-mono);
 	font-size: 12.5px;
+	line-height: 1.5;
 }
 
 .msg.assistant pre code {
@@ -610,8 +611,77 @@ body.resizing-execution-panel {
 	padding: 0 4px;
 }
 
+.input-meta-right {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+
 .input-meta-model {
 	font-family: var(--font-mono);
+}
+
+.context-ring {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px;
+	cursor: default;
+	position: relative;
+}
+
+.context-ring[hidden] {
+	display: none;
+}
+
+.context-ring-track {
+	stroke: var(--border-strong);
+	opacity: 0.55;
+}
+
+.context-ring-progress {
+	stroke: var(--accent);
+	transition: stroke-dashoffset 280ms ease, stroke 200ms ease;
+}
+
+.context-ring.is-warn .context-ring-progress {
+	stroke: var(--warn);
+}
+
+.context-ring.is-danger .context-ring-progress {
+	stroke: var(--danger);
+}
+
+.context-ring::after {
+	content: attr(data-tooltip);
+	position: absolute;
+	bottom: calc(100% - 2px);
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 4px 8px;
+	background: var(--bg-panel);
+	color: var(--text);
+	border: 1px solid var(--border-strong);
+	border-radius: 6px;
+	font-size: 11px;
+	font-family: var(--font-mono);
+	white-space: nowrap;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 120ms ease;
+	transition-delay: 0ms;
+	box-shadow: var(--shadow);
+	z-index: 100;
+}
+
+.context-ring:not([data-tooltip])::after,
+.context-ring[data-tooltip=""]::after {
+	display: none;
+}
+
+.context-ring:hover::after {
+	opacity: 1;
+	transition-delay: 200ms;
 }
 
 /* ─── Execution / Terminal Panel ─────────────────── */

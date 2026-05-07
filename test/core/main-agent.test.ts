@@ -21,6 +21,7 @@ function createMockContextManager() {
 		shouldRunMemoryFlush: vi.fn().mockReturnValue(false),
 		runMemoryFlush: vi.fn(),
 		getCurrentTokenEstimate: vi.fn().mockReturnValue(0),
+		getContextWindowLimit: vi.fn().mockReturnValue(200000),
 		// Stable conversation_id for the OpenAI Responses prompt_cache_key path. The mock
 		// returns a fixed value so byte-equality assertions in caller-level tests remain
 		// deterministic; provider-level tests are in test/llm/openai-responses.test.ts.
@@ -253,7 +254,9 @@ describe("MainAgent State Machine", () => {
 			expect(deltaCalls.length).toBeGreaterThan(0);
 
 			// Should broadcast assistant_done
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({ type: "assistant_done" });
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "assistant_done" }),
+			);
 
 			// Should stay idle
 			expect(agent.state).toBe("idle");
@@ -269,8 +272,12 @@ describe("MainAgent State Machine", () => {
 
 			// Should have been in executing state (verified by state broadcast)
 			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter((c: any) => c[0].type === "state");
-			expect(stateCalls).toContainEqual([{ type: "state", state: "executing", queueSize: expect.any(Number) }]);
-			expect(stateCalls).toContainEqual([{ type: "state", state: "idle", queueSize: expect.any(Number) }]);
+			expect(stateCalls).toContainEqual([
+				expect.objectContaining({ type: "state", state: "executing", queueSize: expect.any(Number) }),
+			]);
+			expect(stateCalls).toContainEqual([
+				expect.objectContaining({ type: "state", state: "idle", queueSize: expect.any(Number) }),
+			]);
 		});
 
 		it("should serialize concurrent idle messages", async () => {
@@ -547,16 +554,20 @@ describe("MainAgent State Machine", () => {
 			// dispatchNext catches and recovers from errors internally
 			await agent.handleMessage("check status");
 			expect(agent.state).toBe("idle");
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
-				type: "state",
-				state: "executing",
-				queueSize: expect.any(Number),
-			});
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
-				type: "state",
-				state: "idle",
-				queueSize: expect.any(Number),
-			});
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "state",
+					state: "executing",
+					queueSize: expect.any(Number),
+				}),
+			);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "state",
+					state: "idle",
+					queueSize: expect.any(Number),
+				}),
+			);
 		});
 
 	});

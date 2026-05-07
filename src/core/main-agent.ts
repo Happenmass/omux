@@ -659,6 +659,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			type: "state",
 			state: this.state,
 			queueSize: this.workQueue.pendingUserMessages(),
+			contextUsage: this.getContextUsage(),
+		});
+	}
+
+	getContextUsage(): { tokens: number; limit: number } {
+		return {
+			tokens: this.contextManager.getCurrentTokenEstimate(),
+			limit: this.contextManager.getContextWindowLimit(),
+		};
+	}
+
+	private broadcastAssistantDone(): void {
+		this.broadcaster.broadcast({
+			type: "assistant_done",
+			contextUsage: this.getContextUsage(),
 		});
 	}
 
@@ -858,7 +873,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				if (textContent) {
 					this.contextManager.addMessage({ role: "assistant", content: textContent });
 				}
-				this.broadcaster.broadcast({ type: "assistant_done" });
+				this.broadcastAssistantDone();
 				this.setState("idle");
 				return;
 			}
@@ -866,7 +881,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			// Has tool calls — add assistant message and continue loop
 			const assistantBlocks = this.buildAssistantBlocks(textContent, nextToolCalls);
 			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
-			this.broadcaster.broadcast({ type: "assistant_done" });
+			this.broadcastAssistantDone();
 
 			toolCalls = nextToolCalls;
 		}
@@ -914,14 +929,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			// Add assistant message to conversation
 			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
 			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
-			this.broadcaster.broadcast({ type: "assistant_done" });
+			this.broadcastAssistantDone();
 
 			// Execute tools and enter self-loop
 			await this.executeToolLoop(toolCalls);
 		} else {
 			// Pure text response — return to IDLE
 			this.contextManager.addMessage({ role: "assistant", content: textContent });
-			this.broadcaster.broadcast({ type: "assistant_done" });
+			this.broadcastAssistantDone();
 			this.setState("idle");
 		}
 	}
@@ -947,13 +962,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		if (toolCalls.length > 0) {
 			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);
 			this.contextManager.addMessage({ role: "assistant", content: assistantBlocks });
-			this.broadcaster.broadcast({ type: "assistant_done" });
+			this.broadcastAssistantDone();
 
 			await this.executeToolLoop(toolCalls);
 		} else {
 			if (textContent) {
 				this.contextManager.addMessage({ role: "assistant", content: textContent });
-				this.broadcaster.broadcast({ type: "assistant_done" });
+				this.broadcastAssistantDone();
 			}
 			// Pure text / empty response — return to IDLE
 			this.setState("idle");

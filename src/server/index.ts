@@ -121,6 +121,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			locale,
 			provider: llmClient?.getProviderName(),
 			model: llmClient?.getModel(),
+			contextUsage: mainAgent.getContextUsage(),
 		});
 	});
 
@@ -332,17 +333,35 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 	}
 
 	// ─── Terminal broadcast timer ───────────────────────
+	const TERMINAL_BROADCAST_IDLE_MS = 1000;
+	const TERMINAL_BROADCAST_TAKEOVER_MS = 100;
 	let lastBroadcastAgentCount = 0;
-	const terminalBroadcastInterval = setInterval(() => {
+	let currentBroadcastIntervalMs = TERMINAL_BROADCAST_IDLE_MS;
+
+	function broadcastTick() {
 		if (broadcaster.getClientCount() === 0) return;
 		const activeAgents = mainAgent.getActiveAgents();
 		if (activeAgents.length === 0 && lastBroadcastAgentCount === 0) return;
 		lastBroadcastAgentCount = activeAgents.length;
 		broadcastAgentTerminals();
-	}, 1000);
+	}
+
+	let terminalBroadcastInterval = setInterval(broadcastTick, currentBroadcastIntervalMs);
+
+	function applyBroadcastInterval() {
+		const desired = mainAgent.getActiveAgents().some((a) => a.takenOver)
+			? TERMINAL_BROADCAST_TAKEOVER_MS
+			: TERMINAL_BROADCAST_IDLE_MS;
+		if (desired === currentBroadcastIntervalMs) return;
+		currentBroadcastIntervalMs = desired;
+		clearInterval(terminalBroadcastInterval);
+		terminalBroadcastInterval = setInterval(broadcastTick, currentBroadcastIntervalMs);
+		logger.info("server", `Terminal broadcast interval -> ${desired}ms`);
+	}
 
 	// Register agent change callback for immediate broadcast
 	mainAgent.setOnAgentChange(() => {
+		applyBroadcastInterval();
 		if (broadcaster.getClientCount() === 0) return;
 		lastBroadcastAgentCount = mainAgent.getActiveAgents().length;
 		broadcastAgentTerminals();

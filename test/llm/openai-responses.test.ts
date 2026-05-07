@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	buildInput,
 	buildRequestBody,
 	buildTools,
 	inputStartsWith,
+	isRetryableStreamError,
+	isTransientStreamFailureMessage,
 	OpenAIResponsesProvider,
 	tryBuildIncremental,
 } from "../../src/llm/providers/openai-responses.js";
@@ -112,7 +114,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 			opts: { ...baseOpts, systemPrompt: "" },
 			store: false,
 		});
-		expect(Object.prototype.hasOwnProperty.call(body, "instructions")).toBe(false);
+		expect(Object.hasOwn(body, "instructions")).toBe(false);
 		expect(JSON.stringify(body)).not.toContain('"instructions"');
 	});
 
@@ -143,7 +145,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 		expect(JSON.stringify(body)).toContain('"reasoning":null');
 	});
 
-	it("reasoning enabled ⇒ `include` contains exactly [\"reasoning.encrypted_content\"]", () => {
+	it('reasoning enabled ⇒ `include` contains exactly ["reasoning.encrypted_content"]', () => {
 		const body = buildRequestBody({
 			model: "gpt-5.4",
 			messages: [{ role: "user", content: "hi" }],
@@ -154,7 +156,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 		expect(body.include).toEqual(["reasoning.encrypted_content"]);
 	});
 
-	it("reasoning enabled with no explicit summary ⇒ defaults to summary=\"auto\" (matches Codex ReasoningSummaryConfig::Auto)", () => {
+	it('reasoning enabled with no explicit summary ⇒ defaults to summary="auto" (matches Codex ReasoningSummaryConfig::Auto)', () => {
 		// Codex (`codex-rs/core/src/client.rs:847`) treats summary as a separate dial that's
 		// non-None by default for reasoning-capable models. cliclaw mirrors that: when the
 		// caller enables thinking but doesn't pick a summary level, we send "auto".
@@ -179,7 +181,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 			store: false,
 		});
 		expect(body.reasoning).toEqual({ effort: "low" });
-		expect(Object.prototype.hasOwnProperty.call(body.reasoning!, "summary")).toBe(false);
+		expect(Object.hasOwn(body.reasoning!, "summary")).toBe(false);
 	});
 
 	it("reasoning off ⇒ `include` is an empty array (not absent)", () => {
@@ -373,9 +375,7 @@ describe("buildInput — LLMMessage → ResponseItem mapping", () => {
 	});
 
 	it("tool role → function_call_output", () => {
-		const items = buildInput([
-			{ role: "tool", toolCallId: "call_abc", content: "done" },
-		]);
+		const items = buildInput([{ role: "tool", toolCallId: "call_abc", content: "done" }]);
 		expect(items[0]).toEqual({
 			type: "function_call_output",
 			call_id: "call_abc",
@@ -607,9 +607,7 @@ describe("OpenAIResponsesProvider — SSE parsing", () => {
 		}
 
 		// Reasoning summary deltas should have been emitted as reasoning_summary_delta events.
-		const summaryDeltas = events
-			.filter((e) => e.type === "reasoning_summary_delta")
-			.map((e) => e.delta);
+		const summaryDeltas = events.filter((e) => e.type === "reasoning_summary_delta").map((e) => e.delta);
 		expect(summaryDeltas).toEqual(["Considering ", "the problem."]);
 
 		const done = events.at(-1);
@@ -855,20 +853,40 @@ describe("tryBuildIncremental — pure decision function", () => {
 
 describe("inputStartsWith — wire-array structural prefix check", () => {
 	it("returns true when needle is a structural prefix of haystack", () => {
-		const a = { type: "message" as const, role: "user" as const, content: [{ type: "input_text" as const, text: "x" }] };
-		const b = { type: "message" as const, role: "assistant" as const, content: [{ type: "output_text" as const, text: "y" }] };
+		const a = {
+			type: "message" as const,
+			role: "user" as const,
+			content: [{ type: "input_text" as const, text: "x" }],
+		};
+		const b = {
+			type: "message" as const,
+			role: "assistant" as const,
+			content: [{ type: "output_text" as const, text: "y" }],
+		};
 		expect(inputStartsWith([a, b, a], [a, b])).toBe(true);
 		expect(inputStartsWith([a, b], [a, b])).toBe(true);
 	});
 
 	it("returns false when items don't structurally match", () => {
-		const a = { type: "message" as const, role: "user" as const, content: [{ type: "input_text" as const, text: "x" }] };
-		const aPrime = { type: "message" as const, role: "user" as const, content: [{ type: "input_text" as const, text: "x'" }] };
+		const a = {
+			type: "message" as const,
+			role: "user" as const,
+			content: [{ type: "input_text" as const, text: "x" }],
+		};
+		const aPrime = {
+			type: "message" as const,
+			role: "user" as const,
+			content: [{ type: "input_text" as const, text: "x'" }],
+		};
 		expect(inputStartsWith([aPrime], [a])).toBe(false);
 	});
 
 	it("returns false when needle is longer than haystack", () => {
-		const a = { type: "message" as const, role: "user" as const, content: [{ type: "input_text" as const, text: "x" }] };
+		const a = {
+			type: "message" as const,
+			role: "user" as const,
+			content: [{ type: "input_text" as const, text: "x" }],
+		};
 		expect(inputStartsWith([a], [a, a])).toBe(false);
 	});
 });
@@ -1239,5 +1257,205 @@ describe("OpenAIResponsesProvider — Layer-2 chain integration", () => {
 		}).rejects.toThrow(/API error 400/);
 		// No retries — fetchCount == 1 because nonRetryable forced an early throw.
 		expect(fetchCount).toBe(1);
+	});
+});
+
+// ─── 7. Stream-level retry on transient `response.failed` ────────────────────────────
+
+describe("isTransientStreamFailureMessage — pure classifier", () => {
+	it("matches the OpenAI overload message we saw in production", () => {
+		expect(isTransientStreamFailureMessage("Our servers are currently overloaded. Please try again later.")).toBe(
+			true,
+		);
+	});
+
+	it("matches rate-limit, 5xx, timeout, internal-error variants", () => {
+		expect(isTransientStreamFailureMessage("Rate limit reached for ...")).toBe(true);
+		expect(isTransientStreamFailureMessage("Internal server error")).toBe(true);
+		expect(isTransientStreamFailureMessage("Bad gateway")).toBe(true);
+		expect(isTransientStreamFailureMessage("Service unavailable")).toBe(true);
+		expect(isTransientStreamFailureMessage("Gateway timeout")).toBe(true);
+		expect(isTransientStreamFailureMessage("Request timed out")).toBe(true);
+		expect(isTransientStreamFailureMessage("HTTP 503")).toBe(true);
+	});
+
+	it("does NOT match permanent / client-side failures", () => {
+		expect(isTransientStreamFailureMessage("context_window_exceeded")).toBe(false);
+		expect(isTransientStreamFailureMessage("invalid_request_error")).toBe(false);
+		expect(isTransientStreamFailureMessage("content_policy_violation")).toBe(false);
+		expect(isTransientStreamFailureMessage("model_not_found")).toBe(false);
+	});
+});
+
+describe("isRetryableStreamError — error-shape gate", () => {
+	it("returns true only when the error is tagged `retryable=true`", () => {
+		const e = Object.assign(new Error("overloaded"), { retryable: true });
+		expect(isRetryableStreamError(e)).toBe(true);
+	});
+
+	it("returns false for AbortError, nonRetryable, untagged, or non-Error inputs", () => {
+		expect(isRetryableStreamError(Object.assign(new Error("aborted"), { name: "AbortError" }))).toBe(false);
+		expect(isRetryableStreamError(Object.assign(new Error("400"), { nonRetryable: true }))).toBe(false);
+		expect(isRetryableStreamError(new Error("plain"))).toBe(false);
+		expect(isRetryableStreamError(undefined)).toBe(false);
+		expect(isRetryableStreamError("string error")).toBe(false);
+	});
+});
+
+describe("OpenAIResponsesProvider — stream-level retry on transient response.failed", () => {
+	function makeSseStream(events: any[]): ReadableStream<Uint8Array> {
+		const encoder = new TextEncoder();
+		return new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const ev of events) {
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
+				}
+				controller.close();
+			},
+		});
+	}
+
+	function makeProvider(maxRetries: number): OpenAIResponsesProvider {
+		return new OpenAIResponsesProvider(
+			{
+				name: "test-responses",
+				displayName: "Test",
+				protocol: "openai-responses",
+				baseUrl: "https://example.invalid/v1",
+				apiKeyEnvVar: "TEST_API_KEY",
+				defaultModel: "gpt-5.4",
+			},
+			// timeout==0 forces zero-delay retries so tests don't sleep on the exponential backoff.
+			{ apiKey: "sk-test", maxRetries, timeout: 0 },
+		);
+	}
+
+	function stubFetchSequence(provider: OpenAIResponsesProvider, sseStreamsPerCall: any[][]): { calls: number } {
+		const ref = { calls: 0 };
+		(provider as any).fetchWithRetry = async () => {
+			const events = sseStreamsPerCall[ref.calls] ?? sseStreamsPerCall[sseStreamsPerCall.length - 1];
+			ref.calls++;
+			return new Response(makeSseStream(events), {
+				headers: { "Content-Type": "text/event-stream" },
+			});
+		};
+		return ref;
+	}
+
+	const overloadedFailureEvents = [
+		{ type: "response.created", response: { id: "resp_overload" } },
+		{
+			type: "response.failed",
+			response: {
+				id: "resp_overload",
+				error: { message: "Our servers are currently overloaded. Please try again later." },
+			},
+		},
+	];
+
+	const successEvents = [
+		{ type: "response.created", response: { id: "resp_ok" } },
+		{ type: "response.output_text.delta", delta: "ok" },
+		{
+			type: "response.completed",
+			response: { id: "resp_ok", status: "completed", usage: {} },
+		},
+	];
+
+	it("retries when response.failed carries a transient overload message and eventually succeeds", async () => {
+		const provider = makeProvider(3);
+		const tap = stubFetchSequence(provider, [overloadedFailureEvents, overloadedFailureEvents, successEvents]);
+
+		const events: any[] = [];
+		for await (const ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+			events.push(ev);
+		}
+
+		expect(tap.calls).toBe(3); // two failures + one success
+		const textDeltas = events.filter((e) => e.type === "text_delta").map((e) => e.delta);
+		expect(textDeltas).toEqual(["ok"]);
+		const done = events.at(-1);
+		expect(done.type).toBe("done");
+	});
+
+	it("does NOT retry when response.failed is non-transient (e.g. context_window_exceeded)", async () => {
+		const provider = makeProvider(3);
+		const nonTransient = [
+			{ type: "response.created", response: { id: "resp_ctx" } },
+			{
+				type: "response.failed",
+				response: { id: "resp_ctx", error: { message: "context_window_exceeded" } },
+			},
+		];
+		const tap = stubFetchSequence(provider, [nonTransient]);
+
+		await expect(async () => {
+			for await (const _ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+				// drain
+			}
+		}).rejects.toThrow(/context_window_exceeded/);
+		expect(tap.calls).toBe(1); // failed once, no retry
+	});
+
+	it("does NOT retry when deltas have already been yielded to the caller (would duplicate UI output)", async () => {
+		const provider = makeProvider(3);
+		// Server emits a text delta first, THEN fails with a transient error mid-stream.
+		// Even though the error is transient, retrying would duplicate the already-yielded
+		// "partial" delta on the UI — we must throw instead.
+		const partialThenFail = [
+			{ type: "response.created", response: { id: "resp_partial" } },
+			{ type: "response.output_text.delta", delta: "partial" },
+			{
+				type: "response.failed",
+				response: { id: "resp_partial", error: { message: "Our servers are currently overloaded." } },
+			},
+		];
+		const tap = stubFetchSequence(provider, [partialThenFail]);
+
+		const collected: any[] = [];
+		await expect(async () => {
+			for await (const ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+				collected.push(ev);
+			}
+		}).rejects.toThrow(/overloaded/);
+		expect(tap.calls).toBe(1);
+		// The "partial" delta was forwarded to the caller before the failure.
+		expect(collected.filter((e) => e.type === "text_delta").map((e) => e.delta)).toEqual(["partial"]);
+	});
+
+	it("gives up after maxRetries consecutive transient failures and surfaces the last error", async () => {
+		const provider = makeProvider(2); // up to 2 retries → 3 total attempts
+		const tap = stubFetchSequence(provider, [
+			overloadedFailureEvents,
+			overloadedFailureEvents,
+			overloadedFailureEvents,
+		]);
+
+		await expect(async () => {
+			for await (const _ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+				// drain
+			}
+		}).rejects.toThrow(/overloaded/);
+		expect(tap.calls).toBe(3);
+	});
+
+	it("aborts immediately when opts.signal is already aborted, even on a transient failure", async () => {
+		const provider = makeProvider(3);
+		const tap = stubFetchSequence(provider, [overloadedFailureEvents, successEvents]);
+		const ac = new AbortController();
+		ac.abort();
+
+		await expect(async () => {
+			for await (const _ev of provider.stream([{ role: "user", content: "hi" }], {
+				...baseOpts,
+				signal: ac.signal,
+			})) {
+				// drain
+			}
+		}).rejects.toThrow();
+		// Either the underlying parser threw on the failed event AND the loop refused to retry
+		// (signal aborted), or fetchWithRetry honored the signal earlier — both are acceptable.
+		// What we DON'T want is a successful 2nd-call recovery despite the abort.
+		expect(tap.calls).toBeLessThanOrEqual(1);
 	});
 });

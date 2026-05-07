@@ -167,6 +167,25 @@ export class CommandRouter {
 
 		this.broadcaster.broadcast({
 			type: "system",
+			message: "正在提取关键记忆...",
+		});
+
+		const tFlush = Date.now();
+		try {
+			await this.contextManager.runMemoryFlush();
+			logger.info(
+				"command-router",
+				`[compact ${compactRunId}] runMemoryFlush() returned in ${Date.now() - tFlush}ms`,
+			);
+		} catch (err: any) {
+			logger.warn(
+				"command-router",
+				`[compact ${compactRunId}] runMemoryFlush() failed (non-fatal, proceeding to compress): ${err.message}`,
+			);
+		}
+
+		this.broadcaster.broadcast({
+			type: "system",
 			message: "正在压缩对话历史...",
 		});
 

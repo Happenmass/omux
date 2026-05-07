@@ -35,6 +35,7 @@ export function handleWebSocket(
 			type: "state",
 			state: mainAgent.state,
 			queueSize: mainAgent.getPendingUserMessageCount(),
+			contextUsage: mainAgent.getContextUsage(),
 		}),
 	);
 

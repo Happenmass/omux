@@ -21,6 +21,7 @@ function createMockMainAgent(state: "idle" | "executing" = "idle") {
 		state,
 		handleMessage: vi.fn().mockResolvedValue(undefined),
 		getPendingUserMessageCount: vi.fn().mockReturnValue(0),
+		getContextUsage: vi.fn().mockReturnValue({ tokens: 0, limit: 200000 }),
 	} as any;
 }
 
@@ -66,7 +67,14 @@ describe("handleWebSocket", () => {
 
 	it("should send current state on connect", () => {
 		connect();
-		expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: "state", state: "idle", queueSize: 0 }));
+		expect(ws.send).toHaveBeenCalledWith(
+			JSON.stringify({
+				type: "state",
+				state: "idle",
+				queueSize: 0,
+				contextUsage: { tokens: 0, limit: 200000 },
+			}),
+		);
 	});
 
 	it("should route message type to mainAgent.handleMessage", async () => {
