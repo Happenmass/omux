@@ -218,6 +218,7 @@ describe("MainAgent State Machine", () => {
 			llmClient: mockLLM,
 			adapter: mockAdapter,
 			bridge: mockBridge,
+			createAgentSettleMs: 0,
 			stateDetector: mockDetector,
 			broadcaster: mockBroadcaster,
 			...overrides,
@@ -332,6 +333,7 @@ describe("MainAgent State Machine", () => {
 				llmClient: mockLLM as any,
 				adapter: mockAdapter,
 				bridge: mockBridge,
+				createAgentSettleMs: 0,
 				stateDetector: mockDetector,
 				broadcaster: mockBroadcaster,
 			});
@@ -1342,6 +1344,7 @@ describe("MainAgent State Machine", () => {
 				llmClient: mockLLM as any,
 				adapter: mockAdapter,
 				bridge: mockBridge,
+				createAgentSettleMs: 0,
 				stateDetector: mockDetector,
 				broadcaster: mockBroadcaster,
 			});
@@ -1626,6 +1629,7 @@ describe("MainAgent State Machine", () => {
 				llmClient: mockLLM,
 				adapter: mockAdapter,
 				bridge: mockBridge,
+				createAgentSettleMs: 0,
 				stateDetector: mockDetector,
 				broadcaster: mockBroadcaster,
 			});

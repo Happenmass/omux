@@ -230,7 +230,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 			activePatterns: [
 				/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, // Spinner
 				/\.\.\.\s*$/m, // Thinking dots
-				/Reading|Writing|Editing|Running/i, // Action words
+				/Reading|Writing|Editing|Running/, // Action words (case-sensitive)
 			],
 			confirmKey: "y",
 			abortKey: "Escape",

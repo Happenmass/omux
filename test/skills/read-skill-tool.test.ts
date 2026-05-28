@@ -58,6 +58,7 @@ function createAgent(registry?: SkillRegistry) {
 		llmClient: createMockLLMClient(),
 		adapter: { sendPrompt: vi.fn(), sendResponse: vi.fn(), abort: vi.fn(), getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,
+		createAgentSettleMs: 0,
 		stateDetector: { setCooldown: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), onStateChange: vi.fn() } as any,
 		goal: "test",
 		skillRegistry: registry,

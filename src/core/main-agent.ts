@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
@@ -177,13 +177,13 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "memory_get",
 		description:
-			"Read a specific memory file. Optionally specify a line range. Use after memory_search to read full context around a search hit.",
+			"Read a specific memory file. Returns at most 500 lines by default (hard cap 2000). The output starts with a metadata header showing `lines X-Y/total | N bytes`; when truncated, the trailer tells you the exact `from=` to pass next call to continue. Use after memory_search to read full context around a search hit, and page through large files instead of asking for one giant blob.",
 		parameters: {
 			type: "object",
 			properties: {
 				path: { type: "string", description: 'Relative path (e.g. "memory/core.md")' },
-				from: { type: "number", description: "1-indexed start line (optional)" },
-				lines: { type: "number", description: "Number of lines to read (optional)" },
+				from: { type: "number", description: "1-indexed start line (default 1)" },
+				lines: { type: "number", description: "Number of lines to read (default 500, max 2000)" },
 			},
 			required: ["path"],
 		},
@@ -330,7 +330,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "exec_command",
 		description:
-			"Execute a bash command directly for read-only reconnaissance. Use for reading files, browsing directories, searching code, and checking environment info. NEVER use for modifications, tests, builds, git operations, or any command with side effects — those MUST go through send_to_agent.",
+			"Execute a bash command directly for read-only reconnaissance. Use for reading files, browsing directories, searching code, and checking environment info. NEVER use for modifications, tests, builds, git operations, or any command with side effects — those MUST go through send_to_agent.\n\nLarge-file pre-flight: bare reads such as `cat <file>` / `less <file>` / `more <file>` / `bat <file>` / `view <file>` / `nl <file>` are intercepted before execution. If the target exceeds 500 lines or 50 KB, the command is REFUSED and you receive file metadata plus paging hints (head/tail/sed). Add an output limiter (`| head -200`, `head -n 200 file`, `sed -n '1,200p' file`, etc.) to bypass the check. For memory/ files, prefer memory_get which pages natively.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -396,6 +396,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private agentStore: AgentStore | null = null;
 	private globalDir: string;
 	private workspaceDir: string;
+	private createAgentSettleMs: number;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -433,6 +434,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		learningPipeline?: LearningPipeline;
 		changeTracker?: ChangeTracker;
 		thinking?: ThinkingLevel;
+		createAgentSettleMs?: number;
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
@@ -455,6 +457,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.promptTracker = opts.promptTracker;
 		this.learningPipeline = opts.learningPipeline;
 		this.changeTracker = opts.changeTracker;
+		this.createAgentSettleMs = opts.createAgentSettleMs ?? 10_000;
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -1266,8 +1269,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: "Memory store not available.", terminal: false };
 				}
 				const rawPath = args.path as string;
-				const from = args.from as number | undefined;
-				const lineCount = args.lines as number | undefined;
+				const fromArg = args.from as number | undefined;
+				const lineCountArg = args.lines as number | undefined;
 				let storageDir: string;
 				let memGetPath: string;
 				try {
@@ -1276,19 +1279,37 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					return { output: `Memory get error: ${err.message}`, terminal: false };
 				}
 
+				const DEFAULT_LIMIT = 500;
+				const HARD_LIMIT = 2000;
+
 				try {
 					const absPath = join(storageDir, memGetPath);
 					const content = await readFile(absPath, "utf-8");
-					const lines = content.split("\n");
+					const allLines = content.split("\n");
+					const totalLines = allLines.length;
+					const totalBytes = Buffer.byteLength(content, "utf-8");
 
-					if (from !== undefined) {
-						const startIdx = Math.max(0, from - 1);
-						const count = lineCount ?? lines.length - startIdx;
-						const slice = lines.slice(startIdx, startIdx + count);
-						return { output: slice.join("\n"), terminal: false };
+					const from = Math.max(1, fromArg ?? 1);
+					const requested = lineCountArg ?? DEFAULT_LIMIT;
+					const limit = Math.min(Math.max(1, requested), HARD_LIMIT);
+
+					const startIdx = from - 1;
+					if (startIdx >= totalLines) {
+						return {
+							output: `[file: ${memGetPath} | ${totalLines} lines / ${totalBytes} bytes]\n[from=${from} is past EOF (file has ${totalLines} lines)]`,
+							terminal: false,
+						};
 					}
 
-					return { output: content, terminal: false };
+					const slice = allLines.slice(startIdx, startIdx + limit);
+					const endLine = startIdx + slice.length;
+					const header = `[file: ${memGetPath} | lines ${from}-${endLine}/${totalLines} | ${totalBytes} bytes]`;
+					const trailer =
+						endLine < totalLines
+							? `\n\n[Truncated. ${totalLines - endLine} more lines. Call memory_get again with from=${endLine + 1} to continue.]`
+							: "";
+
+					return { output: `${header}\n${slice.join("\n")}${trailer}`, terminal: false };
 				} catch (err: any) {
 					if (err.code === "ENOENT") {
 						return { output: `File not found: ${rawPath}`, terminal: false };
@@ -1525,8 +1546,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						? `\n\n--- Project memory at ${projectMemoryPath} ---\n${projectMemory.trim()}\n--- end project memory ---\nThis is for YOUR reference only. The sub agent has not seen it. Decide whether to surface relevant excerpts in your first send_to_agent prompt, or to point the agent at the file path so it can read on demand.`
 						: `\n\nNo project memory found at ${projectMemoryPath}.`;
 
+					// Wait for the agent's TUI to settle, then capture the first 20 visible lines
+					// so the main agent can confirm the launch state without an extra inspect_agent call.
+					if (this.createAgentSettleMs > 0) {
+						await new Promise((resolve) => setTimeout(resolve, this.createAgentSettleMs));
+					}
+					let initialPaneSection: string;
+					try {
+						const capture = await this.bridge.capturePane(paneTarget, { startLine: -20 });
+						initialPaneSection = `\n\n--- Initial pane (${paneTarget}, last 20 lines after 10s) ---\n${capture.content}\n--- end pane ---`;
+					} catch (err: any) {
+						initialPaneSection = `\n\n[Initial pane capture failed: ${err?.message ?? err}]`;
+					}
+
 					return {
-						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}`,
+						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
 						terminal: false,
 					};
 				} catch (err: any) {
@@ -1691,11 +1725,44 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						: rawCwd;
 				const timeout = (args.timeout as number | undefined) ?? 30000;
 				const MAX_OUTPUT = 10000;
+				const PREFLIGHT_LINE_LIMIT = 500;
+				const PREFLIGHT_BYTE_LIMIT = 50 * 1024;
 
 				// Throttled broadcast: emit tool_activity on 1st, 4th, 7th, ... call
 				this.execCommandBroadcastCount++;
 				if (this.execCommandBroadcastCount % 3 === 1) {
 					this.emitUiEvent("tool_activity", execSummary);
+				}
+
+				// Preflight: refuse to dump huge files into the LLM context.
+				// Identifies bare `cat/less/more/...` reads with no output limiter and
+				// returns metadata + paging suggestions instead of executing.
+				const preflightTarget = preflightReadTarget(command);
+				if (preflightTarget) {
+					const resolvedTarget = isAbsolute(preflightTarget)
+						? preflightTarget
+						: preflightTarget.startsWith("~/")
+							? join(homedir(), preflightTarget.slice(2))
+							: join(cwd, preflightTarget);
+					try {
+						const st = await stat(resolvedTarget);
+						if (st.isFile() && st.size > 0) {
+							const buf = await readFile(resolvedTarget);
+							const lineCount = countLines(buf);
+							if (lineCount > PREFLIGHT_LINE_LIMIT || st.size > PREFLIGHT_BYTE_LIMIT) {
+								return {
+									output: formatPreflightHint(preflightTarget, lineCount, st.size, {
+										lineLimit: PREFLIGHT_LINE_LIMIT,
+										byteLimit: PREFLIGHT_BYTE_LIMIT,
+									}),
+									terminal: false,
+								};
+							}
+						}
+					} catch {
+						// stat / read failed (file missing, perms, etc.) — fall through
+						// to the normal exec path so the shell reports the real error.
+					}
 				}
 
 				logger.debug("main-agent", `exec_command cwd="${cwd}" cmd=${JSON.stringify(command)}`);
@@ -1804,6 +1871,71 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 		return parts.join("\n");
 	}
+}
+
+// ─── exec_command preflight ─────────────────────────────
+//
+// Pick out unguarded "dump-the-whole-file" reads (e.g. `cat src/foo.ts`) so we
+// can stat the target before execution and refuse to spill thousands of lines
+// into the LLM context. Returns the candidate file path, or null when the
+// command is either not a read or already has its own output limiter.
+//
+// Rules — kept deliberately simple, no bash AST:
+//   • Command verb is one of cat/less/more/bat/view/nl.
+//   • Command string does NOT contain any control hint: | > head tail sed awk wc.
+//     (Pipe / redirect / known limiters all imply "agent knows what it's doing".)
+//   • Command string does NOT chain via ; && || — those go straight to fallback.
+// stat()-level failures (file missing, process substitution, stdin, etc.) make
+// the caller fall through to the normal execFile path so the shell can report
+// the real error naturally.
+const READ_VERBS = new Set(["cat", "less", "more", "bat", "view", "nl"]);
+const CONTROL_HINT_RE = /\||>|\bhead\b|\btail\b|\bsed\b|\bawk\b|\bwc\b/;
+const CHAIN_RE = /;|&&|\|\|/;
+
+function preflightReadTarget(command: string): string | null {
+	if (CHAIN_RE.test(command)) return null;
+	if (CONTROL_HINT_RE.test(command)) return null;
+	const trimmed = command.trim();
+	const match = trimmed.match(/^(\S+)\s+(.+)$/);
+	if (!match) return null;
+	const verb = match[1];
+	if (!READ_VERBS.has(verb)) return null;
+	const tokens = match[2].split(/\s+/).filter((t) => t.length > 0 && !t.startsWith("-"));
+	const target = tokens[0];
+	if (!target || target === "-") return null;
+	return target;
+}
+
+function countLines(buf: Buffer): number {
+	let n = 0;
+	for (let i = 0; i < buf.length; i++) {
+		if (buf[i] === 0x0a) n++;
+	}
+	// Match `wc -l` semantics: trailing newline = N lines, missing = N+1 "logical" lines.
+	if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) n++;
+	return n;
+}
+
+function formatPreflightHint(
+	target: string,
+	lines: number,
+	bytes: number,
+	limits: { lineLimit: number; byteLimit: number },
+): string {
+	const kb = (bytes / 1024).toFixed(1);
+	const limitKb = (limits.byteLimit / 1024).toFixed(0);
+	return [
+		`[exec_command pre-flight: file too large]`,
+		`${target}: ${lines} lines, ${bytes} bytes (${kb} KB) — limit ${limits.lineLimit} lines / ${limitKb} KB`,
+		``,
+		`This file would flood your context. Re-issue exec_command with one of:`,
+		`  • head -n 200 ${target}                 # first 200 lines`,
+		`  • tail -n 200 ${target}                 # last 200 lines`,
+		`  • sed -n '1,200p' ${target}             # explicit range`,
+		`  • cat ${target} | head -200             # pipe through head`,
+		``,
+		`If this file lives under memory/, prefer memory_get(path, from, lines) — it pages natively.`,
+	].join("\n");
 }
 
 function generateAgentName(prefix: string): string {
