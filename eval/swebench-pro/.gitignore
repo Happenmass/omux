@@ -1,0 +1,6 @@
+# eval artifacts — do not commit
+runs/
+dataset/*.jsonl
+dataset/*.csv
+work/
+out/
