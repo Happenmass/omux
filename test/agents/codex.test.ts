@@ -28,7 +28,7 @@ describe("CodexAdapter.launch", () => {
 		vi.useRealTimers();
 	});
 
-	it("should launch with 'codex --full-auto' command for fresh session", async () => {
+	it("should launch with the default gpt-5.5 model for fresh session", async () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
@@ -38,8 +38,21 @@ describe("CodexAdapter.launch", () => {
 		await launchPromise;
 
 		expect(bridge.createSession).toHaveBeenCalledWith("cliclaw-test", { cwd: "/tmp/test" });
-		expect(bridge.sendText).toHaveBeenCalledWith("cliclaw-test:0.0", "codex --full-auto");
+		expect(bridge.sendText).toHaveBeenCalledWith("cliclaw-test:0.0", "codex --full-auto --model gpt-5.5");
 		expect(bridge.sendEnter).toHaveBeenCalledWith("cliclaw-test:0.0");
+	});
+
+	it("should use the provided model in place of the default", async () => {
+		const bridge = createMockBridge("");
+		const launchPromise = adapter.launch(bridge, {
+			workingDir: "/tmp/test",
+			sessionName: "cliclaw-test",
+			model: "gpt-5-codex",
+		});
+		await vi.advanceTimersByTimeAsync(11000);
+		await launchPromise;
+
+		expect(bridge.sendText).toHaveBeenCalledWith("cliclaw-test:0.0", "codex --full-auto --model gpt-5-codex");
 	});
 
 	it("should launch with 'codex resume <id> --full-auto' subcommand for resume", async () => {
@@ -54,7 +67,7 @@ describe("CodexAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"cliclaw-test:0.0",
-			"codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --full-auto",
+			"codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --full-auto --model gpt-5.5",
 		);
 	});
 });

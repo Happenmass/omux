@@ -29,8 +29,9 @@ export class CodexAdapter implements AgentAdapter {
 		const paneTarget = `${opts.sessionName}:0.0`;
 
 		// Codex uses subcommand style: `codex resume <id>` (not --resume flag)
-		const baseCmd = `${this.command} --full-auto`;
-		let cmd = opts.resumeId ? `${this.command} resume ${opts.resumeId} --full-auto` : baseCmd;
+		const model = opts.model?.trim() || "gpt-5.5";
+		const baseCmd = `${this.command} --full-auto --model ${model}`;
+		let cmd = opts.resumeId ? `${this.command} resume ${opts.resumeId} --full-auto --model ${model}` : baseCmd;
 		if (opts.preCommands && opts.preCommands.length > 0) {
 			cmd = `${opts.preCommands.join(" && ")} && ${cmd}`;
 		}

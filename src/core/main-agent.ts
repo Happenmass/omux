@@ -237,6 +237,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 					type: "string",
 					description: "Working directory for the agent. Defaults to process.cwd() if omitted.",
 				},
+				model: {
+					type: "string",
+					description:
+						"Model to launch the agent with, passed through to the underlying CLI via --model. When omitted, the adapter's default is used (Claude Code: opus, Codex: gpt-5.5). Must not contain whitespace.",
+				},
 				resume_id: {
 					type: "string",
 					description:
@@ -1497,6 +1502,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							terminal: false,
 						};
 					}
+					const rawModel = args.model as string | undefined;
+					const model = rawModel?.trim() || undefined;
+					if (model && /\s/.test(model)) {
+						return {
+							output: `Error: model must not contain whitespace: "${model}"`,
+							terminal: false,
+						};
+					}
 					const rawPreCommands = args.pre_commands as string[] | undefined;
 					const preCommands =
 						rawPreCommands && Array.isArray(rawPreCommands) && rawPreCommands.length > 0
@@ -1526,6 +1539,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						workingDir,
 						sessionName: agentName,
 						resumeId,
+						model,
 						preCommands,
 						mcpConfigPath,
 					});

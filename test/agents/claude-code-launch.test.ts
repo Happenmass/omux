@@ -38,7 +38,7 @@ describe("ClaudeCodeAdapter.launch", () => {
 		return promise;
 	}
 
-	it("launches without mcp flags by default", async () => {
+	it("launches with the default opus model and no mcp flags by default", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
 			sessionName: "cliclaw-test",
@@ -46,7 +46,20 @@ describe("ClaudeCodeAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"cliclaw-test:0.0",
-			"claude --permission-mode auto",
+			"claude --permission-mode auto --model opus",
+		);
+	});
+
+	it("uses the provided model in place of the default", async () => {
+		await launchWithTimers({
+			workingDir: "/tmp/test",
+			sessionName: "cliclaw-test",
+			model: "sonnet",
+		});
+
+		expect(bridge.sendText).toHaveBeenCalledWith(
+			"cliclaw-test:0.0",
+			"claude --permission-mode auto --model sonnet",
 		);
 	});
 
@@ -59,7 +72,7 @@ describe("ClaudeCodeAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"cliclaw-test:0.0",
-			"claude --permission-mode auto --mcp-config /home/user/.cliclaw/tmp/mcp-configs/cliclaw-test.json --strict-mcp-config",
+			"claude --permission-mode auto --model opus --mcp-config /home/user/.cliclaw/tmp/mcp-configs/cliclaw-test.json --strict-mcp-config",
 		);
 	});
 
@@ -73,7 +86,7 @@ describe("ClaudeCodeAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"cliclaw-test:0.0",
-			"claude --permission-mode auto --mcp-config /path/to/config.json --strict-mcp-config --resume abc-123",
+			"claude --permission-mode auto --model opus --mcp-config /path/to/config.json --strict-mcp-config --resume abc-123",
 		);
 	});
 

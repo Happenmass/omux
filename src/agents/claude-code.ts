@@ -31,7 +31,8 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		const paneTarget = `${opts.sessionName}:0.0`;
 
 		// Type launch command and press Enter
-		let baseCmd = `${this.command} --permission-mode auto`;
+		const model = opts.model?.trim() || "opus";
+		let baseCmd = `${this.command} --permission-mode auto --model ${model}`;
 		if (opts.mcpConfigPath) {
 			baseCmd += ` --mcp-config ${opts.mcpConfigPath} --strict-mcp-config`;
 		}

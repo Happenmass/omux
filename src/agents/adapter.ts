@@ -14,6 +14,8 @@ export interface LaunchOptions {
 	env?: Record<string, string>;
 	/** Resume id for --resume, obtained from kill_agent */
 	resumeId?: string;
+	/** Model to pass via --model. When omitted, the adapter applies its own default. */
+	model?: string;
 	/** Pre-commands to run before the agent launch command, joined with && */
 	preCommands?: string[];
 	/** Path to a temporary MCP config JSON file to pass via --mcp-config */
