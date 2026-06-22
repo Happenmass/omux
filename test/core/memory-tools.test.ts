@@ -62,6 +62,7 @@ function createMinimalMocks() {
 	return {
 		adapter: { sendPrompt: vi.fn(), sendResponse: vi.fn(), abort: vi.fn(), getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,
+		createAgentSettleMs: 0,
 		stateDetector: { setCooldown: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), onStateChange: vi.fn() } as any,
 	};
 }
@@ -88,6 +89,7 @@ function createAgent(opts: { memoryStore?: any; embeddingProvider?: any } = {}) 
 		llmClient: createMockLLMClient(),
 		adapter: mocks.adapter,
 		bridge: mocks.bridge,
+		createAgentSettleMs: 0,
 		stateDetector: mocks.stateDetector,
 		broadcaster,
 		memoryStore: opts.memoryStore,
@@ -195,7 +197,68 @@ describe("MainAgent memory tools", () => {
 				arguments: { path: "memory/core.md", from: 3, lines: 2 },
 			});
 
-			expect(result.output).toBe("Line 3\nLine 4");
+			expect(result.output).toContain("[file: memory/core.md | lines 3-4/10");
+			expect(result.output).toContain("Line 3\nLine 4");
+			expect(result.output).toContain("from=5");
+			expect(result.terminal).toBe(false);
+		});
+
+		it("should default to 500-line limit and emit a paging trailer when exceeded", async () => {
+			const lines = Array.from({ length: 600 }, (_, i) => `Line ${i + 1}`);
+			await writeFile(join(tmpDir, "memory", "big.md"), lines.join("\n"));
+
+			const mockStore = createMockMemoryStore(tmpDir);
+			const agent = createAgent({ memoryStore: mockStore });
+
+			const result = await (agent as any).executeTool({
+				type: "tool_call",
+				id: "tc1",
+				name: "memory_get",
+				arguments: { path: "memory/big.md" },
+			});
+
+			expect(result.output).toContain("[file: memory/big.md | lines 1-500/600");
+			expect(result.output).toContain("Line 1\n");
+			expect(result.output).toContain("Line 500");
+			expect(result.output).not.toContain("Line 501");
+			expect(result.output).toContain("[Truncated. 100 more lines. Call memory_get again with from=501");
+			expect(result.terminal).toBe(false);
+		});
+
+		it("should cap `lines` at the hard limit of 2000", async () => {
+			const lines = Array.from({ length: 3000 }, (_, i) => `Line ${i + 1}`);
+			await writeFile(join(tmpDir, "memory", "huge.md"), lines.join("\n"));
+
+			const mockStore = createMockMemoryStore(tmpDir);
+			const agent = createAgent({ memoryStore: mockStore });
+
+			const result = await (agent as any).executeTool({
+				type: "tool_call",
+				id: "tc1",
+				name: "memory_get",
+				arguments: { path: "memory/huge.md", lines: 999999 },
+			});
+
+			expect(result.output).toContain("[file: memory/huge.md | lines 1-2000/3000");
+			expect(result.output).toContain("from=2001");
+			expect(result.terminal).toBe(false);
+		});
+
+		it("should report when `from` is past EOF", async () => {
+			const lines = Array.from({ length: 10 }, (_, i) => `Line ${i + 1}`);
+			await writeFile(join(tmpDir, "memory", "small.md"), lines.join("\n"));
+
+			const mockStore = createMockMemoryStore(tmpDir);
+			const agent = createAgent({ memoryStore: mockStore });
+
+			const result = await (agent as any).executeTool({
+				type: "tool_call",
+				id: "tc1",
+				name: "memory_get",
+				arguments: { path: "memory/small.md", from: 99 },
+			});
+
+			expect(result.output).toContain("past EOF");
 			expect(result.terminal).toBe(false);
 		});
 

@@ -208,6 +208,7 @@ describe("MainAgent MCP server integration", () => {
 			llmClient: mockLLM,
 			adapter: mockAdapter,
 			bridge: mockBridge,
+			createAgentSettleMs: 0,
 			stateDetector: mockDetector,
 			broadcaster: mockBroadcaster,
 			...overrides,

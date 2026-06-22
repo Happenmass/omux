@@ -196,6 +196,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			llmClient,
 			adapter,
 			bridge,
+			createAgentSettleMs: 0,
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
@@ -230,6 +231,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			llmClient,
 			adapter,
 			bridge,
+			createAgentSettleMs: 0,
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
@@ -258,6 +260,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			llmClient,
 			adapter,
 			bridge,
+			createAgentSettleMs: 0,
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
@@ -284,6 +287,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			llmClient,
 			adapter,
 			bridge,
+			createAgentSettleMs: 0,
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
@@ -309,6 +313,7 @@ describe("Integration: Chat mode end-to-end", () => {
 			llmClient,
 			adapter,
 			bridge,
+			createAgentSettleMs: 0,
 			stateDetector: stateDetector as any,
 			broadcaster,
 		});
