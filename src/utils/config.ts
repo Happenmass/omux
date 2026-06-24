@@ -67,6 +67,13 @@ export interface LearningConfig {
 	enabled: boolean;
 }
 
+export interface AutoContinueConfig {
+	/** When true, after the loop naturally finishes a gate LLM decides whether to keep going. Default false. */
+	enabled: boolean;
+	/** Max consecutive auto-continues before forcing a hand-back to the user. Default 10. */
+	maxConsecutive: number;
+}
+
 export interface McpServerDefinition {
 	command: string;
 	args?: string[];
@@ -105,6 +112,7 @@ export interface CliclawConfig {
 	memory: MemoryConfig;
 	skills: SkillsConfig;
 	learning: LearningConfig;
+	autoContinue: AutoContinueConfig;
 	mdns: MdnsConfig;
 	mcpServers?: Record<string, McpServerDefinition>;
 }
@@ -163,6 +171,10 @@ const DEFAULT_CONFIG: CliclawConfig = {
 	learning: {
 		enabled: false,
 	},
+	autoContinue: {
+		enabled: false,
+		maxConsecutive: 10,
+	},
 	mdns: {
 		enabled: true,
 		name: "cliclaw",
@@ -205,6 +217,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			memory: { ...DEFAULT_CONFIG.memory, ...userConfig.memory },
 			skills: { ...DEFAULT_CONFIG.skills, ...userConfig.skills },
 			learning: { ...DEFAULT_CONFIG.learning, ...userConfig.learning },
+			autoContinue: { ...DEFAULT_CONFIG.autoContinue, ...userConfig.autoContinue },
 			mdns: { ...DEFAULT_CONFIG.mdns, ...userConfig.mdns },
 			mcpServers: userConfig.mcpServers,
 		};

@@ -89,3 +89,31 @@ describe("mcpServers config", () => {
 		expect(reloaded.mcpServers).toEqual(servers);
 	});
 });
+
+describe("autoContinue config", () => {
+	const configDir = join(homedir(), ".cliclaw");
+	const configFile = join(configDir, "config.json");
+	let saved: string | null = null;
+
+	beforeEach(async () => {
+		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
+	});
+	afterEach(async () => {
+		if (saved !== null) await writeFile(configFile, saved, "utf-8");
+		else if (existsSync(configFile)) await rm(configFile);
+	});
+
+	it("defaults autoContinue to disabled with a maxConsecutive cap", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ debug: false }), "utf-8");
+		const config = await loadConfig();
+		expect(config.autoContinue).toEqual({ enabled: false, maxConsecutive: 10 });
+	});
+
+	it("merges a partial autoContinue over the defaults", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ autoContinue: { enabled: true } }), "utf-8");
+		const config = await loadConfig();
+		expect(config.autoContinue).toEqual({ enabled: true, maxConsecutive: 10 });
+	});
+});

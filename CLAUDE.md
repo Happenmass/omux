@@ -209,6 +209,10 @@ Run a single file: `npx vitest test/core/main-agent.test.ts`. Match by name: `np
 - `skills.disabled` — list of skill names to disable
 - `learning.enabled` — enable Learning Sessions (default `false`). When disabled, no learning components are initialized and the UI tab is hidden.
 
+`config.autoContinue.*`:
+- `enabled` — auto-continue mode (default `false`). When on, a gate LLM decides at loop-exit whether to keep going.
+- `maxConsecutive` — consecutive auto-continues before forced hand-back (default 10).
+
 ## i18n / Language
 
 Cliclaw auto-detects system language; supports `zh-CN` and `en-US`. Resolution order:
