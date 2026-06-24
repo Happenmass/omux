@@ -63,7 +63,7 @@ export class WorkQueue extends EventEmitter {
 		return before - this.queue.length;
 	}
 
-	/** Get a snapshot of all agent events in the queue (for list_agent_tasks). */
+	/** Get a snapshot of all agent events in the queue (for wait_for_agents). */
 	getAgentEvents(): AgentEvent[] {
 		return this.queue
 			.filter((item): item is Extract<WorkItem, { kind: "agent_event" }> => item.kind === "agent_event")

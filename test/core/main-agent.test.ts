@@ -1252,52 +1252,20 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
-	describe("list_agent_tasks tool", () => {
-		it("returns empty message when no tasks and no pending events", async () => {
-			const agent = setupAgent([toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("No tasks running.")]);
-
-			await agent.handleMessage("what agents are running?");
-
-			const calls = (mockCtx.addMessage as any).mock.calls;
-			const toolResultMsg = calls.find(
-				(c: any) =>
-					c[0].role === "tool" &&
-					typeof c[0].content === "string" &&
-					c[0].content.includes("No active agent tasks"),
-			);
-			expect(toolResultMsg).toBeDefined();
-		});
-
-		it("returns active tasks when agent monitor has tasks", async () => {
-			const agent = setupAgent(
-				[toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("Session A is waiting for input.")],
-				{},
-				{ withMonitor: true },
-			);
-
-			// Inject a fake task directly via dispatch mock
-			const fakeTask = {
-				taskId: "task_1",
-				agentId: "cliclaw-test-1",
-				status: "waiting_input" as const,
-				summary: "Implement login flow",
-				taskContext: "Implement login flow",
-				preHash: "abc123",
-				startedAt: Date.now() - 30000,
-				abortController: new AbortController(),
-			};
-			(agent as any).agentMonitor.tasks.set("cliclaw-test-1", fakeTask);
+	describe("list_agent_tasks removed", () => {
+		it("returns 'Unknown tool' when the LLM calls list_agent_tasks", async () => {
+			const agent = setupAgent([toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("ok")]);
 
 			await agent.handleMessage("check agents");
 
 			const calls = (mockCtx.addMessage as any).mock.calls;
 			const toolResultMsg = calls.find(
 				(c: any) =>
-					c[0].role === "tool" && typeof c[0].content === "string" && c[0].content.includes("cliclaw-test-1"),
+					c[0].role === "tool" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes("Unknown tool: list_agent_tasks"),
 			);
 			expect(toolResultMsg).toBeDefined();
-			expect(toolResultMsg[0].content).toContain("waiting_input");
-			expect(toolResultMsg[0].content).toContain("Implement login flow");
 		});
 	});
 

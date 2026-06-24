@@ -359,19 +359,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "list_agent_tasks",
-		description:
-			"List all active sub-agent tasks currently being monitored and any pending events in the agent event queue. Use this to get a real-time snapshot of sub-agent status before deciding whether to intervene.",
-		parameters: {
-			type: "object",
-			properties: {},
-			required: [],
-		},
-	},
-	{
 		name: "wait_for_agents",
 		description:
-			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent / list_agent_tasks to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
+			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
 		parameters: {
 			type: "object",
 			properties: {},
@@ -1831,41 +1821,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 			}
 
-			case "list_agent_tasks": {
-				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
-				const pendingEvents = this.workQueue.getAgentEvents();
 
-				const lines: string[] = [];
-
-				if (activeTasks.length > 0) {
-					lines.push("## Active Agent Tasks");
-					for (const task of activeTasks) {
-						const elapsedSeconds = Math.round((Date.now() - task.startedAt) / 1000);
-						lines.push(
-							`- agent=${task.agentId} task=${task.taskId} status=${task.status} elapsed=${elapsedSeconds}s`,
-						);
-						lines.push(`  summary: ${task.summary}`);
-					}
-				}
-
-				if (pendingEvents.length > 0) {
-					if (lines.length > 0) lines.push("");
-					lines.push("## Pending Events (WorkQueue)");
-					for (const evt of pendingEvents) {
-						lines.push(
-							`- agent=${evt.agentId} task=${evt.taskId} status=${evt.status} duration=${evt.durationSeconds}s`,
-						);
-						lines.push(`  summary: ${evt.summary}`);
-						lines.push(`  detail: ${evt.detail}`);
-					}
-				}
-
-				if (lines.length === 0) {
-					return { output: "No active agent tasks or pending events.", terminal: false };
-				}
-
-				return { output: lines.join("\n"), terminal: false };
-			}
 
 			case "wait_for_agents": {
 				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
