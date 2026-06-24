@@ -46,6 +46,7 @@
 		"express": "^5.2.1",
 		"node-llama-cpp": "^3.16.2",
 		"sqlite-vec": "^0.1.6",
+		"undici": "^8.5.0",
 		"ws": "^8.19.0"
 	},
 	"devDependencies": {

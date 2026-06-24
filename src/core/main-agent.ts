@@ -368,6 +368,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 			required: [],
 		},
 	},
+	{
+		name: "wait_for_agents",
+		description:
+			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent / list_agent_tasks to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
+		parameters: {
+			type: "object",
+			properties: {},
+			required: [],
+		},
+	},
 ];
 
 // ─── MainAgent ──────────────────────────────────────────
@@ -1855,6 +1865,70 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 
 				return { output: lines.join("\n"), terminal: false };
+			}
+
+			case "wait_for_agents": {
+				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
+				const pendingEvents = this.workQueue.getAgentEvents();
+				const running = activeTasks.filter((t) => t.status === "running");
+				const waiting = activeTasks.filter((t) => t.status === "waiting_input");
+
+				// A future wake-up is guaranteed only when something will fire a callback:
+				// a running task (settles later → enqueues an event) or an event already in
+				// the queue (drained by dispatchNext the moment we return to idle). A
+				// waiting_input task already fired its callback and will NOT fire again until
+				// respond_to_agent → resumeTask, so it does not, on its own, justify parking.
+				const willWake = running.length > 0 || pendingEvents.length > 0;
+
+				const lines: string[] = [];
+				if (running.length > 0) {
+					lines.push(`## Working (${running.length})`);
+					for (const t of running) {
+						const elapsed = Math.round((Date.now() - t.startedAt) / 1000);
+						lines.push(`- ${t.agentId} (${t.taskId}) elapsed=${elapsed}s — ${t.summary}`);
+					}
+				}
+				if (waiting.length > 0) {
+					if (lines.length > 0) lines.push("");
+					lines.push(`## Waiting for your input (${waiting.length}) — use respond_to_agent`);
+					for (const t of waiting) {
+						lines.push(`- ${t.agentId} (${t.taskId}) — ${t.summary}`);
+					}
+				}
+				if (pendingEvents.length > 0) {
+					if (lines.length > 0) lines.push("");
+					lines.push(`## Already reported, delivered to you next (${pendingEvents.length})`);
+					for (const e of pendingEvents) {
+						lines.push(`- ${e.agentId} (${e.taskId}) status=${e.status} — ${e.summary}`);
+					}
+				}
+
+				if (willWake) {
+					this.broadcaster.broadcast({
+						type: "system",
+						message: `⏸ 已挂起，等待 ${running.length} 个子代理回调`,
+					});
+					const header =
+						`⏸ Parked. ${running.length} agent(s) still working` +
+						(pendingEvents.length > 0 ? `, ${pendingEvents.length} event(s) already queued` : "") +
+						". You will be resumed automatically on the next callback — do NOT poll in the meantime.";
+					return { output: `${header}\n\n${lines.join("\n")}`, terminal: true };
+				}
+
+				// Nothing will wake us — parking would stall the loop. Nudge the model to act.
+				if (waiting.length > 0) {
+					return {
+						output: `No agents are working in the background, but ${waiting.length} agent(s) are waiting for your input — respond with respond_to_agent instead of waiting.\n\n${lines.join("\n")}`,
+						terminal: false,
+					};
+				}
+				return {
+					output:
+						"No sub-agents are working and no events are queued — there is nothing to wait for. Decide based on the overall goal, not on this pause:\n" +
+						"- If the success criteria are NOT yet met (tests not passing, behavior not verified end-to-end, or more work remains), keep driving — dispatch the next round with send_to_agent (or create_agent if no suitable agent exists).\n" +
+						"- If the goal IS fully met, do NOT call another tool: reply with a brief final summary to the user. That returns you to idle and ends the loop.",
+					terminal: false,
+				};
 			}
 
 			default: {

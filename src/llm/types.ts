@@ -177,6 +177,8 @@ export interface LLMClientOptions {
 	model?: string;
 	apiKey?: string;
 	baseUrl?: string;
+	/** HTTP/HTTPS/SOCKS proxy URL. Only affects this LLMClient's outbound requests. */
+	proxy?: string;
 	maxRetries?: number;
 	timeout?: number;
 }

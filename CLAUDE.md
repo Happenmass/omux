@@ -51,7 +51,7 @@ All LLM calls go through `llmClient.stream()`; text deltas are broadcast to WebS
 **Events emitted**: `state_change`, `log`.
 
 **Built-in tools exposed to the LLM** (declared inline in the same file):
-- Agent interaction — `send_to_agent`, `respond_to_agent`, `interrupt_agent` (sends Esc + summary to the chat), `inspect_agent`, `list_agent_tasks`, `create_agent`, `list_agents`, `kill_agent`
+- Agent interaction — `send_to_agent`, `respond_to_agent`, `interrupt_agent` (sends Esc + summary to the chat), `inspect_agent`, `list_agent_tasks`, `wait_for_agents` (parks the loop until the next agent callback — terminal only when a wake-up is guaranteed; stops the LLM from polling), `create_agent`, `list_agents`, `kill_agent`
 - Memory — `memory_search`, `memory_get`, `memory_edit` (modes: append/overwrite/replace/delete; `memory_write` is a backwards-compatible alias), `persistent_memory` (read/update global + project MEMORY.md)
 - Discovery — `read_skill`, `exec_command` (read-only bash)
 - Terminal — `mark_failed`, `escalate_to_human`

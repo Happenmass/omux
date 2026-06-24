@@ -196,6 +196,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 	private store: boolean;
 	private incrementalEnabled: boolean;
 	private incrementalState: IncrementalState | null = null;
+	private fetch: typeof globalThis.fetch;
 
 	constructor(
 		config: ProviderConfig,
@@ -204,6 +205,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 			apiKey?: string;
 			maxRetries?: number;
 			timeout?: number;
+			fetch?: typeof globalThis.fetch;
 			/**
 			 * Opt INTO Layer-2 `previous_response_id` incremental transport. Default `false`.
 			 *
@@ -224,6 +226,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 		this.headers = config.headers || {};
 		this.maxRetries = opts.maxRetries ?? 3;
 		this.timeout = opts.timeout ?? 60000;
+		this.fetch = opts.fetch ?? globalThis.fetch;
 		// Default OFF — matches Codex HTTP path. See class JSDoc for rationale.
 		this.incrementalEnabled = opts.enableIncremental ?? false;
 		// `store` only matters for Layer-2 (server retains prior response so prev_id chain
@@ -425,7 +428,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 						`[${this.name}] fetch attempt ${attempt + 1}/${this.maxRetries + 1} — this is a RETRY of the previous failed request`,
 					);
 				}
-				const response = await fetch(url, {
+				const response = await this.fetch(url, {
 					method: "POST",
 					headers,
 					body: JSON.stringify(body),

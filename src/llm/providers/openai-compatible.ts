@@ -26,10 +26,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
 	private headers: Record<string, string>;
 	private maxRetries: number;
 	private timeout: number;
+	private fetch: typeof globalThis.fetch;
 
 	constructor(
 		config: ProviderConfig,
-		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number },
+		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number; fetch?: typeof globalThis.fetch },
 	) {
 		this.name = config.name;
 		this.baseUrl = config.baseUrl.replace(/\/$/, "");
@@ -38,6 +39,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 		this.headers = config.headers || {};
 		this.maxRetries = opts.maxRetries ?? 3;
 		this.timeout = opts.timeout ?? 60000;
+		this.fetch = opts.fetch ?? globalThis.fetch;
 	}
 
 	async complete(messages: LLMMessage[], opts?: CompletionOptions): Promise<LLMResponse> {
@@ -341,7 +343,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 					headers["Authorization"] = `Bearer ${this.apiKey}`;
 				}
 
-				const response = await fetch(url, {
+				const response = await this.fetch(url, {
 					method: "POST",
 					headers,
 					body: JSON.stringify(body),

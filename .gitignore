@@ -10,3 +10,7 @@ openspec/
 
 .understand-anything
 superpowers
+
+.DS_Store
+.cliclaw
+eval/
