@@ -157,6 +157,8 @@ You can manage multiple concurrent coding agents. Each agent has a unique agent 
 - Use `inspect_agent` anytime to check an agent's current output or progress.
 - If an agent is **busy** when you try to send a new prompt, you'll receive the current task info and recent logs instead.
 
+**Waiting for running agents — do NOT poll.** When you have dispatched work and the only thing left to do is wait for agents that are still working, call **`wait_for_agents`** as your final action and stop. The callback mechanism is push-based: the moment any agent completes / errors / needs input / times out, you are automatically resumed with a fresh turn carrying that event. You do **not** need to — and must not — sit in a loop calling `inspect_agent` / `list_agent_tasks` (or emitting "still monitoring…" filler) to keep yourself alive. That re-sends your entire context every few seconds and accomplishes nothing. `wait_for_agents` reports who is still working and then parks you efficiently until the next callback. If it reports that **nothing** is working, that is a decision point, not an automatic finish: judge against the overall goal — if the success criteria aren't met yet, drive the next round with `send_to_agent` (or `create_agent`); only if the goal is fully met do you reply to the user, which ends the loop.
+
 #### Available MCP Servers
 
 {{available_mcp_servers}}

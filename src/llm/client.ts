@@ -3,6 +3,7 @@ import { AnthropicProvider } from "./providers/anthropic.js";
 import { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
 import { OpenAIResponsesProvider } from "./providers/openai-responses.js";
 import { resolveProvider } from "./providers/registry.js";
+import { createProxyFetch } from "./proxy.js";
 import type {
 	CompletionOptions,
 	LLMClientOptions,
@@ -40,11 +41,17 @@ export class LLMClient {
 
 		this.currentModel = opts.model || config.defaultModel;
 
+		const proxyFetch = opts.proxy ? createProxyFetch(opts.proxy) : undefined;
+		if (proxyFetch) {
+			logger.info("llm", `Proxy enabled for main-agent LLM calls: ${opts.proxy}`);
+		}
+
 		const providerOpts = {
 			model: this.currentModel,
 			apiKey: opts.apiKey,
 			maxRetries: opts.maxRetries,
 			timeout: opts.timeout,
+			fetch: proxyFetch,
 		};
 
 		switch (config.protocol) {

@@ -49,7 +49,11 @@ if (existsSync(join(repoDir, ".git")) && !values.force) {
 	try {
 		const head = sh("git", ["-C", repoDir, "rev-parse", "HEAD"]).trim();
 		if (head === inst.base_commit) {
-			console.error(`[prepare] reuse existing ${repoDir} (HEAD ok)`);
+			// Reuse, but guarantee a pristine base (a prior/interrupted run may
+			// have left the working tree dirty — that would pollute this run).
+			sh("git", ["-C", repoDir, "reset", "--hard", inst.base_commit, "-q"]);
+			sh("git", ["-C", repoDir, "clean", "-fdq"]);
+			console.error(`[prepare] reuse existing ${repoDir} (reset clean @ base)`);
 			console.log(repoDir);
 			process.exit(0);
 		}

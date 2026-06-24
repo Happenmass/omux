@@ -229,9 +229,15 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 				/command not found/,
 			],
 			activePatterns: [
-				/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, // Spinner
-				/\.\.\.\s*$/m, // Thinking dots
-				/Reading|Writing|Editing|Running/, // Action words (case-sensitive)
+				/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, // Braille spinner (legacy frames)
+				// NOTE: do NOT match the bare star glyph (✶✻✽…) — Claude Code reuses it
+				// on the COMPLETED summary line too ("✻ Churned for 1m 9s"), so it cannot
+				// distinguish busy from done. Rely on the two markers below instead, which
+				// appear ONLY while actively processing.
+				/\besc to interrupt\b/i, // Live status hint — present only while working (verb/glyph-agnostic, catches every whimsical working verb)
+				/…\s*\(/, // Working verb + ellipsis before the status paren, e.g. "Pondering… (12s · esc to interrupt)"; the done line "Churned for 1m 9s" has no ellipsis
+				/\.\.\.\s*$/m, // ASCII thinking dots (legacy)
+				/Reading|Writing|Editing|Running/, // Capitalized live action labels (case-sensitive on purpose — lowercase forms appear in final summaries)
 			],
 			confirmKey: "y",
 			abortKey: "Escape",

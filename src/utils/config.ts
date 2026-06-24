@@ -11,6 +11,8 @@ export interface LLMConfig {
 	model: string;
 	apiKey?: string;
 	baseUrl?: string;
+	/** HTTP/HTTPS/SOCKS proxy URL for main-agent LLM API calls only (e.g. "http://127.0.0.1:7890"). Sub-agents are unaffected. */
+	proxy?: string;
 	/** Extended thinking / reasoning effort. Default "off". */
 	thinking?: ThinkingLevel;
 }

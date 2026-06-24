@@ -33,7 +33,7 @@ export class AnthropicProvider implements LLMProvider {
 
 	constructor(
 		config: ProviderConfig,
-		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number },
+		opts: { model?: string; apiKey?: string; maxRetries?: number; timeout?: number; fetch?: typeof globalThis.fetch },
 	) {
 		this.name = config.name;
 		this.model = opts.model || config.defaultModel;
@@ -41,6 +41,7 @@ export class AnthropicProvider implements LLMProvider {
 			apiKey: opts.apiKey || process.env[config.apiKeyEnvVar],
 			maxRetries: opts.maxRetries ?? 3,
 			timeout: opts.timeout ?? 60000,
+			...(opts.fetch ? { fetch: opts.fetch as any } : {}),
 		});
 	}
 

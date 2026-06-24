@@ -576,6 +576,7 @@ async function main(): Promise<void> {
 		model: llmModel,
 		apiKey: llmApiKey,
 		baseUrl: llmBaseUrl,
+		proxy: config.llm.proxy,
 	});
 
 	// Initialize PromptLoader

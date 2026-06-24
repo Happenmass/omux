@@ -188,6 +188,8 @@
 
 `inspect_agent` 任意时刻可以查看 sub-agent 的当前 pane 与状态。
 
+**等待运行中的 agent —— 不要轮询。** 当你已经派活，接下来唯一要做的就是等仍在工作的 agent 时，把 **`wait_for_agents`** 作为本轮的最后一个动作调用，然后停下。回调是推送式的:任何 agent 一旦 完成 / 出错 / 需要输入 / 超时,系统会**自动**用带着该事件的新一轮把你唤醒。你**不需要、也不允许**靠循环调用 `inspect_agent` / `list_agent_tasks`(或反复输出"继续监控中…"之类的占位文本)来维持自己存活——那会每隔几秒就把整个上下文重发一遍,纯属浪费 token,且毫无作用。`wait_for_agents` 会报告谁还在工作,然后高效地把你挂起直到下一次回调。如果它报告**没有任何 agent 在工作**,这是一个**判断点,而不是自动收尾**:对照整体目标自行决定——如果成功标准还没达成(测试没过 / 行为没端到端验证 / 还有活没干完),就用 `send_to_agent`(或 `create_agent`)继续派下一轮;只有当目标已完全达成,才回文本给用户,从而结束循环。
+
 `create_agent` 成功后会把目标目录下 `.cliclaw/MEMORY.md` 的内容**回传给你**（sub-agent 看不到），由你决定如何使用：把关键约定/决策/人物精炼后塞进首条 `send_to_agent`，或者把文件路径连同"什么条件下读"的指令告诉 sub-agent 让它按需自取；不要整段倾倒。如果该项目还没有 MEMORY.md 且任务非琐碎，可以提议用户用 `persistent_memory({ scope: "project", project_dir })` 沉淀关键约定。
 
 `kill_agent` 终止 agent 时，如果返回 `Resume ID`，把它持久化到 `memory/sessions.md`：

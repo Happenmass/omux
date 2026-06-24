@@ -39,6 +39,7 @@ const { values } = parseArgs({
 		"max-nudges": { type: "string", default: "3" },
 		agent: { type: "string", default: "claude-code" },
 		"keep-mcp": { type: "boolean", default: false },
+		port: { type: "string" }, // optional fixed port (parallel batch assigns disjoint ports)
 	},
 });
 
@@ -97,6 +98,7 @@ function appendPrediction(outPath, entry) {
 		distMain,
 		agent: values.agent,
 		keepMcp: values["keep-mcp"],
+		port: values.port ? Number(values.port) : undefined,
 		onLog: (l) => serverLogChunks.push(l),
 	});
 
