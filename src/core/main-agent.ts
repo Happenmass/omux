@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
+import type { PromptLoader } from "../llm/prompt-loader.js";
 import type {
 	LLMMessage,
 	LLMStreamEvent,
@@ -27,6 +28,7 @@ import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { loadConfig } from "../utils/config.js";
+import { getLanguageInstruction, type SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 import { cleanupMcpConfigFile, generateMcpConfigFile, selectMcpServers } from "../utils/mcp-config.js";
 import { AgentMonitor } from "./agent-monitor.js";
@@ -404,6 +406,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private globalDir: string;
 	private workspaceDir: string;
 	private createAgentSettleMs: number;
+	private promptLoader: PromptLoader | null = null;
+	private locale: SupportedLocale = "en-US";
+	private autoContinueEnabled = false;
+	private autoContinueMax = 10;
+	private autoContinueCount = 0;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -442,6 +449,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		changeTracker?: ChangeTracker;
 		thinking?: ThinkingLevel;
 		createAgentSettleMs?: number;
+		promptLoader?: PromptLoader;
+		locale?: SupportedLocale;
+		autoContinue?: { enabled: boolean; maxConsecutive: number };
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
@@ -465,6 +475,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.learningPipeline = opts.learningPipeline;
 		this.changeTracker = opts.changeTracker;
 		this.createAgentSettleMs = opts.createAgentSettleMs ?? 10_000;
+		this.promptLoader = opts.promptLoader ?? null;
+		this.locale = opts.locale ?? "en-US";
+		this.autoContinueEnabled = opts.autoContinue?.enabled ?? false;
+		this.autoContinueMax = opts.autoContinue?.maxConsecutive ?? 10;
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -479,6 +493,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			tools: TOOL_DEFINITIONS,
 			thinking: this.thinking,
 		});
+	}
+
+	/** Toggle auto-continue mode at runtime (used by the /autocontinue command). Returns the new state. */
+	setAutoContinueEnabled(on: boolean): boolean {
+		this.autoContinueEnabled = on;
+		return this.autoContinueEnabled;
+	}
+
+	isAutoContinueEnabled(): boolean {
+		return this.autoContinueEnabled;
 	}
 
 	/** Replace the skill registry at runtime (used by /reset). */
@@ -696,6 +720,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// ─── handleMessage — main entry point ──────────────
 
 	async handleMessage(content: string): Promise<void> {
+		// A real user message ends any auto-continue streak.
+		this.autoContinueCount = 0;
 		this.workQueue.enqueueUserMessage(content);
 
 		if (this.state === "executing" || this.isDispatching) {
@@ -890,6 +916,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					this.contextManager.addMessage({ role: "assistant", content: textContent });
 				}
 				this.broadcastAssistantDone();
+				await this.maybeAutoContinue(textContent);
 				this.setState("idle");
 				return;
 			}
@@ -953,6 +980,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			// Pure text response — return to IDLE
 			this.contextManager.addMessage({ role: "assistant", content: textContent });
 			this.broadcastAssistantDone();
+			await this.maybeAutoContinue(textContent);
 			this.setState("idle");
 		}
 	}
@@ -987,8 +1015,88 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				this.broadcastAssistantDone();
 			}
 			// Pure text / empty response — return to IDLE
+			await this.maybeAutoContinue(textContent);
 			this.setState("idle");
 		}
+	}
+
+	/**
+	 * Auto-continue gate. Called at natural-completion return-to-idle sites. When the mode is on
+	 * and no other actor is taking over, a single separate LLM call decides whether the task is
+	 * actually done. On "continue" it enqueues a synthesized driver message (re-driving the loop
+	 * via dispatchNext) and returns true; otherwise returns false (caller hands back to the user).
+	 * The caller calls setState("idle") regardless — a true result just means a queued message
+	 * will immediately re-drive it.
+	 */
+	private async maybeAutoContinue(lastText: string): Promise<boolean> {
+		if (!this.autoContinueEnabled) return false;
+		if (!this.promptLoader) return false;
+		if (this.signalRouter.isStopRequested()) return false;
+		if (this.workQueue.pendingUserMessages() > 0) return false; // a real user message is waiting — defer
+		if (this.autoContinueCount >= this.autoContinueMax) {
+			this.broadcaster.broadcast({ type: "system", message: "已达自动继续上限，交还控制权" });
+			return false;
+		}
+
+		const tasks = this.agentMonitor?.getAllTasks() ?? [];
+		const pending = this.workQueue.getAgentEvents();
+		const statusLines: string[] = [];
+		for (const t of tasks) {
+			const elapsed = Math.round((Date.now() - t.startedAt) / 1000);
+			statusLines.push(`- ${t.agentId} (${t.taskId}) status=${t.status} elapsed=${elapsed}s — ${t.summary}`);
+		}
+		for (const e of pending) {
+			statusLines.push(`- ${e.agentId} (${e.taskId}) reported=${e.status} — ${e.summary}`);
+		}
+		const agentStatus = statusLines.length > 0 ? statusLines.join("\n") : "(no active sub-agents)";
+
+		const prompt = this.promptLoader.resolve("auto-continue", {
+			language_instruction: getLanguageInstruction(this.locale),
+			last_output: lastText || "(the agent produced no text this turn)",
+			agent_status: agentStatus,
+		});
+
+		let decision: { continue: boolean; reason: string; driverText: string } | null = null;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				const res = await this.llmClient.complete([{ role: "user", content: prompt }], {
+					responseFormat: "json",
+					temperature: 0.2,
+				});
+				decision = this.parseAutoContinueDecision(res.content);
+				break;
+			} catch (err: any) {
+				logger.warn("main-agent", `auto-continue gate parse attempt ${attempt + 1} failed: ${err.message}`);
+			}
+		}
+
+		if (!decision || !decision.continue || decision.driverText.trim() === "") {
+			return false;
+		}
+
+		this.autoContinueCount++;
+		this.broadcaster.broadcast({
+			type: "system",
+			message: `🔄 自动继续 (${this.autoContinueCount}/${this.autoContinueMax}): ${decision.reason}`,
+		});
+		this.workQueue.enqueueUserMessage(decision.driverText);
+		return true;
+	}
+
+	private parseAutoContinueDecision(text: string): { continue: boolean; reason: string; driverText: string } {
+		const stripped = text
+			.replace(/^```(?:json)?\s*/, "")
+			.replace(/\s*```\s*$/, "")
+			.trim();
+		const parsed = JSON.parse(stripped);
+		if (typeof parsed.continue !== "boolean") {
+			throw new Error("auto-continue decision missing 'continue' boolean");
+		}
+		return {
+			continue: parsed.continue,
+			reason: typeof parsed.reason === "string" ? parsed.reason : "",
+			driverText: typeof parsed.driverText === "string" ? parsed.driverText : "",
+		};
 	}
 
 	private recoverFromExecutionError(source: string, err: Error): void {
