@@ -1821,8 +1821,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				}
 			}
 
-
-
 			case "wait_for_agents": {
 				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
 				const pendingEvents = this.workQueue.getAgentEvents();
