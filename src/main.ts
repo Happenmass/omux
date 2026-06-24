@@ -804,6 +804,9 @@ async function main(): Promise<void> {
 		workspaceDir: args.cwd,
 		debug: config.debug,
 		thinking: config.llm.thinking ?? "off",
+		promptLoader,
+		locale,
+		autoContinue: config.autoContinue,
 		searchConfig: {
 			vectorWeight: config.memory.vectorWeight,
 			textWeight: 1 - config.memory.vectorWeight,
