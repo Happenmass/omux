@@ -106,6 +106,22 @@ describe("AgentStore", () => {
 			const agents = store.loadAgents();
 			expect(agents).toEqual([]);
 		});
+
+		it("should persist and load the model", () => {
+			store.saveAgent("cliclaw-model", { paneTarget: "cliclaw-model:0.0", workingDir: "/m", model: "opus" });
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].model).toBe("opus");
+		});
+
+		it("should default model to undefined when omitted", () => {
+			store.saveAgent("cliclaw-nomodel", { paneTarget: "cliclaw-nomodel:0.0", workingDir: "/n" });
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].model).toBeUndefined();
+		});
 	});
 
 	describe("deleteAgent", () => {

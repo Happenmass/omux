@@ -44,6 +44,8 @@ export type AgentState = "idle" | "executing";
 export interface AgentEntry {
 	paneTarget: string;
 	workingDir: string;
+	/** Resolved model the agent was launched with (e.g. "opus"). Undefined for legacy/restored entries. */
+	model?: string;
 }
 
 export interface MainAgentEvents {
@@ -499,6 +501,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		workingDir: string;
 		status: string;
 		takenOver: boolean;
+		adapter: string;
+		model: string;
 	}> {
 		const result: Array<{
 			agentName: string;
@@ -507,6 +511,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			workingDir: string;
 			status: string;
 			takenOver: boolean;
+			adapter: string;
+			model: string;
 		}> = [];
 		for (const [id, entry] of this.agents) {
 			const task = this.agentMonitor?.getTask(id);
@@ -525,6 +531,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				workingDir: entry.workingDir,
 				status,
 				takenOver: this.takenOverAgents.has(id),
+				adapter: this.adapter.displayName,
+				model: entry.model ?? this.adapter.defaultModel,
 			});
 		}
 		return result;
@@ -1543,9 +1551,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preCommands,
 						mcpConfigPath,
 					});
-					this.agents.set(agentName, { paneTarget, workingDir });
+					const resolvedModel = model ?? this.adapter.defaultModel;
+					this.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel });
 					await this.changeTracker?.registerAgent(agentName, workingDir);
-					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir });
+					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir, model: resolvedModel });
 					this.activeAgentId = agentName;
 					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
 					logger.info("main-agent", `Agent created: ${agentName}, pane: ${paneTarget}, cwd: ${workingDir}`);

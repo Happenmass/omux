@@ -13,6 +13,7 @@ import type {
 export class CodexAdapter implements AgentAdapter {
 	readonly name = "codex";
 	readonly displayName = "Codex";
+	readonly defaultModel = "gpt-5.5";
 
 	private command: string;
 
@@ -29,7 +30,7 @@ export class CodexAdapter implements AgentAdapter {
 		const paneTarget = `${opts.sessionName}:0.0`;
 
 		// Codex uses subcommand style: `codex resume <id>` (not --resume flag)
-		const model = opts.model?.trim() || "gpt-5.5";
+		const model = opts.model?.trim() || this.defaultModel;
 		const baseCmd = `${this.command} --full-auto --model ${model}`;
 		let cmd = opts.resumeId ? `${this.command} resume ${opts.resumeId} --full-auto --model ${model}` : baseCmd;
 		if (opts.preCommands && opts.preCommands.length > 0) {

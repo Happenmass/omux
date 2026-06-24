@@ -826,7 +826,11 @@ async function main(): Promise<void> {
 		for (const a of persistedAgents) {
 			const alive = await bridge.hasSession(a.agentId);
 			if (alive) {
-				mainAgent.restoreAgent(a.agentId, { paneTarget: a.paneTarget, workingDir: a.workingDir }, a.takenOver);
+				mainAgent.restoreAgent(
+					a.agentId,
+					{ paneTarget: a.paneTarget, workingDir: a.workingDir, model: a.model },
+					a.takenOver,
+				);
 				restoredAgentIds.add(a.agentId);
 			} else {
 				agentStore.deleteAgent(a.agentId);

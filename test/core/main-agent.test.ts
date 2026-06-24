@@ -82,6 +82,7 @@ function createMockAdapter() {
 	return {
 		name: "test-agent",
 		displayName: "Test Agent",
+		defaultModel: "test-model",
 		launch: vi.fn().mockResolvedValue("test-session:0.0"),
 		sendPrompt: vi.fn().mockResolvedValue(undefined),
 		sendResponse: vi.fn().mockResolvedValue(undefined),
@@ -1372,6 +1373,8 @@ describe("MainAgent State Machine", () => {
 				workingDir: expect.any(String),
 				status: "idle",
 				takenOver: false,
+				adapter: "Test Agent",
+				model: "test-model",
 			});
 		});
 
@@ -1662,6 +1665,7 @@ describe("MainAgent State Machine", () => {
 			expect(mockAgentStore.saveAgent).toHaveBeenCalledWith("cliclaw-test", {
 				paneTarget: "test-session:0.0",
 				workingDir: expect.any(String),
+				model: "test-model",
 			});
 		});
 
