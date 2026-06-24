@@ -13,6 +13,8 @@ export interface TaskInfo {
 	preHash: string;
 	startedAt: number;
 	abortController: AbortController;
+	/** Set by cleanup()/shutdown() before aborting, so the polling loop skips the (always spurious) "aborted" settle callback. */
+	suppressSettleCallback?: boolean;
 }
 
 export type DispatchResult = { dispatched: true; task: TaskInfo } | { dispatched: false; busy: BusyResult };
@@ -125,6 +127,7 @@ export class AgentMonitor {
 	cleanup(agentId: string): void {
 		const task = this.tasks.get(agentId);
 		if (task) {
+			task.suppressSettleCallback = true;
 			task.abortController.abort();
 			this.tasks.delete(agentId);
 			this.paneTargets.delete(agentId);
@@ -133,6 +136,7 @@ export class AgentMonitor {
 
 	shutdown(): void {
 		for (const [_agentId, task] of this.tasks) {
+			task.suppressSettleCallback = true;
 			task.abortController.abort();
 		}
 		this.tasks.clear();
@@ -149,8 +153,14 @@ export class AgentMonitor {
 
 				// Check if aborted
 				if (task.abortController.signal.aborted) {
-					const duration = Math.round((Date.now() - task.startedAt) / 1000);
-					this.fireCallback(task, "aborted", "Task was aborted", duration);
+					// Aborts are only triggered by cleanup()/shutdown() (interrupt_agent /
+					// kill_agent / server stop), which set suppressSettleCallback. Firing an
+					// "aborted" event here would deliver a stale callback for an agent the
+					// caller deliberately tore down — skip it.
+					if (!task.suppressSettleCallback) {
+						const duration = Math.round((Date.now() - task.startedAt) / 1000);
+						this.fireCallback(task, "aborted", "Task was aborted", duration);
+					}
 					this.tasks.delete(agentId);
 					this.paneTargets.delete(agentId);
 					return;
