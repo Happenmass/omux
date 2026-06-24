@@ -139,7 +139,7 @@ HTTP + WebSocket server for the chat interface.
 - `chat-broadcaster.ts` — **`ChatBroadcaster`** ([chat-broadcaster.ts:12](src/server/chat-broadcaster.ts:12)): manages connected WS clients; `broadcast(message: ChatMessage)` fans out; terminates stalled clients (high buffered amount).
 - `ui-events.ts` — `UiEventStore` (memory + optional SQLite) of `UiEvent`s for replay/auditing.
 - `ws-handler.ts` — per-connection handler; routes `{type: "message"}` to `MainAgent.handleMessage()`, `{type: "command"}` to `CommandRouter`, plus `takeover` / `release` for human pane handoff. Sends current state on connect.
-- `command-router.ts` — **`CommandRouter`** ([command-router.ts:44](src/server/command-router.ts:44)). Handled slash commands: **`/stop`, `/clear`, `/reset`, `/compact`, `/context`, `/tidy`**. `/tidy` uses LLM to review memory files and archive outdated entries.
+- `command-router.ts` — **`CommandRouter`** ([command-router.ts:44](src/server/command-router.ts:44)). Handled slash commands: **`/stop`, `/clear`, `/reset`, `/compact`, `/context`, `/tidy`, `/autocontinue`**. `/tidy` uses LLM to review memory files and archive outdated entries.
 - `command-registry.ts` — `CommandRegistry`: central metadata store for both built-in and skill-declared slash commands. Methods: `register`, `registerMany`, `get`, `has`, `getAll`, `search`.
 
 (Note: `/resume` is no longer a slash command — execution control flows through the `stop`/auto-resume model.)

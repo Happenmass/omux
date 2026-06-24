@@ -20,6 +20,7 @@ const BUILTIN_COMMANDS: CommandDescriptor[] = [
 	{ name: "compact", description: "压缩对话历史并注入系统提示词", category: "builtin" },
 	{ name: "context", description: "查看上下文用量", category: "builtin" },
 	{ name: "tidy", description: "整理记忆文件，归档过时条目", category: "builtin" },
+	{ name: "autocontinue", description: "切换 auto-continue 自动续跑模式", category: "builtin" },
 ];
 
 /** Memory files to review during /tidy */
@@ -37,7 +38,7 @@ interface TidyResult {
 }
 
 /**
- * Routes slash commands (/stop, /clear, /reset, /compact, /context, /tidy) to the
+ * Routes slash commands (/stop, /clear, /reset, /compact, /context, /tidy, /autocontinue) to the
  * appropriate handlers. Commands are dispatched from the WebSocket handler, not
  * through the LLM.
  */
@@ -97,6 +98,8 @@ export class CommandRouter {
 				return this.handleContext();
 			case "tidy":
 				return this.handleTidy();
+			case "autocontinue":
+				return this.handleAutoContinue();
 			default:
 				this.broadcaster.broadcast({
 					type: "system",
@@ -115,6 +118,14 @@ export class CommandRouter {
 		}
 		this.signalRouter.stop();
 		// The MainAgent's executeToolLoop will check isStopRequested between rounds
+	}
+
+	private handleAutoContinue(): void {
+		const on = this.mainAgent.setAutoContinueEnabled(!this.mainAgent.isAutoContinueEnabled());
+		this.broadcaster.broadcast({
+			type: "system",
+			message: `auto-continue 已${on ? "开启" : "关闭"}`,
+		});
 	}
 
 	private async handleClear(): Promise<void> {
