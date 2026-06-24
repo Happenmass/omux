@@ -191,7 +191,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "memory_edit",
 		description:
-			"Edit a memory file. Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed.",
+			"Edit a file in the SEARCHABLE memory store (memory/*.md, indexed for memory_search / memory_get). Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed. This is NOT the always-in-prompt MEMORY.md — to edit the global/project MEMORY.md snapshot, use persistent_memory.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -294,7 +294,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "persistent_memory",
 		description:
-			"Read or update a persistent MEMORY.md file. Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
+			"Read or update a persistent MEMORY.md file. (This is the ALWAYS-in-system-prompt memory; for the separate searchable memory/*.md store use memory_edit / memory_search.) Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
 		parameters: {
 			type: "object",
 			properties: {
