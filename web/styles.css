@@ -1051,6 +1051,27 @@ body.resizing-execution-panel .execution-resize-handle::before {
 	white-space: nowrap;
 }
 
+.terminal-statusbar-agent {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.terminal-statusbar-adapter {
+	color: var(--term-accent);
+}
+
+.terminal-statusbar-sep {
+	color: var(--term-dim);
+	opacity: .6;
+}
+
+.terminal-statusbar-model {
+	color: var(--term-dim);
+}
+
 /* ─── Mobile-only sheet bits (hidden on desktop) ──── */
 .mobile-drag-handle,
 .mobile-peek-row {

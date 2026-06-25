@@ -206,6 +206,7 @@ describe("TextInputComponent", () => {
 describe("ConfigView", () => {
 	const testConfig: CliclawConfig = {
 		defaultAgent: "claude-code",
+		enabledAgents: ["claude-code"],
 		debug: false,
 		llm: {
 			provider: "anthropic",
@@ -250,8 +251,27 @@ describe("ConfigView", () => {
 		expect(text).toContain("Default Provider");
 		expect(text).toContain("Model");
 		expect(text).toContain("API Key");
-		expect(text).toContain("Default Agent");
+		expect(text).toContain("Active Agents");
 		expect(text).toContain("Base URL");
+		expect(text).toContain("Proxy");
+	});
+
+	it("should set proxy via text input", () => {
+		let savedConfig: CliclawConfig | null = null;
+		const view = new ConfigView(testConfig, {
+			onSave: (cfg) => { savedConfig = cfg; },
+		});
+
+		// Navigate to Proxy item (index 5) and open the text input
+		for (let i = 0; i < 5; i++) view.handleInput("\x1b[B");
+		view.handleInput("\r"); // Enter to open text input
+
+		// Type a SOCKS proxy URL and submit
+		for (const ch of "socks://127.0.0.1:10808") view.handleInput(ch);
+		view.handleInput("\r"); // Enter to submit
+
+		expect(savedConfig).not.toBeNull();
+		expect(savedConfig!.llm.proxy).toBe("socks://127.0.0.1:10808");
 	});
 
 	it("should show current config values", () => {
@@ -318,7 +338,7 @@ describe("ConfigView", () => {
 			onSave: (cfg) => { savedConfig = cfg; },
 		});
 
-		// Navigate to Learning Sessions item (last item, index 7)
+		// Navigate to Learning Sessions item (index 7)
 		for (let i = 0; i < 7; i++) view.handleInput("\x1b[B");
 		view.handleInput("\r"); // Enter to cycle
 
@@ -328,5 +348,67 @@ describe("ConfigView", () => {
 		// Cycle again to turn off
 		view.handleInput("\r");
 		expect(savedConfig!.learning.enabled).toBe(false);
+	});
+
+	it("should open the Active Agents checkbox submenu and toggle adapters", () => {
+		let savedConfig: CliclawConfig | null = null;
+		const view = new ConfigView(testConfig, {
+			onSave: (cfg) => {
+				savedConfig = cfg;
+			},
+		});
+
+		// Navigate to Active Agents (last item, index 8) and open the submenu
+		for (let i = 0; i < 8; i++) view.handleInput("\x1b[B");
+		view.handleInput("\r");
+
+		const text = view.render(60).join("\n");
+		expect(text).toContain("Active Agents:");
+		expect(text).toContain("Claude Code");
+		expect(text).toContain("Codex");
+		expect(text).toContain("Toggle"); // checkbox-mode hint
+
+		// claude-code starts checked + default; codex unchecked
+		expect(text).toContain("[x] Claude Code");
+		expect(text).toContain("[ ] Codex");
+
+		// Move to Codex (index 1) and toggle it on with Enter
+		view.handleInput("\x1b[B");
+		view.handleInput("\r");
+
+		expect(savedConfig).not.toBeNull();
+		expect(savedConfig!.enabledAgents).toEqual(["claude-code", "codex"]);
+
+		// Both now active; default stays claude-code (still in the set)
+		expect(savedConfig!.defaultAgent).toBe("claude-code");
+		const afterText = view.render(60).join("\n");
+		expect(afterText).toContain("[x] Codex");
+
+		// Esc returns to the list
+		view.handleInput("\x1b");
+		expect(view.render(60).join("\n")).toContain("Active Agents");
+	});
+
+	it("keeps at least one adapter active (cannot uncheck the last one)", () => {
+		let savedConfig: CliclawConfig | null = null;
+		const view = new ConfigView(testConfig, {
+			onSave: (cfg) => {
+				savedConfig = cfg;
+			},
+		});
+
+		// Open Active Agents submenu
+		for (let i = 0; i < 8; i++) view.handleInput("\x1b[B");
+		view.handleInput("\r");
+
+		// Try to uncheck the only active adapter (claude-code, index 0)
+		view.handleInput("\r");
+
+		// onSave fires but the set is unchanged — claude-code stays active
+		const text = view.render(60).join("\n");
+		expect(text).toContain("[x] Claude Code");
+		if (savedConfig) {
+			expect(savedConfig!.enabledAgents).toEqual(["claude-code"]);
+		}
 	});
 });

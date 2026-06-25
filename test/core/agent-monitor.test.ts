@@ -470,4 +470,34 @@ describe("AgentMonitor", () => {
 		});
 	});
 
+	describe("cleanup/shutdown suppress the aborted callback", () => {
+		it("does NOT enqueue an aborted event when cleanup() aborts a running task", async () => {
+			monitor.dispatch("session-1", "session-1:0.0", { preHash: "h", summary: "task" });
+
+			// Deliberate teardown: aborts the controller and removes the task.
+			monitor.cleanup("session-1");
+
+			// Let the awaited waitForSettled resolve so the poll reaches the abort branch.
+			mockDetector._resolve(settledResult("completed"));
+			await new Promise((r) => setTimeout(r, 0));
+
+			const events: AgentEvent[] = workQueue.getAgentEvents();
+			expect(events.some((e) => e.status === "aborted")).toBe(false);
+			expect(workQueue.isEmpty()).toBe(true);
+			expect(monitor.isBusy("session-1")).toBe(false);
+		});
+
+		it("still enqueues a completed event for a task that settles without cleanup", async () => {
+			monitor.dispatch("session-2", "session-2:0.0", { preHash: "h", summary: "task" });
+
+			mockDetector._resolve(settledResult("completed"));
+			await new Promise((r) => setTimeout(r, 0));
+
+			const events: AgentEvent[] = workQueue.getAgentEvents();
+			expect(events).toHaveLength(1);
+			expect(events[0].status).toBe("completed");
+			expect(events[0].agentId).toBe("session-2");
+		});
+	});
+
 });

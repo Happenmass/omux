@@ -20,7 +20,15 @@ const BUILTIN_COMMANDS: CommandDescriptor[] = [
 	{ name: "compact", description: "压缩对话历史并注入系统提示词", category: "builtin" },
 	{ name: "context", description: "查看上下文用量", category: "builtin" },
 	{ name: "tidy", description: "整理记忆文件，归档过时条目", category: "builtin" },
+	{ name: "autocontinue", description: "切换 auto-continue 自动续跑模式", category: "builtin" },
 ];
+
+/**
+ * Commands that rewrite/clear conversation history via async LLM work while the agent is idle.
+ * They run under MainAgent's maintenance lock so user input arriving mid-op queues instead of
+ * dispatching concurrently with the rewrite.
+ */
+const MAINTENANCE_COMMANDS = new Set(["clear", "reset", "compact", "tidy"]);
 
 /** Memory files to review during /tidy */
 const TIDY_TARGET_FILES = [
@@ -37,7 +45,7 @@ interface TidyResult {
 }
 
 /**
- * Routes slash commands (/stop, /clear, /reset, /compact, /context, /tidy) to the
+ * Routes slash commands (/stop, /clear, /reset, /compact, /context, /tidy, /autocontinue) to the
  * appropriate handlers. Commands are dispatched from the WebSocket handler, not
  * through the LLM.
  */
@@ -84,6 +92,15 @@ export class CommandRouter {
 	async handle(name: string): Promise<void> {
 		logger.info("command-router", `Handling command: /${name}`);
 
+		// Maintenance commands rewrite/clear history; hold the lock so concurrent user input queues.
+		if (MAINTENANCE_COMMANDS.has(name)) {
+			await this.mainAgent.runMaintenance(() => Promise.resolve(this.route(name)));
+			return;
+		}
+		await this.route(name);
+	}
+
+	private route(name: string): Promise<void> | void {
 		switch (name) {
 			case "stop":
 				return this.handleStop();
@@ -97,6 +114,8 @@ export class CommandRouter {
 				return this.handleContext();
 			case "tidy":
 				return this.handleTidy();
+			case "autocontinue":
+				return this.handleAutoContinue();
 			default:
 				this.broadcaster.broadcast({
 					type: "system",
@@ -115,6 +134,14 @@ export class CommandRouter {
 		}
 		this.signalRouter.stop();
 		// The MainAgent's executeToolLoop will check isStopRequested between rounds
+	}
+
+	private handleAutoContinue(): void {
+		const on = this.mainAgent.setAutoContinueEnabled(!this.mainAgent.isAutoContinueEnabled());
+		this.broadcaster.broadcast({
+			type: "system",
+			message: `auto-continue 已${on ? "开启" : "关闭"}`,
+		});
 	}
 
 	private async handleClear(): Promise<void> {
@@ -150,7 +177,10 @@ export class CommandRouter {
 
 		// Stop first if executing
 		if (this.mainAgent.state === "executing") {
-			logger.info("command-router", `[compact ${compactRunId}] state=executing → requesting stop and waiting for idle`);
+			logger.info(
+				"command-router",
+				`[compact ${compactRunId}] state=executing → requesting stop and waiting for idle`,
+			);
 			this.signalRouter.stop();
 			await this.mainAgent.waitForIdle();
 			logger.info("command-router", `[compact ${compactRunId}] reached idle (waited ${Date.now() - t0}ms)`);

@@ -59,6 +59,9 @@ export interface AgentAdapter {
 	/** Human-readable display name */
 	readonly displayName: string;
 
+	/** Model used when LaunchOptions.model is omitted (e.g. "opus", "gpt-5.5") */
+	readonly defaultModel: string;
+
 	/**
 	 * Launch the agent in a tmux pane.
 	 * Returns the tmux pane target string (e.g., "cliclaw:0.0").

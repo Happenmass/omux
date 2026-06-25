@@ -3,10 +3,17 @@ import { CommandRouter } from "../../src/server/command-router.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
 
 function createMockMainAgent(state: "idle" | "executing" = "idle") {
+	let autoContinue = false;
 	return {
 		state,
 		handleMessage: vi.fn().mockResolvedValue(undefined),
 		waitForIdle: vi.fn().mockResolvedValue(undefined),
+		runMaintenance: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+		isAutoContinueEnabled: vi.fn(() => autoContinue),
+		setAutoContinueEnabled: vi.fn((on: boolean) => {
+			autoContinue = on;
+			return autoContinue;
+		}),
 	} as any;
 }
 
@@ -256,12 +263,34 @@ describe("CommandRouter", () => {
 			expect(commandRegistry.has("compact")).toBe(true);
 			expect(commandRegistry.has("context")).toBe(true);
 			expect(commandRegistry.has("tidy")).toBe(true);
+			expect(commandRegistry.has("autocontinue")).toBe(true);
 			// /resume was removed: it had no remaining purpose once /stop's flag is checked
 			// between tool-loop rounds and execution naturally returns to idle on text-only
 			// turns. The /resume command also injected a synthetic [RESUME] user message,
 			// which was bad for prompt-cache prefix stability.
 			expect(commandRegistry.has("resume")).toBe(false);
-			expect(commandRegistry.size).toBe(6);
+			expect(commandRegistry.size).toBe(7);
+		});
+	});
+
+	describe("/autocontinue", () => {
+		it("toggles auto-continue on from off and reports it", async () => {
+			setup("idle");
+			await commandRouter.handle("autocontinue");
+			expect(mockAgent.setAutoContinueEnabled).toHaveBeenCalledWith(true);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("已开启") }),
+			);
+		});
+
+		it("toggles auto-continue off when already on", async () => {
+			setup("idle");
+			mockAgent.setAutoContinueEnabled(true); // pre-enable
+			await commandRouter.handle("autocontinue");
+			expect(mockAgent.setAutoContinueEnabled).toHaveBeenLastCalledWith(false);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("已关闭") }),
+			);
 		});
 	});
 

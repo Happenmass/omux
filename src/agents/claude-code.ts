@@ -13,6 +13,7 @@ import type {
 export class ClaudeCodeAdapter implements AgentAdapter {
 	readonly name = "claude-code";
 	readonly displayName = "Claude Code";
+	readonly defaultModel = "opus";
 
 	private command: string;
 
@@ -31,7 +32,7 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 		const paneTarget = `${opts.sessionName}:0.0`;
 
 		// Type launch command and press Enter
-		const model = opts.model?.trim() || "opus";
+		const model = opts.model?.trim() || this.defaultModel;
 		let baseCmd = `${this.command} --permission-mode auto --model ${model}`;
 		if (opts.mcpConfigPath) {
 			baseCmd += ` --mcp-config ${opts.mcpConfigPath} --strict-mcp-config`;

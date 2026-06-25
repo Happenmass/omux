@@ -297,6 +297,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			paneContent: string;
 			takenOver: boolean;
 			workingDir: string;
+			adapter: string;
+			model: string;
 		}> = [];
 		for (const a of activeAgents) {
 			let paneContent = "";
@@ -317,6 +319,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 				paneContent,
 				takenOver: a.takenOver,
 				workingDir: a.workingDir,
+				adapter: a.adapter,
+				model: a.model,
 			});
 		}
 		return agents;

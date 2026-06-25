@@ -36,7 +36,7 @@ import { type MdnsHandle, isValidMdnsName, startMdns } from "./server/mdns.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
-import { buildCapabilitiesSummary } from "./skills/injector.js";
+import { type AdapterCapabilityInput, buildAgentCapabilitiesSection } from "./skills/injector.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { TmuxBridge } from "./tmux/bridge.js";
 import { StateDetector } from "./tmux/state-detector.js";
@@ -49,6 +49,7 @@ import {
 	getGlobalDbPath,
 	getGlobalStorageDir,
 	getLogsDir,
+	KNOWN_AGENTS,
 	loadConfig,
 	loadServerRuntimeState,
 	type ServerRuntimeState,
@@ -212,6 +213,42 @@ function createAdapter(agentName: string): AgentAdapter {
 		default:
 			return new ClaudeCodeAdapter();
 	}
+}
+
+/** Instantiate one adapter per enabled name, preserving order. */
+function buildAdapterMap(enabledNames: string[]): Map<string, AgentAdapter> {
+	const adapters = new Map<string, AgentAdapter>();
+	for (const name of enabledNames) {
+		if (!adapters.has(name)) {
+			adapters.set(name, createAdapter(name));
+		}
+	}
+	return adapters;
+}
+
+/** Raw capabilities markdown for an adapter (prompts/adapters/<name>.md), or "" if none. */
+function loadAdapterCapabilityText(adapter: AgentAdapter, promptLoader: PromptLoader): string {
+	const capFile = adapter.getCapabilitiesFile?.();
+	if (!capFile) return "";
+	return promptLoader.loadAdapterCapabilities(capFile.replace(/^adapters\//, "").replace(/\.md$/, ""));
+}
+
+/** Build the ordered capability inputs for the {{agent_capabilities}} section. */
+function buildAdapterCapabilityInputs(
+	adapters: Map<string, AgentAdapter>,
+	defaultName: string,
+	promptLoader: PromptLoader,
+): AdapterCapabilityInput[] {
+	const inputs: AdapterCapabilityInput[] = [];
+	for (const [name, adapter] of adapters) {
+		inputs.push({
+			name,
+			displayName: adapter.displayName,
+			capabilities: loadAdapterCapabilityText(adapter, promptLoader),
+			isDefault: name === defaultName,
+		});
+	}
+	return inputs;
 }
 
 function buildDaemonChildArgs(args: ReturnType<typeof parseCliArgs>): string[] {
@@ -547,8 +584,15 @@ async function main(): Promise<void> {
 	// Resolve locale from config or system environment
 	const locale = resolveLocale(config.locale);
 
-	// Resolve agent: CLI --agent flag takes precedence over config.defaultAgent
-	const agentName = args.agent ?? config.defaultAgent;
+	// Resolve active adapters. --agent (when it names a known adapter) overrides which adapter
+	// is the default executor, and activates it if it wasn't already in the enabled set.
+	const requestedDefault =
+		args.agent && (KNOWN_AGENTS as readonly string[]).includes(args.agent) ? args.agent : config.defaultAgent;
+	const enabledAgents = [...config.enabledAgents];
+	if (!enabledAgents.includes(requestedDefault)) {
+		enabledAgents.unshift(requestedDefault);
+	}
+	const defaultAgentName = requestedDefault;
 
 	console.log(`${chalk.bold("Cliclaw")} v${VERSION}\n`);
 
@@ -643,7 +687,8 @@ async function main(): Promise<void> {
 		config,
 	});
 
-	console.log(chalk.dim("Agent:    ") + agentName);
+	const agentLabel = enabledAgents.map((name) => (name === defaultAgentName ? `${name} (default)` : name)).join(", ");
+	console.log(chalk.dim("Agents:   ") + agentLabel);
 	console.log(`${chalk.dim("Provider: ")}${llmProvider} (${llmClient.getModel()})`);
 	console.log(`${chalk.dim("Host:     ")}${args.host}`);
 	console.log(`${chalk.dim("Port:     ")}${args.port}`);
@@ -652,8 +697,10 @@ async function main(): Promise<void> {
 	// Initialize components
 	const stateDetector = new StateDetector(bridge, llmClient, config.stateDetector, promptLoader);
 
-	// Setup agent adapter
-	const defaultAdapter = createAdapter(agentName);
+	// Setup agent adapters: one instance per enabled adapter; defaultAdapter handles
+	// skills discovery, OpenSpec defaults, and create_agent calls that omit `adapter`.
+	const adapters = buildAdapterMap(enabledAgents);
+	const defaultAdapter = adapters.get(defaultAgentName) ?? createAdapter(defaultAgentName);
 
 	// Initialize ConversationStore and AgentStore (reuse global DB)
 	const conversationStore = new ConversationStore(memoryStore.getDb());
@@ -739,12 +786,8 @@ async function main(): Promise<void> {
 		workspaceDir: args.cwd,
 	});
 	const filteredSkills = filterSkills(discoveredSkills, { disabled: config.skills?.disabled }, args.cwd);
-	const capFile = defaultAdapter.getCapabilitiesFile?.();
-	const adapterCapabilities = capFile
-		? promptLoader.loadAdapterCapabilities(capFile.replace(/^adapters\//, "").replace(/\.md$/, ""))
-		: "";
-	const baseCapabilities = adapterCapabilities || "Direct code editing and file operations\nRunning terminal commands";
-	const capabilitiesSummary = buildCapabilitiesSummary(baseCapabilities, filteredSkills);
+	const capabilityInputs = buildAdapterCapabilityInputs(adapters, defaultAgentName, promptLoader);
+	const capabilitiesSummary = buildAgentCapabilitiesSection(capabilityInputs, filteredSkills);
 	contextManager.updateModule("agent_capabilities", capabilitiesSummary);
 
 	// Inject configured MCP servers list so MainAgent knows what's available
@@ -790,7 +833,8 @@ async function main(): Promise<void> {
 		contextManager,
 		signalRouter,
 		llmClient,
-		adapter: defaultAdapter,
+		adapters,
+		defaultAdapter: defaultAgentName,
 		bridge,
 		stateDetector,
 		broadcaster,
@@ -804,6 +848,9 @@ async function main(): Promise<void> {
 		workspaceDir: args.cwd,
 		debug: config.debug,
 		thinking: config.llm.thinking ?? "off",
+		promptLoader,
+		locale,
+		autoContinue: config.autoContinue,
 		searchConfig: {
 			vectorWeight: config.memory.vectorWeight,
 			textWeight: 1 - config.memory.vectorWeight,
@@ -826,7 +873,11 @@ async function main(): Promise<void> {
 		for (const a of persistedAgents) {
 			const alive = await bridge.hasSession(a.agentId);
 			if (alive) {
-				mainAgent.restoreAgent(a.agentId, { paneTarget: a.paneTarget, workingDir: a.workingDir }, a.takenOver);
+				mainAgent.restoreAgent(
+					a.agentId,
+					{ paneTarget: a.paneTarget, workingDir: a.workingDir, model: a.model, adapter: a.adapter },
+					a.takenOver,
+				);
 				restoredAgentIds.add(a.agentId);
 			} else {
 				agentStore.deleteAgent(a.agentId);
@@ -901,12 +952,8 @@ async function main(): Promise<void> {
 		const resetFiltered = filterSkills(resetDiscovered, { disabled: config.skills?.disabled }, args.cwd);
 
 		// 3. Rebuild capabilities summary and update ContextManager modules
-		const resetCapFile = defaultAdapter.getCapabilitiesFile?.();
-		const resetAdapterCaps = resetCapFile
-			? promptLoader.loadAdapterCapabilities(resetCapFile.replace(/^adapters\//, "").replace(/\.md$/, ""))
-			: "";
-		const resetBaseCaps = resetAdapterCaps || "Direct code editing and file operations\nRunning terminal commands";
-		const resetCapSummary = buildCapabilitiesSummary(resetBaseCaps, resetFiltered);
+		const resetCapInputs = buildAdapterCapabilityInputs(adapters, defaultAgentName, promptLoader);
+		const resetCapSummary = buildAgentCapabilitiesSection(resetCapInputs, resetFiltered);
 		contextManager.updateModule("agent_capabilities", resetCapSummary);
 		contextManager.updateModule("available_mcp_servers", buildMcpServersSummary(config.mcpServers));
 

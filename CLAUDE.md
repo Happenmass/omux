@@ -51,7 +51,7 @@ All LLM calls go through `llmClient.stream()`; text deltas are broadcast to WebS
 **Events emitted**: `state_change`, `log`.
 
 **Built-in tools exposed to the LLM** (declared inline in the same file):
-- Agent interaction — `send_to_agent`, `respond_to_agent`, `interrupt_agent` (sends Esc + summary to the chat), `inspect_agent`, `list_agent_tasks`, `wait_for_agents` (parks the loop until the next agent callback — terminal only when a wake-up is guaranteed; stops the LLM from polling), `create_agent`, `list_agents`, `kill_agent`
+- Agent interaction — `send_to_agent`, `respond_to_agent`, `interrupt_agent` (sends Esc + summary to the chat), `inspect_agent`, `wait_for_agents` (parks the loop until the next agent callback — terminal only when a wake-up is guaranteed; stops the LLM from polling), `create_agent`, `list_agents`, `kill_agent`
 - Memory — `memory_search`, `memory_get`, `memory_edit` (modes: append/overwrite/replace/delete; `memory_write` is a backwards-compatible alias), `persistent_memory` (read/update global + project MEMORY.md)
 - Discovery — `read_skill`, `exec_command` (read-only bash)
 - Terminal — `mark_failed`, `escalate_to_human`
@@ -139,7 +139,7 @@ HTTP + WebSocket server for the chat interface.
 - `chat-broadcaster.ts` — **`ChatBroadcaster`** ([chat-broadcaster.ts:12](src/server/chat-broadcaster.ts:12)): manages connected WS clients; `broadcast(message: ChatMessage)` fans out; terminates stalled clients (high buffered amount).
 - `ui-events.ts` — `UiEventStore` (memory + optional SQLite) of `UiEvent`s for replay/auditing.
 - `ws-handler.ts` — per-connection handler; routes `{type: "message"}` to `MainAgent.handleMessage()`, `{type: "command"}` to `CommandRouter`, plus `takeover` / `release` for human pane handoff. Sends current state on connect.
-- `command-router.ts` — **`CommandRouter`** ([command-router.ts:44](src/server/command-router.ts:44)). Handled slash commands: **`/stop`, `/clear`, `/reset`, `/compact`, `/context`, `/tidy`**. `/tidy` uses LLM to review memory files and archive outdated entries.
+- `command-router.ts` — **`CommandRouter`** ([command-router.ts:44](src/server/command-router.ts:44)). Handled slash commands: **`/stop`, `/clear`, `/reset`, `/compact`, `/context`, `/tidy`, `/autocontinue`**. `/tidy` uses LLM to review memory files and archive outdated entries.
 - `command-registry.ts` — `CommandRegistry`: central metadata store for both built-in and skill-declared slash commands. Methods: `register`, `registerMany`, `get`, `has`, `getAll`, `search`.
 
 (Note: `/resume` is no longer a slash command — execution control flows through the `stop`/auto-resume model.)
@@ -147,7 +147,7 @@ HTTP + WebSocket server for the chat interface.
 ### Agent Adapters — `src/agents/`
 - `adapter.ts` — `AgentAdapter` interface contract: `launch`, `sendPrompt`, `sendResponse`, `abort`, `shutdown`, `exitAgent`, `getCharacteristics`, `getSkillsDir`, `getCapabilitiesFile`, `getOpenSpecCommands`. Types: `LaunchOptions`, `ExitAgentResult`, `OpenSpecCommands`, `AgentCharacteristics`.
 - `claude-code.ts` — **`ClaudeCodeAdapter`** ([claude-code.ts:13](src/agents/claude-code.ts:13)). Launches `claude --permission-mode auto [--resume <id>]`. Auto-clears the stuck `❯ (current)` state. Activity regex is **case-sensitive** ([claude-code.ts:233](src/agents/claude-code.ts:233)).
-- `codex.ts` — **`CodexAdapter`** ([codex.ts:13](src/agents/codex.ts:13)). Launches `codex --full-auto [resume <id>]`.
+- `codex.ts` — **`CodexAdapter`** ([codex.ts:13](src/agents/codex.ts:13)). Launches `codex --sandbox workspace-write --ask-for-approval never` (resume via `codex resume <id> …`). The old `--full-auto` flag was removed in Codex 0.142; the sandbox+approval pair is the non-interactive equivalent. Also passes `-c projects."<dir>".trust_level="trusted"` and `-c check_for_update_on_startup=false` to pre-empt the startup trust dialog and update nag; the "try the new model" nudge is sidestepped by pinning `--model`.
 - `claude-code-skills/` — built-in skills bundled with the Claude Code adapter (e.g. `commit/SKILL.md`); copied into `dist/agents/` by the build step.
 
 ### Tmux — `src/tmux/`
@@ -208,6 +208,10 @@ Run a single file: `npx vitest test/core/main-agent.test.ts`. Match by name: `np
 - `decayHalfLifeDays` — time decay for daily memories (default 30)
 - `skills.disabled` — list of skill names to disable
 - `learning.enabled` — enable Learning Sessions (default `false`). When disabled, no learning components are initialized and the UI tab is hidden.
+
+`config.autoContinue.*`:
+- `enabled` — auto-continue mode (default `false`). When on, a gate LLM decides at loop-exit whether to keep going.
+- `maxConsecutive` — consecutive auto-continues before forced hand-back (default 10).
 
 ## i18n / Language
 

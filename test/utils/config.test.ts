@@ -8,6 +8,7 @@ import {
 	type McpServerDefinition,
 	getGlobalStorageDir,
 	loadConfig,
+	normalizeAgents,
 	saveConfig,
 } from "../../src/utils/config.js";
 
@@ -87,5 +88,113 @@ describe("mcpServers config", () => {
 
 		const reloaded = await loadConfig();
 		expect(reloaded.mcpServers).toEqual(servers);
+	});
+});
+
+describe("autoContinue config", () => {
+	const configDir = join(homedir(), ".cliclaw");
+	const configFile = join(configDir, "config.json");
+	let saved: string | null = null;
+
+	beforeEach(async () => {
+		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
+	});
+	afterEach(async () => {
+		if (saved !== null) await writeFile(configFile, saved, "utf-8");
+		else if (existsSync(configFile)) await rm(configFile);
+	});
+
+	it("defaults autoContinue to disabled with a maxConsecutive cap", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ debug: false }), "utf-8");
+		const config = await loadConfig();
+		expect(config.autoContinue).toEqual({ enabled: false, maxConsecutive: 10 });
+	});
+
+	it("merges a partial autoContinue over the defaults", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ autoContinue: { enabled: true } }), "utf-8");
+		const config = await loadConfig();
+		expect(config.autoContinue).toEqual({ enabled: true, maxConsecutive: 10 });
+	});
+});
+
+describe("normalizeAgents", () => {
+	function base(overrides: Partial<CliclawConfig>): CliclawConfig {
+		return { defaultAgent: "claude-code", enabledAgents: ["claude-code"], ...overrides } as CliclawConfig;
+	}
+
+	it("derives enabledAgents from defaultAgent for legacy configs (no enabledAgents)", () => {
+		const config = base({ defaultAgent: "codex", enabledAgents: undefined as any });
+		normalizeAgents(config, false);
+		expect(config.enabledAgents).toEqual(["codex"]);
+		expect(config.defaultAgent).toBe("codex");
+	});
+
+	it("keeps a user-provided enabled set and drops unknown adapters", () => {
+		const config = base({ defaultAgent: "claude-code", enabledAgents: ["claude-code", "codex", "bogus"] });
+		normalizeAgents(config, true);
+		expect(config.enabledAgents).toEqual(["claude-code", "codex"]);
+	});
+
+	it("repoints defaultAgent to the first active adapter when it is not enabled", () => {
+		const config = base({ defaultAgent: "claude-code", enabledAgents: ["codex"] });
+		normalizeAgents(config, true);
+		expect(config.defaultAgent).toBe("codex");
+	});
+
+	it("falls back to claude-code when the enabled set is empty / all-unknown", () => {
+		const config = base({ defaultAgent: "claude-code", enabledAgents: ["nope"] });
+		normalizeAgents(config, true);
+		expect(config.enabledAgents).toEqual(["claude-code"]);
+		expect(config.defaultAgent).toBe("claude-code");
+	});
+
+	it("de-duplicates the enabled set", () => {
+		const config = base({ defaultAgent: "codex", enabledAgents: ["codex", "codex", "claude-code"] });
+		normalizeAgents(config, true);
+		expect(config.enabledAgents).toEqual(["codex", "claude-code"]);
+	});
+});
+
+describe("agent activation config (loadConfig)", () => {
+	const configDir = join(homedir(), ".cliclaw");
+	const configFile = join(configDir, "config.json");
+	let saved: string | null = null;
+
+	beforeEach(async () => {
+		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
+	});
+	afterEach(async () => {
+		if (saved !== null) await writeFile(configFile, saved, "utf-8");
+		else if (existsSync(configFile)) await rm(configFile);
+	});
+
+	it("defaults to claude-code only", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ debug: false }), "utf-8");
+		const config = await loadConfig();
+		expect(config.enabledAgents).toEqual(["claude-code"]);
+		expect(config.defaultAgent).toBe("claude-code");
+	});
+
+	it("backfills enabledAgents from a legacy defaultAgent-only config", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ defaultAgent: "codex" }), "utf-8");
+		const config = await loadConfig();
+		expect(config.enabledAgents).toEqual(["codex"]);
+		expect(config.defaultAgent).toBe("codex");
+	});
+
+	it("preserves an explicit enabledAgents set", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(
+			configFile,
+			JSON.stringify({ defaultAgent: "claude-code", enabledAgents: ["claude-code", "codex"] }),
+			"utf-8",
+		);
+		const config = await loadConfig();
+		expect(config.enabledAgents).toEqual(["claude-code", "codex"]);
+		expect(config.defaultAgent).toBe("claude-code");
 	});
 });

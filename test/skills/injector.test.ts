@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCapabilitiesSummary } from "../../src/skills/injector.js";
+import { type AdapterCapabilityInput, buildAgentCapabilitiesSection, buildCapabilitiesSummary } from "../../src/skills/injector.js";
 import type { SkillEntry } from "../../src/skills/types.js";
 
 function makeSkill(overrides: Partial<SkillEntry> = {}): SkillEntry {
@@ -99,5 +99,63 @@ describe("buildCapabilitiesSummary", () => {
 		const summary = buildCapabilitiesSummary(BASE, skills);
 
 		expect(summary).not.toContain("more skills available");
+	});
+});
+
+describe("buildAgentCapabilitiesSection", () => {
+	function adapter(overrides: Partial<AdapterCapabilityInput> = {}): AdapterCapabilityInput {
+		return {
+			name: "claude-code",
+			displayName: "Claude Code",
+			capabilities: "- edits files\n- runs commands",
+			isDefault: true,
+			...overrides,
+		};
+	}
+
+	it("renders a single adapter without orchestration preamble", () => {
+		const section = buildAgentCapabilitiesSection([adapter()], []);
+
+		expect(section).toContain('### Claude Code — `adapter: "claude-code"` (default)');
+		expect(section).toContain("- edits files");
+		expect(section).not.toContain("coding-agent adapters");
+		expect(section).not.toContain("Multi-Agent Orchestration");
+	});
+
+	it("adds adapter selection preamble and orchestration block for multiple adapters", () => {
+		const section = buildAgentCapabilitiesSection(
+			[
+				adapter(),
+				adapter({ name: "codex", displayName: "Codex", capabilities: "- reviews code", isDefault: false }),
+			],
+			[],
+		);
+
+		expect(section).toContain("2 coding-agent adapters");
+		expect(section).toContain('`claude-code` (default)');
+		expect(section).toContain("### Multi-Agent Orchestration");
+		// claude-code + codex present → the execute-then-review playbook is used
+		expect(section).toContain("Execute with Claude Code");
+		expect(section).toContain("Review with Codex");
+	});
+
+	it("marks the default adapter and not the others", () => {
+		const section = buildAgentCapabilitiesSection(
+			[
+				adapter({ name: "codex", displayName: "Codex", isDefault: true }),
+				adapter({ name: "claude-code", displayName: "Claude Code", isDefault: false }),
+			],
+			[],
+		);
+
+		expect(section).toContain('### Codex — `adapter: "codex"` (default)');
+		expect(section).toContain('### Claude Code — `adapter: "claude-code"`');
+		expect(section).not.toContain('### Claude Code — `adapter: "claude-code"` (default)');
+	});
+
+	it("falls back to default capability text when an adapter provides none", () => {
+		const section = buildAgentCapabilitiesSection([adapter({ capabilities: "" })], []);
+
+		expect(section).toContain("Direct code editing and file operations");
 	});
 });

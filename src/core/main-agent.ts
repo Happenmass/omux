@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
+import type { PromptLoader } from "../llm/prompt-loader.js";
 import type {
 	LLMMessage,
 	LLMStreamEvent,
@@ -27,6 +28,7 @@ import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { loadConfig } from "../utils/config.js";
+import { getLanguageInstruction, type SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 import { cleanupMcpConfigFile, generateMcpConfigFile, selectMcpServers } from "../utils/mcp-config.js";
 import { AgentMonitor } from "./agent-monitor.js";
@@ -44,6 +46,10 @@ export type AgentState = "idle" | "executing";
 export interface AgentEntry {
 	paneTarget: string;
 	workingDir: string;
+	/** Resolved model the agent was launched with (e.g. "opus"). Undefined for legacy/restored entries. */
+	model?: string;
+	/** Adapter name this agent was launched with (e.g. "claude-code"). Undefined → resolves to the default adapter. */
+	adapter?: string;
 }
 
 export interface MainAgentEvents {
@@ -191,7 +197,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "memory_edit",
 		description:
-			"Edit a memory file. Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed.",
+			"Edit a file in the SEARCHABLE memory store (memory/*.md, indexed for memory_search / memory_get). Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed. This is NOT the always-in-prompt MEMORY.md — to edit the global/project MEMORY.md snapshot, use persistent_memory.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -232,6 +238,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 				agent_name: {
 					type: "string",
 					description: 'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
+				},
+				adapter: {
+					type: "string",
+					description:
+						'Which coding-agent adapter to launch (e.g. "claude-code", "codex"). Must be one of the active adapters listed under \'Agent Capabilities\'. When omitted, the configured default adapter is used. Pick per task — see the Multi-Agent Orchestration guidance when more than one adapter is active.',
 				},
 				working_dir: {
 					type: "string",
@@ -294,7 +305,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 	{
 		name: "persistent_memory",
 		description:
-			"Read or update a persistent MEMORY.md file. Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
+			"Read or update a persistent MEMORY.md file. (This is the ALWAYS-in-system-prompt memory; for the separate searchable memory/*.md store use memory_edit / memory_search.) Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -359,19 +370,9 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 		},
 	},
 	{
-		name: "list_agent_tasks",
-		description:
-			"List all active sub-agent tasks currently being monitored and any pending events in the agent event queue. Use this to get a real-time snapshot of sub-agent status before deciding whether to intervene.",
-		parameters: {
-			type: "object",
-			properties: {},
-			required: [],
-		},
-	},
-	{
 		name: "wait_for_agents",
 		description:
-			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent / list_agent_tasks to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
+			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
 		parameters: {
 			type: "object",
 			properties: {},
@@ -386,13 +387,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private contextManager: ContextManager;
 	private signalRouter: SignalRouter;
 	private llmClient: LLMClient;
-	private adapter: AgentAdapter;
+	/** Active adapters keyed by name; an agent's launch adapter is recorded in its AgentEntry. */
+	private adapters: Map<string, AgentAdapter>;
+	/** Adapter used by create_agent when no `adapter` is specified. */
+	private defaultAdapterName: string;
 	private bridge: TmuxBridge;
 	private stateDetector: StateDetector;
 	private broadcaster: ChatBroadcaster;
 	private uiEventStore: UiEventStore | null = null;
 	private workQueue = new WorkQueue();
 	private isDispatching = false;
+	/**
+	 * Held while an exclusive maintenance op (compaction / clear / reset / tidy) runs. The agent's
+	 * `state` is "idle" during these (they only start once idle), so without this flag a user message
+	 * arriving mid-op would dispatch concurrently with the history rewrite. While set, handleMessage
+	 * queues instead of dispatching; the queue is drained when the lock is released.
+	 */
+	private maintenanceInProgress = false;
 	private agents: Map<string, AgentEntry> = new Map();
 	private activeAgentId: string | null = null;
 	private takenOverAgents = new Set<string>();
@@ -412,6 +423,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private globalDir: string;
 	private workspaceDir: string;
 	private createAgentSettleMs: number;
+	private promptLoader: PromptLoader | null = null;
+	private locale: SupportedLocale = "en-US";
+	private autoContinueEnabled = false;
+	private autoContinueMax = 10;
+	private autoContinueCount = 0;
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -431,7 +447,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		contextManager: ContextManager;
 		signalRouter: SignalRouter;
 		llmClient: LLMClient;
-		adapter: AgentAdapter;
+		/** Single adapter (back-compat). Provide this OR `adapters`. */
+		adapter?: AgentAdapter;
+		/** Active adapters keyed by name. Takes precedence over `adapter` when provided. */
+		adapters?: Map<string, AgentAdapter>;
+		/** Name of the default adapter within `adapters`. Defaults to the first entry. */
+		defaultAdapter?: string;
 		bridge: TmuxBridge;
 		stateDetector: StateDetector;
 		broadcaster: ChatBroadcaster;
@@ -450,12 +471,25 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		changeTracker?: ChangeTracker;
 		thinking?: ThinkingLevel;
 		createAgentSettleMs?: number;
+		promptLoader?: PromptLoader;
+		locale?: SupportedLocale;
+		autoContinue?: { enabled: boolean; maxConsecutive: number };
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
 		this.signalRouter = opts.signalRouter;
 		this.llmClient = opts.llmClient;
-		this.adapter = opts.adapter;
+		// Resolve the active adapter set. `adapters` (map) wins; otherwise wrap the single
+		// back-compat `adapter`. Exactly one of the two must be provided.
+		if (opts.adapters && opts.adapters.size > 0) {
+			this.adapters = opts.adapters;
+			this.defaultAdapterName = opts.defaultAdapter ?? opts.adapters.keys().next().value!;
+		} else if (opts.adapter) {
+			this.adapters = new Map([[opts.adapter.name, opts.adapter]]);
+			this.defaultAdapterName = opts.adapter.name;
+		} else {
+			throw new Error("MainAgent requires either `adapter` or a non-empty `adapters` map");
+		}
 		this.bridge = opts.bridge;
 		this.stateDetector = opts.stateDetector;
 		this.broadcaster = opts.broadcaster;
@@ -473,6 +507,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.learningPipeline = opts.learningPipeline;
 		this.changeTracker = opts.changeTracker;
 		this.createAgentSettleMs = opts.createAgentSettleMs ?? 10_000;
+		this.promptLoader = opts.promptLoader ?? null;
+		this.locale = opts.locale ?? "en-US";
+		this.autoContinueEnabled = opts.autoContinue?.enabled ?? false;
+		this.autoContinueMax = opts.autoContinue?.maxConsecutive ?? 10;
+		logger.info(
+			"main-agent:autocontinue",
+			`Auto-continue mode ${this.autoContinueEnabled ? "enabled" : "disabled"} at startup (maxConsecutive=${this.autoContinueMax})`,
+		);
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -489,6 +531,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		});
 	}
 
+	/** Toggle auto-continue mode at runtime (used by the /autocontinue command). Returns the new state. */
+	setAutoContinueEnabled(on: boolean): boolean {
+		this.autoContinueEnabled = on;
+		logger.info(
+			"main-agent:autocontinue",
+			`Auto-continue mode ${on ? "enabled" : "disabled"} via runtime toggle (streak=${this.autoContinueCount}/${this.autoContinueMax})`,
+		);
+		return this.autoContinueEnabled;
+	}
+
+	isAutoContinueEnabled(): boolean {
+		return this.autoContinueEnabled;
+	}
+
 	/** Replace the skill registry at runtime (used by /reset). */
 	setSkillRegistry(registry: SkillRegistry): void {
 		this.skillRegistry = registry;
@@ -502,6 +558,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	}
 
 	/** Return all active agents with their current status. */
+	/** Resolve the adapter an agent was launched with, falling back to the default adapter. */
+	private adapterFor(entry: AgentEntry): AgentAdapter {
+		const name = entry.adapter ?? this.defaultAdapterName;
+		return (
+			this.adapters.get(name) ?? this.adapters.get(this.defaultAdapterName) ?? this.adapters.values().next().value!
+		);
+	}
+
 	getActiveAgents(): Array<{
 		agentName: string;
 		agentId: string;
@@ -509,6 +573,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		workingDir: string;
 		status: string;
 		takenOver: boolean;
+		adapter: string;
+		model: string;
 	}> {
 		const result: Array<{
 			agentName: string;
@@ -517,6 +583,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			workingDir: string;
 			status: string;
 			takenOver: boolean;
+			adapter: string;
+			model: string;
 		}> = [];
 		for (const [id, entry] of this.agents) {
 			const task = this.agentMonitor?.getTask(id);
@@ -528,6 +596,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			} else {
 				status = "idle";
 			}
+			const entryAdapter = this.adapterFor(entry);
 			result.push({
 				agentName: id,
 				agentId: id,
@@ -535,6 +604,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				workingDir: entry.workingDir,
 				status,
 				takenOver: this.takenOverAgents.has(id),
+				adapter: entryAdapter.displayName,
+				model: entry.model ?? entryAdapter.defaultModel,
 			});
 		}
 		return result;
@@ -588,7 +659,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		});
 
 		this.workQueue.on("item_available", () => {
-			if (this.state === "idle" && !this.isDispatching) {
+			if (this.state === "idle" && !this.isDispatching && !this.maintenanceInProgress) {
 				queueMicrotask(() => this.dispatchNext());
 			}
 		});
@@ -657,6 +728,33 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		});
 	}
 
+	/** True while an exclusive maintenance op (compaction/clear/reset/tidy) holds the agent. */
+	isMaintenanceInProgress(): boolean {
+		return this.maintenanceInProgress;
+	}
+
+	/**
+	 * Run an exclusive maintenance task (compaction, clear, reset, memory tidy) under a lock that
+	 * makes incoming user messages queue rather than dispatch. The queue is drained once the task
+	 * completes. The caller is responsible for first bringing the agent to idle (stop + waitForIdle)
+	 * if it was executing — typically done inside `fn`. Auto-compaction inside the executing loop is
+	 * already covered by the EXECUTING state and does not need this.
+	 */
+	async runMaintenance<T>(fn: () => Promise<T>): Promise<T> {
+		this.maintenanceInProgress = true;
+		this.broadcastState();
+		try {
+			return await fn();
+		} finally {
+			this.maintenanceInProgress = false;
+			this.broadcastState();
+			// Drain anything that queued up while the lock was held.
+			if (!this.workQueue.isEmpty() && this.state === "idle") {
+				queueMicrotask(() => this.dispatchNext());
+			}
+		}
+	}
+
 	// ─── State Management ──────────────────────────────
 
 	private setState(newState: AgentState): void {
@@ -675,7 +773,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private broadcastState(): void {
 		this.broadcaster.broadcast({
 			type: "state",
-			state: this.state,
+			// Surface maintenance (compaction/clear/reset/tidy) as "executing" so the UI shows busy
+			// while the agent queues incoming input. Internally the state stays "idle".
+			state: this.maintenanceInProgress ? "executing" : this.state,
 			queueSize: this.workQueue.pendingUserMessages(),
 			contextUsage: this.getContextUsage(),
 		});
@@ -698,9 +798,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// ─── handleMessage — main entry point ──────────────
 
 	async handleMessage(content: string): Promise<void> {
+		// A real user message ends any auto-continue streak.
+		if (this.autoContinueCount > 0) {
+			logger.info(
+				"main-agent:autocontinue",
+				`Streak reset (${this.autoContinueCount} → 0): real user message received`,
+			);
+		}
+		this.autoContinueCount = 0;
 		this.workQueue.enqueueUserMessage(content);
 
-		if (this.state === "executing" || this.isDispatching) {
+		if (this.state === "executing" || this.isDispatching || this.maintenanceInProgress) {
 			this.broadcaster.broadcast({
 				type: "system",
 				message: "消息已排队，将在当前操作完成后处理",
@@ -892,6 +1000,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					this.contextManager.addMessage({ role: "assistant", content: textContent });
 				}
 				this.broadcastAssistantDone();
+				await this.maybeAutoContinue(textContent);
 				this.setState("idle");
 				return;
 			}
@@ -910,6 +1019,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private async dispatchNext(): Promise<void> {
 		if (this.state !== "idle") return;
 		if (this.isDispatching) return;
+		if (this.maintenanceInProgress) return;
 		if (this.workQueue.isEmpty()) return;
 
 		this.isDispatching = true;
@@ -955,6 +1065,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			// Pure text response — return to IDLE
 			this.contextManager.addMessage({ role: "assistant", content: textContent });
 			this.broadcastAssistantDone();
+			await this.maybeAutoContinue(textContent);
 			this.setState("idle");
 		}
 	}
@@ -989,8 +1100,149 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				this.broadcastAssistantDone();
 			}
 			// Pure text / empty response — return to IDLE
+			await this.maybeAutoContinue(textContent);
 			this.setState("idle");
 		}
+	}
+
+	/**
+	 * Auto-continue gate. Called at natural-completion return-to-idle sites. When the mode is on
+	 * and no other actor is taking over, a single separate LLM call decides whether the task is
+	 * actually done. On "continue" it enqueues a synthesized driver message (re-driving the loop
+	 * via dispatchNext) and returns true; otherwise returns false (caller hands back to the user).
+	 * The caller calls setState("idle") regardless — a true result just means a queued message
+	 * will immediately re-drive it.
+	 */
+	private async maybeAutoContinue(lastText: string): Promise<boolean> {
+		if (!this.autoContinueEnabled) return false;
+
+		const mod = "main-agent:autocontinue";
+
+		// ─── Short-circuit gates (no LLM call) ───
+		if (!this.promptLoader) {
+			logger.warn(mod, "Gate skipped: promptLoader not configured");
+			return false;
+		}
+		if (this.signalRouter.isStopRequested()) {
+			logger.info(mod, "Gate skipped: stop requested — handing control back to user");
+			return false;
+		}
+		const pendingUsers = this.workQueue.pendingUserMessages();
+		if (pendingUsers > 0) {
+			logger.info(mod, `Gate skipped: ${pendingUsers} user message(s) already queued — deferring to human`);
+			return false; // a real user message is waiting — defer
+		}
+		if (this.autoContinueCount >= this.autoContinueMax) {
+			logger.info(
+				mod,
+				`Gate skipped: consecutive cap reached (${this.autoContinueCount}/${this.autoContinueMax}) — handing control back to user`,
+			);
+			this.broadcaster.broadcast({ type: "system", message: "已达自动继续上限，交还控制权" });
+			return false;
+		}
+
+		// ─── Build the sub-agent snapshot fed to the gate ───
+		const tasks = this.agentMonitor?.getAllTasks() ?? [];
+		const pending = this.workQueue.getAgentEvents();
+		const statusLines: string[] = [];
+		for (const t of tasks) {
+			const elapsed = Math.round((Date.now() - t.startedAt) / 1000);
+			statusLines.push(`- ${t.agentId} (${t.taskId}) status=${t.status} elapsed=${elapsed}s — ${t.summary}`);
+		}
+		for (const e of pending) {
+			statusLines.push(`- ${e.agentId} (${e.taskId}) reported=${e.status} — ${e.summary}`);
+		}
+		const agentStatus = statusLines.length > 0 ? statusLines.join("\n") : "(no active sub-agents)";
+
+		// Hot-reload the gate prompt so edits to auto-continue.md take effect without a server restart
+		// (mirrors how context-manager hot-reloads the main-agent prompt).
+		this.promptLoader.reloadIfChanged?.("auto-continue");
+		const prompt = this.promptLoader.resolve("auto-continue", {
+			language_instruction: getLanguageInstruction(this.locale),
+			last_output: lastText || "(the agent produced no text this turn)",
+			agent_status: agentStatus,
+		});
+
+		// Full input/output trace at INFO level — the default log level is "info" and debug is
+		// never enabled, so anything logged at debug is silently dropped. Log the complete resolved
+		// prompt and raw model response so a gate decision can be diagnosed from the log file alone.
+		logger.info(
+			mod,
+			`═══ Gate INPUT (streak ${this.autoContinueCount}/${this.autoContinueMax} · lastText=${lastText.length} chars · ${tasks.length} active task(s) · ${pending.length} pending event(s)) ═══`,
+		);
+		logger.info(mod, `[gate prompt]\n${prompt}`);
+
+		// ─── Gate LLM call (1 retry on parse failure) ───
+		const startedAt = Date.now();
+		let rawResponse = "";
+		let decision: { continue: boolean; reason: string; driverText: string } | null = null;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				const res = await this.llmClient.complete([{ role: "user", content: prompt }], {
+					responseFormat: "json",
+					temperature: 0.2,
+				});
+				rawResponse = res.content;
+				logger.info(mod, `═══ Gate OUTPUT (attempt ${attempt + 1}, ${Date.now() - startedAt}ms) ═══\n${res.content}`);
+				decision = this.parseAutoContinueDecision(res.content);
+				break;
+			} catch (err: any) {
+				logger.warn(
+					mod,
+					`Gate parse attempt ${attempt + 1} failed: ${err.message} | raw response was: ${rawResponse || "(empty / LLM call threw)"}`,
+				);
+			}
+		}
+		const elapsedMs = Date.now() - startedAt;
+
+		// ─── Interpret the decision ───
+		if (!decision) {
+			logger.warn(
+				mod,
+				`Gate result: UNPARSEABLE after 2 attempts (${elapsedMs}ms) — failing safe, handing control back to user`,
+			);
+			return false;
+		}
+		if (!decision.continue) {
+			logger.info(mod, `Gate result: STOP (${elapsedMs}ms) — ${decision.reason || "(no reason given)"}`);
+			return false;
+		}
+		if (decision.driverText.trim() === "") {
+			logger.info(
+				mod,
+				`Gate result: continue=true but driverText empty (${elapsedMs}ms) — treating as STOP; reason: ${decision.reason || "(none)"}`,
+			);
+			return false;
+		}
+
+		this.autoContinueCount++;
+		logger.info(
+			mod,
+			`Gate result: CONTINUE (${this.autoContinueCount}/${this.autoContinueMax}, ${elapsedMs}ms) — ${decision.reason || "(no reason given)"}`,
+		);
+		logger.info(mod, `Gate driverText enqueued: ${decision.driverText}`);
+		this.broadcaster.broadcast({
+			type: "system",
+			message: `🔄 自动继续 (${this.autoContinueCount}/${this.autoContinueMax}): ${decision.reason}`,
+		});
+		this.workQueue.enqueueUserMessage(decision.driverText);
+		return true;
+	}
+
+	private parseAutoContinueDecision(text: string): { continue: boolean; reason: string; driverText: string } {
+		const stripped = text
+			.replace(/^```(?:json)?\s*/, "")
+			.replace(/\s*```\s*$/, "")
+			.trim();
+		const parsed = JSON.parse(stripped);
+		if (typeof parsed.continue !== "boolean") {
+			throw new Error("auto-continue decision missing 'continue' boolean");
+		}
+		return {
+			continue: parsed.continue,
+			reason: typeof parsed.reason === "string" ? parsed.reason : "",
+			driverText: typeof parsed.driverText === "string" ? parsed.driverText : "",
+		};
 	}
 
 	private recoverFromExecutionError(source: string, err: Error): void {
@@ -1086,8 +1338,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				this.emitUiEvent("agent_update", summary);
 
+				const sendAdapter = this.adapterFor(sendAgent);
 				const sendPreHash = await this.stateDetector.captureHash(sendAgent.paneTarget);
-				await this.adapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
+				await sendAdapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
 				this.promptTracker?.record(sendAgentId, prompt);
 
 				if (this.agentMonitor) {
@@ -1095,6 +1348,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preHash: sendPreHash,
 						summary,
 						taskContext: prompt,
+						characteristics: sendAdapter.getCharacteristics(),
 					});
 
 					if (result.dispatched) {
@@ -1142,7 +1396,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				this.emitUiEvent("agent_update", summary);
 
-				await this.adapter.sendResponse(this.bridge, respondAgent.paneTarget, value);
+				await this.adapterFor(respondAgent).sendResponse(this.bridge, respondAgent.paneTarget, value);
 				this.promptTracker?.record(respondAgentId, value);
 
 				if (this.agentMonitor) {
@@ -1526,6 +1780,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							? rawPreCommands.filter((c) => typeof c === "string" && c.trim())
 							: undefined;
 
+					// Resolve which adapter to launch: omitted → default; otherwise must be active.
+					const rawAdapter = (args.adapter as string | undefined)?.trim();
+					const adapterName = rawAdapter || this.defaultAdapterName;
+					const adapter = this.adapters.get(adapterName);
+					if (!adapter) {
+						const active = [...this.adapters.keys()].join(", ");
+						return {
+							output: `Error: adapter "${adapterName}" is not active. Active adapters: ${active}.`,
+							terminal: false,
+						};
+					}
+
 					// Handle mcp_servers: generate temp config file if specified
 					let mcpConfigPath: string | undefined;
 					const rawMcpServers = args.mcp_servers as string[] | undefined;
@@ -1545,7 +1811,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						logger.info("main-agent", `Generated MCP config for ${agentName}: ${mcpConfigPath}`);
 					}
 
-					const paneTarget = await this.adapter.launch(this.bridge, {
+					const paneTarget = await adapter.launch(this.bridge, {
 						workingDir,
 						sessionName: agentName,
 						resumeId,
@@ -1553,12 +1819,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preCommands,
 						mcpConfigPath,
 					});
-					this.agents.set(agentName, { paneTarget, workingDir });
+					const resolvedModel = model ?? adapter.defaultModel;
+					this.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel, adapter: adapterName });
 					await this.changeTracker?.registerAgent(agentName, workingDir);
-					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir });
+					this.agentStore?.saveAgent(agentName, {
+						paneTarget,
+						workingDir,
+						model: resolvedModel,
+						adapter: adapterName,
+					});
 					this.activeAgentId = agentName;
-					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
-					logger.info("main-agent", `Agent created: ${agentName}, pane: ${paneTarget}, cwd: ${workingDir}`);
+					this.stateDetector.setCharacteristics(adapter.getCharacteristics());
+					logger.info(
+						"main-agent",
+						`Agent created: ${agentName} (${adapterName}), pane: ${paneTarget}, cwd: ${workingDir}`,
+					);
 					this.onAgentChange?.();
 					const mcpNote = mcpConfigPath ? ` MCP servers: ${rawMcpServers!.join(", ")}.` : "";
 
@@ -1584,7 +1859,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 
 					return {
-						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
+						output: `Agent "${agentName}" (${adapter.displayName}) created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
 						terminal: false,
 					};
 				} catch (err: any) {
@@ -1624,8 +1899,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						const resumeIds: string[] = [];
 						for (const [id, entry] of this.agents) {
 							try {
-								if (this.adapter.exitAgent) {
-									const result = await this.adapter.exitAgent(this.bridge, entry.paneTarget);
+								const entryAdapter = this.adapterFor(entry);
+								if (entryAdapter.exitAgent) {
+									const result = await entryAdapter.exitAgent(this.bridge, entry.paneTarget);
 									if (result.resumeId) resumeIds.push(`${id}: ${result.resumeId}`);
 								}
 							} catch {
@@ -1689,9 +1965,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					// Gracefully exit agent to capture resume id (best-effort)
 					let agentContent = "";
 					let resumeId: string | undefined;
-					if (this.adapter.exitAgent) {
+					const killAdapter = this.adapterFor(agentEntry);
+					if (killAdapter.exitAgent) {
 						try {
-							const exitResult = await this.adapter.exitAgent(this.bridge, agentEntry.paneTarget);
+							const exitResult = await killAdapter.exitAgent(this.bridge, agentEntry.paneTarget);
 							agentContent = exitResult.content;
 							resumeId = exitResult.resumeId;
 						} catch (err: any) {
@@ -1829,42 +2106,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					logger.error("main-agent", `exec_command unexpected error: ${err.message} ${JSON.stringify(err)}`);
 					return { output: `exec_command error: ${err.message}`, terminal: false };
 				}
-			}
-
-			case "list_agent_tasks": {
-				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
-				const pendingEvents = this.workQueue.getAgentEvents();
-
-				const lines: string[] = [];
-
-				if (activeTasks.length > 0) {
-					lines.push("## Active Agent Tasks");
-					for (const task of activeTasks) {
-						const elapsedSeconds = Math.round((Date.now() - task.startedAt) / 1000);
-						lines.push(
-							`- agent=${task.agentId} task=${task.taskId} status=${task.status} elapsed=${elapsedSeconds}s`,
-						);
-						lines.push(`  summary: ${task.summary}`);
-					}
-				}
-
-				if (pendingEvents.length > 0) {
-					if (lines.length > 0) lines.push("");
-					lines.push("## Pending Events (WorkQueue)");
-					for (const evt of pendingEvents) {
-						lines.push(
-							`- agent=${evt.agentId} task=${evt.taskId} status=${evt.status} duration=${evt.durationSeconds}s`,
-						);
-						lines.push(`  summary: ${evt.summary}`);
-						lines.push(`  detail: ${evt.detail}`);
-					}
-				}
-
-				if (lines.length === 0) {
-					return { output: "No active agent tasks or pending events.", terminal: false };
-				}
-
-				return { output: lines.join("\n"), terminal: false };
 			}
 
 			case "wait_for_agents": {

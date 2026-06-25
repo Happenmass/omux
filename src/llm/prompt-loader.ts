@@ -15,7 +15,8 @@ export type PromptName =
 	| "memory-tidy"
 	| "learning-summary"
 	| "learning-chat"
-	| "learning-memory";
+	| "learning-memory"
+	| "auto-continue";
 
 const PROMPT_FILE_MAP: Record<PromptName, string> = {
 	planner: "planner.md",
@@ -29,6 +30,7 @@ const PROMPT_FILE_MAP: Record<PromptName, string> = {
 	"learning-summary": "learning-summary.md",
 	"learning-chat": "learning-chat.md",
 	"learning-memory": "learning-memory.md",
+	"auto-continue": "auto-continue.md",
 };
 
 const __filename = fileURLToPath(import.meta.url);

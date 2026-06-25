@@ -35,6 +35,9 @@ let mobilePeekTailEl;
 let sheetState = "peek"; // "peek" | "full"
 let terminalStatusbarStateEl;
 let terminalStatusbarCwdEl;
+let terminalStatusbarAgentEl;
+let terminalStatusbarAdapterEl;
+let terminalStatusbarModelEl;
 let takeoverBtnEl;
 let takeoverBtnLabelEl;
 let abortBtnEl;
@@ -861,6 +864,9 @@ function initDomReferences() {
 	terminalStatusbarEl = document.getElementById("terminal-statusbar");
 	terminalStatusbarStateEl = document.getElementById("terminal-statusbar-state");
 	terminalStatusbarCwdEl = document.getElementById("terminal-statusbar-cwd");
+	terminalStatusbarAgentEl = document.getElementById("terminal-statusbar-agent");
+	terminalStatusbarAdapterEl = document.getElementById("terminal-statusbar-adapter");
+	terminalStatusbarModelEl = document.getElementById("terminal-statusbar-model");
 	takeoverBtnEl = document.getElementById("takeover-btn");
 	takeoverBtnLabelEl = document.getElementById("takeover-btn-label");
 	abortBtnEl = document.getElementById("abort-btn");
@@ -1016,6 +1022,8 @@ function handleAgentTerminals(sessions) {
 			paneContent: s.paneContent,
 			takenOver: s.takenOver || false,
 			workingDir: s.workingDir || "",
+			adapter: s.adapter || "",
+			model: s.model || "",
 		});
 	}
 
@@ -1161,6 +1169,13 @@ function renderTerminalContent() {
 		}
 		if (terminalStatusbarCwdEl) {
 			terminalStatusbarCwdEl.textContent = data.workingDir || "";
+		}
+		if (terminalStatusbarAgentEl) {
+			const adapter = data.adapter || "";
+			const model = data.model || "";
+			if (terminalStatusbarAdapterEl) terminalStatusbarAdapterEl.textContent = adapter;
+			if (terminalStatusbarModelEl) terminalStatusbarModelEl.textContent = model;
+			terminalStatusbarAgentEl.style.display = adapter || model ? "inline-flex" : "none";
 		}
 	}
 
