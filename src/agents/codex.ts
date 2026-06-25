@@ -31,8 +31,19 @@ export class CodexAdapter implements AgentAdapter {
 
 		// Codex uses subcommand style: `codex resume <id>` (not --resume flag)
 		const model = opts.model?.trim() || this.defaultModel;
-		const baseCmd = `${this.command} --full-auto --model ${model}`;
-		let cmd = opts.resumeId ? `${this.command} resume ${opts.resumeId} --full-auto --model ${model}` : baseCmd;
+		// Codex 0.142 removed `--full-auto`. The equivalent autonomous, non-interactive posture is a
+		// workspace-write sandbox with no approval prompts (Codex docs recommend `never` for automation,
+		// `on-failure` is deprecated). This lets cliclaw drive Codex without it stalling on approval prompts.
+		//
+		// Pre-empt the interactive *startup* prompts too, so an unattended launch never blocks on them.
+		// These `-c` keys were verified against `codex debug models` (they validate into the real config schema):
+		//   - trust dialog ("trust this folder?")  → mark this workspace trusted for the run
+		//   - update-on-startup nag                → disable the check
+		//   - "try the new model" migration nudge  → sidestepped by pinning --model below
+		const trustOverride = `-c ${shellSingleQuote(`projects.${tomlBasicString(opts.workingDir)}.trust_level="trusted"`)}`;
+		const autoFlags = `--sandbox workspace-write --ask-for-approval never ${trustOverride} -c check_for_update_on_startup=false`;
+		const baseCmd = `${this.command} ${autoFlags} --model ${model}`;
+		let cmd = opts.resumeId ? `${this.command} resume ${opts.resumeId} ${autoFlags} --model ${model}` : baseCmd;
 		if (opts.preCommands && opts.preCommands.length > 0) {
 			cmd = `${opts.preCommands.join(" && ")} && ${cmd}`;
 		}
@@ -204,6 +215,16 @@ export class CodexAdapter implements AgentAdapter {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** TOML basic string (double-quoted, backslash/quote-escaped) for use as a dotted-key segment. */
+function tomlBasicString(s: string): string {
+	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** Wrap a string in POSIX single quotes for safe inclusion in a shell command line. */
+function shellSingleQuote(s: string): string {
+	return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 /** Poll tmux pane until an exit pattern matches or timeout (5s). */

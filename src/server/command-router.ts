@@ -23,6 +23,13 @@ const BUILTIN_COMMANDS: CommandDescriptor[] = [
 	{ name: "autocontinue", description: "切换 auto-continue 自动续跑模式", category: "builtin" },
 ];
 
+/**
+ * Commands that rewrite/clear conversation history via async LLM work while the agent is idle.
+ * They run under MainAgent's maintenance lock so user input arriving mid-op queues instead of
+ * dispatching concurrently with the rewrite.
+ */
+const MAINTENANCE_COMMANDS = new Set(["clear", "reset", "compact", "tidy"]);
+
 /** Memory files to review during /tidy */
 const TIDY_TARGET_FILES = [
 	{ path: "memory/core.md", category: "Architecture decisions, project conventions" },
@@ -85,6 +92,15 @@ export class CommandRouter {
 	async handle(name: string): Promise<void> {
 		logger.info("command-router", `Handling command: /${name}`);
 
+		// Maintenance commands rewrite/clear history; hold the lock so concurrent user input queues.
+		if (MAINTENANCE_COMMANDS.has(name)) {
+			await this.mainAgent.runMaintenance(() => Promise.resolve(this.route(name)));
+			return;
+		}
+		await this.route(name);
+	}
+
+	private route(name: string): Promise<void> | void {
 		switch (name) {
 			case "stop":
 				return this.handleStop();
@@ -161,7 +177,10 @@ export class CommandRouter {
 
 		// Stop first if executing
 		if (this.mainAgent.state === "executing") {
-			logger.info("command-router", `[compact ${compactRunId}] state=executing → requesting stop and waiting for idle`);
+			logger.info(
+				"command-router",
+				`[compact ${compactRunId}] state=executing → requesting stop and waiting for idle`,
+			);
 			this.signalRouter.stop();
 			await this.mainAgent.waitForIdle();
 			logger.info("command-router", `[compact ${compactRunId}] reached idle (waited ${Date.now() - t0}ms)`);

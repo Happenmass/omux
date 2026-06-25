@@ -256,9 +256,7 @@ describe("MainAgent State Machine", () => {
 			expect(deltaCalls.length).toBeGreaterThan(0);
 
 			// Should broadcast assistant_done
-			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
-				expect.objectContaining({ type: "assistant_done" }),
-			);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: "assistant_done" }));
 
 			// Should stay idle
 			expect(agent.state).toBe("idle");
@@ -572,7 +570,6 @@ describe("MainAgent State Machine", () => {
 				}),
 			);
 		});
-
 	});
 
 	describe("kill_agent tool", () => {
@@ -1253,6 +1250,155 @@ describe("MainAgent State Machine", () => {
 		});
 	});
 
+	describe("multi-adapter routing", () => {
+		function createCodexMockAdapter() {
+			return {
+				name: "codex-mock",
+				displayName: "Codex Mock",
+				defaultModel: "codex-default-model",
+				launch: vi.fn().mockResolvedValue("codex-session:0.0"),
+				sendPrompt: vi.fn().mockResolvedValue(undefined),
+				sendResponse: vi.fn().mockResolvedValue(undefined),
+				abort: vi.fn(),
+				exitAgent: vi.fn().mockResolvedValue({ content: "[codex exited]", resumeId: "codex-resume" }),
+				getCharacteristics: vi.fn().mockReturnValue({
+					waitingPatterns: [],
+					completionPatterns: [],
+					errorPatterns: [],
+					activePatterns: [],
+					confirmKey: "Enter",
+					abortKey: "C-c",
+				}),
+			} as any;
+		}
+
+		function setupMultiAdapter(responses: LLMStreamEvent[][], { withMonitor = false } = {}) {
+			const defaultAdapter = createMockAdapter();
+			const codexAdapter = createCodexMockAdapter();
+			const adapters = new Map<string, any>([
+				[defaultAdapter.name, defaultAdapter],
+				[codexAdapter.name, codexAdapter],
+			]);
+			const agent = setupAgent(
+				responses,
+				{ adapter: undefined, adapters, defaultAdapter: defaultAdapter.name },
+				{ withMonitor },
+			);
+			return { agent, defaultAdapter, codexAdapter };
+		}
+
+		it("routes create_agent to the adapter named in the `adapter` param", async () => {
+			const { agent, defaultAdapter, codexAdapter } = setupMultiAdapter([
+				toolCallResponse("create_agent", { agent_name: "reviewer", adapter: "codex-mock" }),
+				textResponse("Created."),
+			]);
+
+			await agent.handleMessage("create a codex reviewer");
+
+			expect(codexAdapter.launch).toHaveBeenCalled();
+			expect(defaultAdapter.launch).not.toHaveBeenCalled();
+		});
+
+		it("uses the default adapter when `adapter` is omitted", async () => {
+			const { agent, defaultAdapter, codexAdapter } = setupMultiAdapter([
+				toolCallResponse("create_agent", { agent_name: "impl" }),
+				textResponse("Created."),
+			]);
+
+			await agent.handleMessage("create an agent");
+
+			expect(defaultAdapter.launch).toHaveBeenCalled();
+			expect(codexAdapter.launch).not.toHaveBeenCalled();
+		});
+
+		it("errors when `adapter` is not an active adapter", async () => {
+			const { agent, defaultAdapter, codexAdapter } = setupMultiAdapter([
+				toolCallResponse("create_agent", { agent_name: "x", adapter: "not-real" }),
+				textResponse("ok"),
+			]);
+
+			await agent.handleMessage("create with bogus adapter");
+
+			expect(defaultAdapter.launch).not.toHaveBeenCalled();
+			expect(codexAdapter.launch).not.toHaveBeenCalled();
+			const toolResultMsg = mockCtx.addMessage.mock.calls.find(
+				(c: any) =>
+					c[0].role === "tool" &&
+					typeof c[0].content === "string" &&
+					c[0].content.includes('adapter "not-real" is not active'),
+			);
+			expect(toolResultMsg).toBeTruthy();
+		});
+
+		it("routes send_to_agent through the agent's own adapter", async () => {
+			const { agent, defaultAdapter, codexAdapter } = setupMultiAdapter(
+				[
+					toolCallResponse("create_agent", { agent_name: "reviewer", adapter: "codex-mock" }, "tc1"),
+					toolCallResponse("send_to_agent", { prompt: "review the diff", summary: "Reviewing" }, "tc2"),
+					textResponse("Dispatched."),
+				],
+				{ withMonitor: true },
+			);
+
+			await agent.handleMessage("review with codex");
+
+			expect(codexAdapter.sendPrompt).toHaveBeenCalledWith(mockBridge, "codex-session:0.0", "review the diff");
+			expect(defaultAdapter.sendPrompt).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("maintenance lock (compaction)", () => {
+		it("queues user messages during maintenance and drains them after it completes", async () => {
+			const agent = setupAgent([textResponse("processed after compaction")]);
+
+			// Start an exclusive maintenance op we control via a gate (simulates /compact's compress()).
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			const maintenance = agent.runMaintenance(() => gate);
+
+			// The lock is acquired synchronously, before the first await inside runMaintenance.
+			expect(agent.isMaintenanceInProgress()).toBe(true);
+
+			// A user message arriving mid-compaction must queue, not dispatch.
+			await agent.handleMessage("hello mid-compaction");
+
+			expect(agent.getPendingUserMessageCount()).toBe(1);
+			const queuedNotice = mockBroadcaster.broadcast.mock.calls.find(
+				(c: any) => c[0].type === "system" && String(c[0].message).includes("已排队"),
+			);
+			expect(queuedNotice).toBeTruthy();
+			// Must NOT have been processed yet — no assistant output while the lock is held.
+			expect(mockBroadcaster.broadcast.mock.calls.some((c: any) => c[0].type === "assistant_done")).toBe(false);
+
+			// Release the lock — the queued message should now drain and be processed.
+			release();
+			await maintenance;
+			await new Promise((r) => setTimeout(r, 20));
+
+			expect(agent.isMaintenanceInProgress()).toBe(false);
+			expect(agent.getPendingUserMessageCount()).toBe(0);
+			expect(mockBroadcaster.broadcast.mock.calls.some((c: any) => c[0].type === "assistant_done")).toBe(true);
+		});
+
+		it("reports executing state to clients while maintenance holds the lock", async () => {
+			const agent = setupAgent([]);
+			let release!: () => void;
+			const gate = new Promise<void>((r) => {
+				release = r;
+			});
+			const maintenance = agent.runMaintenance(() => gate);
+
+			const stateCalls = mockBroadcaster.broadcast.mock.calls.filter((c: any) => c[0].type === "state");
+			expect(stateCalls.at(-1)[0].state).toBe("executing");
+			expect(agent.state).toBe("idle"); // internal state unchanged
+
+			release();
+			await maintenance;
+		});
+	});
+
 	describe("list_agent_tasks removed", () => {
 		it("returns 'Unknown tool' when the LLM calls list_agent_tasks", async () => {
 			const agent = setupAgent([toolCallResponse("list_agent_tasks", {}, "tc1"), textResponse("ok")]);
@@ -1666,6 +1812,7 @@ describe("MainAgent State Machine", () => {
 				paneTarget: "test-session:0.0",
 				workingDir: expect.any(String),
 				model: "test-model",
+				adapter: "test-agent",
 			});
 		});
 

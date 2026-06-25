@@ -48,6 +48,8 @@ export interface AgentEntry {
 	workingDir: string;
 	/** Resolved model the agent was launched with (e.g. "opus"). Undefined for legacy/restored entries. */
 	model?: string;
+	/** Adapter name this agent was launched with (e.g. "claude-code"). Undefined → resolves to the default adapter. */
+	adapter?: string;
 }
 
 export interface MainAgentEvents {
@@ -237,6 +239,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 					type: "string",
 					description: 'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
 				},
+				adapter: {
+					type: "string",
+					description:
+						'Which coding-agent adapter to launch (e.g. "claude-code", "codex"). Must be one of the active adapters listed under \'Agent Capabilities\'. When omitted, the configured default adapter is used. Pick per task — see the Multi-Agent Orchestration guidance when more than one adapter is active.',
+				},
 				working_dir: {
 					type: "string",
 					description: "Working directory for the agent. Defaults to process.cwd() if omitted.",
@@ -380,13 +387,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private contextManager: ContextManager;
 	private signalRouter: SignalRouter;
 	private llmClient: LLMClient;
-	private adapter: AgentAdapter;
+	/** Active adapters keyed by name; an agent's launch adapter is recorded in its AgentEntry. */
+	private adapters: Map<string, AgentAdapter>;
+	/** Adapter used by create_agent when no `adapter` is specified. */
+	private defaultAdapterName: string;
 	private bridge: TmuxBridge;
 	private stateDetector: StateDetector;
 	private broadcaster: ChatBroadcaster;
 	private uiEventStore: UiEventStore | null = null;
 	private workQueue = new WorkQueue();
 	private isDispatching = false;
+	/**
+	 * Held while an exclusive maintenance op (compaction / clear / reset / tidy) runs. The agent's
+	 * `state` is "idle" during these (they only start once idle), so without this flag a user message
+	 * arriving mid-op would dispatch concurrently with the history rewrite. While set, handleMessage
+	 * queues instead of dispatching; the queue is drained when the lock is released.
+	 */
+	private maintenanceInProgress = false;
 	private agents: Map<string, AgentEntry> = new Map();
 	private activeAgentId: string | null = null;
 	private takenOverAgents = new Set<string>();
@@ -430,7 +447,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		contextManager: ContextManager;
 		signalRouter: SignalRouter;
 		llmClient: LLMClient;
-		adapter: AgentAdapter;
+		/** Single adapter (back-compat). Provide this OR `adapters`. */
+		adapter?: AgentAdapter;
+		/** Active adapters keyed by name. Takes precedence over `adapter` when provided. */
+		adapters?: Map<string, AgentAdapter>;
+		/** Name of the default adapter within `adapters`. Defaults to the first entry. */
+		defaultAdapter?: string;
 		bridge: TmuxBridge;
 		stateDetector: StateDetector;
 		broadcaster: ChatBroadcaster;
@@ -457,7 +479,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.contextManager = opts.contextManager;
 		this.signalRouter = opts.signalRouter;
 		this.llmClient = opts.llmClient;
-		this.adapter = opts.adapter;
+		// Resolve the active adapter set. `adapters` (map) wins; otherwise wrap the single
+		// back-compat `adapter`. Exactly one of the two must be provided.
+		if (opts.adapters && opts.adapters.size > 0) {
+			this.adapters = opts.adapters;
+			this.defaultAdapterName = opts.defaultAdapter ?? opts.adapters.keys().next().value!;
+		} else if (opts.adapter) {
+			this.adapters = new Map([[opts.adapter.name, opts.adapter]]);
+			this.defaultAdapterName = opts.adapter.name;
+		} else {
+			throw new Error("MainAgent requires either `adapter` or a non-empty `adapters` map");
+		}
 		this.bridge = opts.bridge;
 		this.stateDetector = opts.stateDetector;
 		this.broadcaster = opts.broadcaster;
@@ -479,6 +511,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.locale = opts.locale ?? "en-US";
 		this.autoContinueEnabled = opts.autoContinue?.enabled ?? false;
 		this.autoContinueMax = opts.autoContinue?.maxConsecutive ?? 10;
+		logger.info(
+			"main-agent:autocontinue",
+			`Auto-continue mode ${this.autoContinueEnabled ? "enabled" : "disabled"} at startup (maxConsecutive=${this.autoContinueMax})`,
+		);
 		if (opts.searchConfig) {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
@@ -498,6 +534,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	/** Toggle auto-continue mode at runtime (used by the /autocontinue command). Returns the new state. */
 	setAutoContinueEnabled(on: boolean): boolean {
 		this.autoContinueEnabled = on;
+		logger.info(
+			"main-agent:autocontinue",
+			`Auto-continue mode ${on ? "enabled" : "disabled"} via runtime toggle (streak=${this.autoContinueCount}/${this.autoContinueMax})`,
+		);
 		return this.autoContinueEnabled;
 	}
 
@@ -518,6 +558,14 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	}
 
 	/** Return all active agents with their current status. */
+	/** Resolve the adapter an agent was launched with, falling back to the default adapter. */
+	private adapterFor(entry: AgentEntry): AgentAdapter {
+		const name = entry.adapter ?? this.defaultAdapterName;
+		return (
+			this.adapters.get(name) ?? this.adapters.get(this.defaultAdapterName) ?? this.adapters.values().next().value!
+		);
+	}
+
 	getActiveAgents(): Array<{
 		agentName: string;
 		agentId: string;
@@ -548,6 +596,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			} else {
 				status = "idle";
 			}
+			const entryAdapter = this.adapterFor(entry);
 			result.push({
 				agentName: id,
 				agentId: id,
@@ -555,8 +604,8 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				workingDir: entry.workingDir,
 				status,
 				takenOver: this.takenOverAgents.has(id),
-				adapter: this.adapter.displayName,
-				model: entry.model ?? this.adapter.defaultModel,
+				adapter: entryAdapter.displayName,
+				model: entry.model ?? entryAdapter.defaultModel,
 			});
 		}
 		return result;
@@ -610,7 +659,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		});
 
 		this.workQueue.on("item_available", () => {
-			if (this.state === "idle" && !this.isDispatching) {
+			if (this.state === "idle" && !this.isDispatching && !this.maintenanceInProgress) {
 				queueMicrotask(() => this.dispatchNext());
 			}
 		});
@@ -679,6 +728,33 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		});
 	}
 
+	/** True while an exclusive maintenance op (compaction/clear/reset/tidy) holds the agent. */
+	isMaintenanceInProgress(): boolean {
+		return this.maintenanceInProgress;
+	}
+
+	/**
+	 * Run an exclusive maintenance task (compaction, clear, reset, memory tidy) under a lock that
+	 * makes incoming user messages queue rather than dispatch. The queue is drained once the task
+	 * completes. The caller is responsible for first bringing the agent to idle (stop + waitForIdle)
+	 * if it was executing — typically done inside `fn`. Auto-compaction inside the executing loop is
+	 * already covered by the EXECUTING state and does not need this.
+	 */
+	async runMaintenance<T>(fn: () => Promise<T>): Promise<T> {
+		this.maintenanceInProgress = true;
+		this.broadcastState();
+		try {
+			return await fn();
+		} finally {
+			this.maintenanceInProgress = false;
+			this.broadcastState();
+			// Drain anything that queued up while the lock was held.
+			if (!this.workQueue.isEmpty() && this.state === "idle") {
+				queueMicrotask(() => this.dispatchNext());
+			}
+		}
+	}
+
 	// ─── State Management ──────────────────────────────
 
 	private setState(newState: AgentState): void {
@@ -697,7 +773,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private broadcastState(): void {
 		this.broadcaster.broadcast({
 			type: "state",
-			state: this.state,
+			// Surface maintenance (compaction/clear/reset/tidy) as "executing" so the UI shows busy
+			// while the agent queues incoming input. Internally the state stays "idle".
+			state: this.maintenanceInProgress ? "executing" : this.state,
 			queueSize: this.workQueue.pendingUserMessages(),
 			contextUsage: this.getContextUsage(),
 		});
@@ -721,10 +799,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 	async handleMessage(content: string): Promise<void> {
 		// A real user message ends any auto-continue streak.
+		if (this.autoContinueCount > 0) {
+			logger.info(
+				"main-agent:autocontinue",
+				`Streak reset (${this.autoContinueCount} → 0): real user message received`,
+			);
+		}
 		this.autoContinueCount = 0;
 		this.workQueue.enqueueUserMessage(content);
 
-		if (this.state === "executing" || this.isDispatching) {
+		if (this.state === "executing" || this.isDispatching || this.maintenanceInProgress) {
 			this.broadcaster.broadcast({
 				type: "system",
 				message: "消息已排队，将在当前操作完成后处理",
@@ -935,6 +1019,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private async dispatchNext(): Promise<void> {
 		if (this.state !== "idle") return;
 		if (this.isDispatching) return;
+		if (this.maintenanceInProgress) return;
 		if (this.workQueue.isEmpty()) return;
 
 		this.isDispatching = true;
@@ -1030,14 +1115,33 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	 */
 	private async maybeAutoContinue(lastText: string): Promise<boolean> {
 		if (!this.autoContinueEnabled) return false;
-		if (!this.promptLoader) return false;
-		if (this.signalRouter.isStopRequested()) return false;
-		if (this.workQueue.pendingUserMessages() > 0) return false; // a real user message is waiting — defer
+
+		const mod = "main-agent:autocontinue";
+
+		// ─── Short-circuit gates (no LLM call) ───
+		if (!this.promptLoader) {
+			logger.warn(mod, "Gate skipped: promptLoader not configured");
+			return false;
+		}
+		if (this.signalRouter.isStopRequested()) {
+			logger.info(mod, "Gate skipped: stop requested — handing control back to user");
+			return false;
+		}
+		const pendingUsers = this.workQueue.pendingUserMessages();
+		if (pendingUsers > 0) {
+			logger.info(mod, `Gate skipped: ${pendingUsers} user message(s) already queued — deferring to human`);
+			return false; // a real user message is waiting — defer
+		}
 		if (this.autoContinueCount >= this.autoContinueMax) {
+			logger.info(
+				mod,
+				`Gate skipped: consecutive cap reached (${this.autoContinueCount}/${this.autoContinueMax}) — handing control back to user`,
+			);
 			this.broadcaster.broadcast({ type: "system", message: "已达自动继续上限，交还控制权" });
 			return false;
 		}
 
+		// ─── Build the sub-agent snapshot fed to the gate ───
 		const tasks = this.agentMonitor?.getAllTasks() ?? [];
 		const pending = this.workQueue.getAgentEvents();
 		const statusLines: string[] = [];
@@ -1050,12 +1154,27 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		}
 		const agentStatus = statusLines.length > 0 ? statusLines.join("\n") : "(no active sub-agents)";
 
+		// Hot-reload the gate prompt so edits to auto-continue.md take effect without a server restart
+		// (mirrors how context-manager hot-reloads the main-agent prompt).
+		this.promptLoader.reloadIfChanged?.("auto-continue");
 		const prompt = this.promptLoader.resolve("auto-continue", {
 			language_instruction: getLanguageInstruction(this.locale),
 			last_output: lastText || "(the agent produced no text this turn)",
 			agent_status: agentStatus,
 		});
 
+		// Full input/output trace at INFO level — the default log level is "info" and debug is
+		// never enabled, so anything logged at debug is silently dropped. Log the complete resolved
+		// prompt and raw model response so a gate decision can be diagnosed from the log file alone.
+		logger.info(
+			mod,
+			`═══ Gate INPUT (streak ${this.autoContinueCount}/${this.autoContinueMax} · lastText=${lastText.length} chars · ${tasks.length} active task(s) · ${pending.length} pending event(s)) ═══`,
+		);
+		logger.info(mod, `[gate prompt]\n${prompt}`);
+
+		// ─── Gate LLM call (1 retry on parse failure) ───
+		const startedAt = Date.now();
+		let rawResponse = "";
 		let decision: { continue: boolean; reason: string; driverText: string } | null = null;
 		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
@@ -1063,18 +1182,45 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					responseFormat: "json",
 					temperature: 0.2,
 				});
+				rawResponse = res.content;
+				logger.info(mod, `═══ Gate OUTPUT (attempt ${attempt + 1}, ${Date.now() - startedAt}ms) ═══\n${res.content}`);
 				decision = this.parseAutoContinueDecision(res.content);
 				break;
 			} catch (err: any) {
-				logger.warn("main-agent", `auto-continue gate parse attempt ${attempt + 1} failed: ${err.message}`);
+				logger.warn(
+					mod,
+					`Gate parse attempt ${attempt + 1} failed: ${err.message} | raw response was: ${rawResponse || "(empty / LLM call threw)"}`,
+				);
 			}
 		}
+		const elapsedMs = Date.now() - startedAt;
 
-		if (!decision || !decision.continue || decision.driverText.trim() === "") {
+		// ─── Interpret the decision ───
+		if (!decision) {
+			logger.warn(
+				mod,
+				`Gate result: UNPARSEABLE after 2 attempts (${elapsedMs}ms) — failing safe, handing control back to user`,
+			);
+			return false;
+		}
+		if (!decision.continue) {
+			logger.info(mod, `Gate result: STOP (${elapsedMs}ms) — ${decision.reason || "(no reason given)"}`);
+			return false;
+		}
+		if (decision.driverText.trim() === "") {
+			logger.info(
+				mod,
+				`Gate result: continue=true but driverText empty (${elapsedMs}ms) — treating as STOP; reason: ${decision.reason || "(none)"}`,
+			);
 			return false;
 		}
 
 		this.autoContinueCount++;
+		logger.info(
+			mod,
+			`Gate result: CONTINUE (${this.autoContinueCount}/${this.autoContinueMax}, ${elapsedMs}ms) — ${decision.reason || "(no reason given)"}`,
+		);
+		logger.info(mod, `Gate driverText enqueued: ${decision.driverText}`);
 		this.broadcaster.broadcast({
 			type: "system",
 			message: `🔄 自动继续 (${this.autoContinueCount}/${this.autoContinueMax}): ${decision.reason}`,
@@ -1192,8 +1338,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				this.emitUiEvent("agent_update", summary);
 
+				const sendAdapter = this.adapterFor(sendAgent);
 				const sendPreHash = await this.stateDetector.captureHash(sendAgent.paneTarget);
-				await this.adapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
+				await sendAdapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
 				this.promptTracker?.record(sendAgentId, prompt);
 
 				if (this.agentMonitor) {
@@ -1201,6 +1348,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preHash: sendPreHash,
 						summary,
 						taskContext: prompt,
+						characteristics: sendAdapter.getCharacteristics(),
 					});
 
 					if (result.dispatched) {
@@ -1248,7 +1396,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 				this.emitUiEvent("agent_update", summary);
 
-				await this.adapter.sendResponse(this.bridge, respondAgent.paneTarget, value);
+				await this.adapterFor(respondAgent).sendResponse(this.bridge, respondAgent.paneTarget, value);
 				this.promptTracker?.record(respondAgentId, value);
 
 				if (this.agentMonitor) {
@@ -1632,6 +1780,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 							? rawPreCommands.filter((c) => typeof c === "string" && c.trim())
 							: undefined;
 
+					// Resolve which adapter to launch: omitted → default; otherwise must be active.
+					const rawAdapter = (args.adapter as string | undefined)?.trim();
+					const adapterName = rawAdapter || this.defaultAdapterName;
+					const adapter = this.adapters.get(adapterName);
+					if (!adapter) {
+						const active = [...this.adapters.keys()].join(", ");
+						return {
+							output: `Error: adapter "${adapterName}" is not active. Active adapters: ${active}.`,
+							terminal: false,
+						};
+					}
+
 					// Handle mcp_servers: generate temp config file if specified
 					let mcpConfigPath: string | undefined;
 					const rawMcpServers = args.mcp_servers as string[] | undefined;
@@ -1651,7 +1811,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						logger.info("main-agent", `Generated MCP config for ${agentName}: ${mcpConfigPath}`);
 					}
 
-					const paneTarget = await this.adapter.launch(this.bridge, {
+					const paneTarget = await adapter.launch(this.bridge, {
 						workingDir,
 						sessionName: agentName,
 						resumeId,
@@ -1659,13 +1819,21 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						preCommands,
 						mcpConfigPath,
 					});
-					const resolvedModel = model ?? this.adapter.defaultModel;
-					this.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel });
+					const resolvedModel = model ?? adapter.defaultModel;
+					this.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel, adapter: adapterName });
 					await this.changeTracker?.registerAgent(agentName, workingDir);
-					this.agentStore?.saveAgent(agentName, { paneTarget, workingDir, model: resolvedModel });
+					this.agentStore?.saveAgent(agentName, {
+						paneTarget,
+						workingDir,
+						model: resolvedModel,
+						adapter: adapterName,
+					});
 					this.activeAgentId = agentName;
-					this.stateDetector.setCharacteristics(this.adapter.getCharacteristics());
-					logger.info("main-agent", `Agent created: ${agentName}, pane: ${paneTarget}, cwd: ${workingDir}`);
+					this.stateDetector.setCharacteristics(adapter.getCharacteristics());
+					logger.info(
+						"main-agent",
+						`Agent created: ${agentName} (${adapterName}), pane: ${paneTarget}, cwd: ${workingDir}`,
+					);
 					this.onAgentChange?.();
 					const mcpNote = mcpConfigPath ? ` MCP servers: ${rawMcpServers!.join(", ")}.` : "";
 
@@ -1691,7 +1859,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					}
 
 					return {
-						output: `Agent "${agentName}" created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
+						output: `Agent "${agentName}" (${adapter.displayName}) created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
 						terminal: false,
 					};
 				} catch (err: any) {
@@ -1731,8 +1899,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 						const resumeIds: string[] = [];
 						for (const [id, entry] of this.agents) {
 							try {
-								if (this.adapter.exitAgent) {
-									const result = await this.adapter.exitAgent(this.bridge, entry.paneTarget);
+								const entryAdapter = this.adapterFor(entry);
+								if (entryAdapter.exitAgent) {
+									const result = await entryAdapter.exitAgent(this.bridge, entry.paneTarget);
 									if (result.resumeId) resumeIds.push(`${id}: ${result.resumeId}`);
 								}
 							} catch {
@@ -1796,9 +1965,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					// Gracefully exit agent to capture resume id (best-effort)
 					let agentContent = "";
 					let resumeId: string | undefined;
-					if (this.adapter.exitAgent) {
+					const killAdapter = this.adapterFor(agentEntry);
+					if (killAdapter.exitAgent) {
 						try {
-							const exitResult = await this.adapter.exitAgent(this.bridge, agentEntry.paneTarget);
+							const exitResult = await killAdapter.exitAgent(this.bridge, agentEntry.paneTarget);
 							agentContent = exitResult.content;
 							resumeId = exitResult.resumeId;
 						} catch (err: any) {

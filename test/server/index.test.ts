@@ -9,6 +9,7 @@ function createMainAgentMock() {
 		state: "idle" as const,
 		handleMessage: async () => undefined,
 		waitForIdle: async () => undefined,
+		runMaintenance: async (fn: () => Promise<unknown>) => fn(),
 		setOnAgentChange: () => undefined,
 		getActiveAgents: () => [],
 		getPendingUserMessageCount: () => 0,

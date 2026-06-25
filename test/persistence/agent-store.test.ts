@@ -122,6 +122,27 @@ describe("AgentStore", () => {
 			expect(agents).toHaveLength(1);
 			expect(agents[0].model).toBeUndefined();
 		});
+
+		it("should persist and load the adapter", () => {
+			store.saveAgent("cliclaw-adp", {
+				paneTarget: "cliclaw-adp:0.0",
+				workingDir: "/a",
+				model: "gpt-5.5",
+				adapter: "codex",
+			});
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].adapter).toBe("codex");
+		});
+
+		it("should default adapter to undefined when omitted", () => {
+			store.saveAgent("cliclaw-noadp", { paneTarget: "cliclaw-noadp:0.0", workingDir: "/n" });
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].adapter).toBeUndefined();
+		});
 	});
 
 	describe("deleteAgent", () => {

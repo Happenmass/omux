@@ -8,6 +8,7 @@ function createMockMainAgent(state: "idle" | "executing" = "idle") {
 		state,
 		handleMessage: vi.fn().mockResolvedValue(undefined),
 		waitForIdle: vi.fn().mockResolvedValue(undefined),
+		runMaintenance: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 		isAutoContinueEnabled: vi.fn(() => autoContinue),
 		setAutoContinueEnabled: vi.fn((on: boolean) => {
 			autoContinue = on;

@@ -30,6 +30,8 @@ export interface WaitForSettledOptions {
 	preHash: string;
 	timeoutMs?: number;
 	isAborted?: () => boolean;
+	/** Adapter-specific detection patterns for this pane. Falls back to the detector's global set when omitted. */
+	characteristics?: AgentCharacteristics | null;
 }
 
 export interface SettledResult {
@@ -147,13 +149,16 @@ export class StateDetector {
 	}
 
 	/** Layer 1.5: Quick regex-based pattern matching */
-	quickPatternCheck(content: string): PaneAnalysis | null {
-		if (!this.characteristics) return null;
+	quickPatternCheck(
+		content: string,
+		characteristics: AgentCharacteristics | null = this.characteristics,
+	): PaneAnalysis | null {
+		if (!characteristics) return null;
 
 		const lastLines = content.split("\n").slice(-8).join("\n");
 
 		// Check error patterns (highest priority)
-		for (const pattern of this.characteristics.errorPatterns) {
+		for (const pattern of characteristics.errorPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
 					status: "error",
@@ -164,7 +169,7 @@ export class StateDetector {
 		}
 
 		// Check waiting patterns (specific interactive prompts)
-		for (const pattern of this.characteristics.waitingPatterns) {
+		for (const pattern of characteristics.waitingPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
 					status: "waiting_input",
@@ -175,7 +180,7 @@ export class StateDetector {
 		}
 
 		// Check active patterns
-		for (const pattern of this.characteristics.activePatterns) {
+		for (const pattern of characteristics.activePatterns) {
 			if (pattern.test(lastLines)) {
 				return {
 					status: "active",
@@ -187,7 +192,7 @@ export class StateDetector {
 
 		// Check completion patterns (idle prompt — lowest priority so that
 		// waiting/active signals take precedence when both are present)
-		for (const pattern of this.characteristics.completionPatterns) {
+		for (const pattern of characteristics.completionPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
 					status: "completed",
@@ -216,6 +221,7 @@ export class StateDetector {
 	 */
 	async waitForSettled(paneTarget: string, taskContext: string, opts: WaitForSettledOptions): Promise<SettledResult> {
 		const timeoutMs = opts.timeoutMs ?? 1800000; // 30 minutes
+		const characteristics = opts.characteristics ?? this.characteristics;
 		const startTime = Date.now();
 		let lastChangeTime = Date.now();
 		let lastHash = opts.preHash;
@@ -278,7 +284,7 @@ export class StateDetector {
 					// Fast escape: only for urgent states (error/waiting_input).
 					// "completed" must go through the stability window to avoid false positives
 					// when the agent is still writing output.
-					const quickResult = this.quickPatternCheck(content);
+					const quickResult = this.quickPatternCheck(content, characteristics);
 					if (quickResult && (quickResult.status === "error" || quickResult.status === "waiting_input")) {
 						logger.info("state-detector", `waitForSettled: ${quickResult.status} fast escape`);
 						return { analysis: quickResult, content, timedOut: false };
@@ -290,7 +296,7 @@ export class StateDetector {
 				const stableDuration = Date.now() - lastChangeTime;
 				if (stableDuration >= this.config.stableThresholdMs) {
 					// Stable long enough — analyze
-					const quickResult = this.quickPatternCheck(lastContent);
+					const quickResult = this.quickPatternCheck(lastContent, characteristics);
 					if (quickResult) {
 						if (quickResult.status === "active" && quickResult.confidence > 0.7) {
 							// Agent appears still active despite stable content — reset and continue

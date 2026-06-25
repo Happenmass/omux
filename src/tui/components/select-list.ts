@@ -29,10 +29,20 @@ export class SelectListComponent implements Component {
 		this.onCancel = options.onCancel ?? null;
 	}
 
-	setItems(items: SelectItem[]): void {
+	setItems(items: SelectItem[], opts?: { keepSelection?: boolean }): void {
 		this.items = items;
-		this.selectedIndex = 0;
-		this.scrollOffset = 0;
+		if (opts?.keepSelection) {
+			// Clamp the existing cursor into the new bounds (used by toggle-in-place menus).
+			this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, items.length - 1));
+			if (this.selectedIndex < this.scrollOffset) {
+				this.scrollOffset = this.selectedIndex;
+			} else if (this.selectedIndex >= this.scrollOffset + this.maxVisible) {
+				this.scrollOffset = Math.max(0, this.selectedIndex - this.maxVisible + 1);
+			}
+		} else {
+			this.selectedIndex = 0;
+			this.scrollOffset = 0;
+		}
 		this.cached = null;
 	}
 

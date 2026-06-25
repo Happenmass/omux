@@ -53,6 +53,98 @@ export function buildCapabilitiesSummary(baseCapabilities: string, skills: Skill
 	return parts.join("\n");
 }
 
+export interface AdapterCapabilityInput {
+	/** Adapter identifier, e.g. "claude-code" */
+	name: string;
+	/** Human-readable name, e.g. "Claude Code" */
+	displayName: string;
+	/** Raw capabilities markdown loaded from prompts/adapters/<name>.md */
+	capabilities: string;
+	/** Whether this is the adapter `create_agent` uses when `adapter` is omitted */
+	isDefault: boolean;
+}
+
+/**
+ * Build the `{{agent_capabilities}}` section for one or more active adapters.
+ * With a single adapter it reads like a capability sheet; with multiple it adds an
+ * adapter-selection preamble and an execute-then-review orchestration playbook.
+ * Skills are appended budget-aware (large adapter docs push them to `read_skill`, as before).
+ */
+export function buildAgentCapabilitiesSection(adapters: AdapterCapabilityInput[], skills: SkillEntry[]): string {
+	const parts: string[] = [];
+	const multi = adapters.length > 1;
+	const fallbackCaps = "- Direct code editing and file operations\n- Running terminal commands";
+
+	if (multi) {
+		const names = adapters.map((a) => `\`${a.name}\`${a.isDefault ? " (default)" : ""}`).join(", ");
+		parts.push(
+			`You command **${adapters.length} coding-agent adapters**: ${names}. When you call \`create_agent\`, pass \`adapter: "<name>"\` to choose which one to launch; omit it to use the default.`,
+		);
+		parts.push("");
+	}
+
+	for (const a of adapters) {
+		parts.push(`### ${a.displayName} — \`adapter: "${a.name}"\`${a.isDefault ? " (default)" : ""}`);
+		parts.push("");
+		parts.push(a.capabilities.trim() || fallbackCaps);
+		parts.push("");
+	}
+
+	if (multi) {
+		const hasClaude = adapters.some((a) => a.name === "claude-code");
+		const hasCodex = adapters.some((a) => a.name === "codex");
+		parts.push("### Multi-Agent Orchestration");
+		parts.push("");
+		parts.push("Multiple adapters are active, so you can orchestrate them per task. General playbook:");
+		if (hasClaude && hasCodex) {
+			parts.push(
+				'- **Execute with Claude Code** (`adapter: "claude-code"`): use it as the primary implementer — writing code, running tests/builds, and git operations.',
+			);
+			parts.push(
+				'- **Review with Codex** (`adapter: "codex"`): once Claude Code reports a change complete, launch a *separate* Codex agent in the same `working_dir` to independently review the diff — correctness, edge cases, regressions. Give it the concrete scope (changed files + the goal), collect its findings, then route any fixes back to Claude Code.',
+			);
+			parts.push(
+				"- Keep them as distinct agents (distinct `agent_id`s) and send each instruction to the right one. This execute-then-review loop catches mistakes a single agent would miss.",
+			);
+		} else {
+			parts.push(
+				"- Use the adapter best suited to each step; keep concurrent agents as distinct `agent_id`s and route each `send_to_agent` to the correct one.",
+			);
+		}
+		parts.push(
+			"- This is a default heuristic, not a rule: for a pure review/audit task you may lead with the reviewer, and for trivial changes a single adapter is enough.",
+		);
+		parts.push("");
+	}
+
+	const injectable = skills.filter((s) => s.type === "agent-capability" || s.type === "prompt-enrichment");
+	if (injectable.length > 0) {
+		parts.push("### Available Skills");
+		parts.push("");
+
+		const header = parts.join("\n");
+		let remaining = MAX_SUMMARY_CHARS - header.length;
+		let includedCount = 0;
+
+		for (const skill of injectable) {
+			const entry = formatSkillEntry(skill);
+			if (remaining - entry.length < 0) {
+				break;
+			}
+			parts.push(entry);
+			remaining -= entry.length;
+			includedCount++;
+		}
+
+		const truncated = injectable.length - includedCount;
+		if (truncated > 0) {
+			parts.push(`(${truncated} more skills available via read_skill)`);
+		}
+	}
+
+	return parts.join("\n").trimEnd();
+}
+
 function formatSkillEntry(skill: SkillEntry): string {
 	const lines: string[] = [];
 

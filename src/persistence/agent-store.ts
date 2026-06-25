@@ -17,6 +17,7 @@ export interface PersistedAgent {
 	createdAt: number;
 	takenOver: boolean;
 	model?: string;
+	adapter?: string;
 }
 
 export class AgentStore {
@@ -43,18 +44,27 @@ export class AgentStore {
 		} catch {
 			// Column already exists — ignore
 		}
+		// Migrate: add adapter column if missing (backward-compatible)
+		try {
+			this.db.exec("ALTER TABLE chat_agents ADD COLUMN adapter TEXT");
+		} catch {
+			// Column already exists — ignore
+		}
 		logger.info("agent-store", "Table initialized");
 	}
 
 	/**
 	 * Persist (upsert) an agent entry.
 	 */
-	saveAgent(agentId: string, entry: { paneTarget: string; workingDir: string; model?: string }): void {
+	saveAgent(
+		agentId: string,
+		entry: { paneTarget: string; workingDir: string; model?: string; adapter?: string },
+	): void {
 		this.db
 			.prepare(
-				"INSERT OR REPLACE INTO chat_agents (session_id, pane_target, working_dir, model) VALUES (?, ?, ?, ?)",
+				"INSERT OR REPLACE INTO chat_agents (session_id, pane_target, working_dir, model, adapter) VALUES (?, ?, ?, ?, ?)",
 			)
-			.run(agentId, entry.paneTarget, entry.workingDir, entry.model ?? null);
+			.run(agentId, entry.paneTarget, entry.workingDir, entry.model ?? null, entry.adapter ?? null);
 	}
 
 	/**
@@ -77,7 +87,7 @@ export class AgentStore {
 	loadAgents(): PersistedAgent[] {
 		const rows = this.db
 			.prepare(
-				"SELECT session_id, pane_target, working_dir, created_at, taken_over, model FROM chat_agents ORDER BY created_at ASC",
+				"SELECT session_id, pane_target, working_dir, created_at, taken_over, model, adapter FROM chat_agents ORDER BY created_at ASC",
 			)
 			.all() as Array<{
 			session_id: string;
@@ -86,6 +96,7 @@ export class AgentStore {
 			created_at: number;
 			taken_over: number;
 			model: string | null;
+			adapter: string | null;
 		}>;
 
 		return rows.map((row) => ({
@@ -95,6 +106,7 @@ export class AgentStore {
 			createdAt: row.created_at,
 			takenOver: row.taken_over === 1,
 			model: row.model ?? undefined,
+			adapter: row.adapter ?? undefined,
 		}));
 	}
 }

@@ -166,6 +166,8 @@
 
 可恢复 agent：在创建之前 `memory_get({ path: "memory/sessions.md" })`。**只有当**目录匹配 *且* 当前任务与 sessions.md 里记录的 task 字段相关时，才传 `resume_id`。否则启新的——别因为这个去问用户，自己判断。
 
+当激活了多个 adapter（见 **Agent Capabilities**）时，用 `adapter` 参数选择启动哪个编码 agent——例如 `adapter: "claude-code"` 负责实现、`adapter: "codex"` 做独立复核；省略则用默认 adapter。每个 agent 各自绑定其 adapter，因此"先执行再复核"是两个独立 agent，分别路由指令。
+
 `send_to_agent` 与 `respond_to_agent` 是**非阻塞**的，dispatch 后立即返回。Sub-agent 完成、出错或需要输入时会以 `[AGENT_CALLBACK ...]` 回到你这里。状态：`completed` / `error` / `waiting_input` / `timeout`。多 agent 时用 `agent_id` 路由；不传则路由到最近使用的。
 
 **回包是给你的下一步决策输入，不是把任务交还给用户的节点。** 像高级工程师对待初级工程师的汇报那样处理：读完、判断、然后**自己执行**下一步。绝对不要把 sub-agent 的结果总结给用户、再问"接下来怎么办" —— 这就是"传话筒 / messenger" 失败模式。用户委派的是**整个任务**，不是每一轮回合。

@@ -42,7 +42,7 @@ Working directory: <working_dir>
 ```
 
 After calling `kill_agent`, if the result contains a `Resume ID`:
-1. Call `memory_edit({ path: "memory/sessions.md", content: "- <working_dir>: <resumeId>\n" })` (append mode is the default) to persist it.
+1. Call `memory_edit({ path: "memory/sessions.md", content: "- <working_dir> | <resume_id> | task: <brief task summary>\n" })` (append mode is the default) to persist it. The `task` field lets you later judge whether a new request is related enough to resume this agent.
 2. This allows resuming the Claude Code conversation later with `--resume`.
 
 ### Auto-Accept Edits (Shift+Tab)
@@ -60,7 +60,7 @@ When a resume id is available — either **supplied directly by the user** or fo
 **How to obtain a resume id (in priority order):**
 
 1. **User-provided**: If the user's message contains a UUID resume id (e.g., `8a9208b0-...`), use it directly — no memory lookup needed.
-2. **From memory**: Call `memory_search({ query: "sessions", category: "topic" })` or `memory_get({ path: "memory/sessions.md" })`. Look for a line matching the working directory: `- <working_dir>: <resume-id>`.
+2. **From memory**: Call `memory_search({ query: "sessions", category: "topic" })` or `memory_get({ path: "memory/sessions.md" })`. Look for a line matching the working directory: `- <working_dir> | <resume_id> | task: <…>`.
 
 **How to use it:**
 

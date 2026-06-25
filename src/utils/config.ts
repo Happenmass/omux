@@ -99,8 +99,15 @@ export interface ContextConfig {
 	compressionThreshold: number;
 }
 
+/** Coding-agent adapters Cliclaw knows how to launch. */
+export const KNOWN_AGENTS = ["claude-code", "codex"] as const;
+export type KnownAgent = (typeof KNOWN_AGENTS)[number];
+
 export interface CliclawConfig {
+	/** Adapter used by `create_agent` when no `adapter` is specified. Must be one of `enabledAgents`. */
 	defaultAgent: string;
+	/** Adapters that are active: their capabilities are injected into the Main Agent prompt and selectable via `create_agent`. */
+	enabledAgents: string[];
 	debug: boolean;
 	/** UI/prompt language override. Auto-detected from system locale if omitted. */
 	locale?: string;
@@ -136,6 +143,7 @@ export interface ServerRuntimeState {
 
 const DEFAULT_CONFIG: CliclawConfig = {
 	defaultAgent: "claude-code",
+	enabledAgents: ["claude-code"],
 	debug: false,
 	llm: {
 		provider: "anthropic",
@@ -207,7 +215,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 		const userConfig = JSON.parse(raw);
 
 		// Deep merge with defaults
-		return {
+		const merged: CliclawConfig = {
 			...DEFAULT_CONFIG,
 			...userConfig,
 			llm: { ...DEFAULT_CONFIG.llm, ...userConfig.llm },
@@ -221,8 +229,35 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			mdns: { ...DEFAULT_CONFIG.mdns, ...userConfig.mdns },
 			mcpServers: userConfig.mcpServers,
 		};
+		normalizeAgents(merged, Array.isArray(userConfig.enabledAgents));
+		return merged;
 	} catch {
 		return { ...DEFAULT_CONFIG };
+	}
+}
+
+/**
+ * Reconcile `defaultAgent` and `enabledAgents` into a consistent, valid state.
+ * Backward-compat: a config that predates `enabledAgents` derives it from `defaultAgent`.
+ * Mutates `config` in place.
+ */
+export function normalizeAgents(config: CliclawConfig, userProvidedEnabled: boolean): void {
+	const known = new Set<string>(KNOWN_AGENTS);
+
+	// Legacy configs (only `defaultAgent`) → the active set is just that one adapter.
+	if (!userProvidedEnabled || !Array.isArray(config.enabledAgents) || config.enabledAgents.length === 0) {
+		config.enabledAgents = [config.defaultAgent];
+	}
+
+	// Keep only adapters we know how to launch, de-duplicated and order-preserving.
+	config.enabledAgents = [...new Set(config.enabledAgents.filter((a) => known.has(a)))];
+	if (config.enabledAgents.length === 0) {
+		config.enabledAgents = ["claude-code"];
+	}
+
+	// The default must be one of the active adapters.
+	if (!config.enabledAgents.includes(config.defaultAgent)) {
+		config.defaultAgent = config.enabledAgents[0];
 	}
 }
 

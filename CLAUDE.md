@@ -147,7 +147,7 @@ HTTP + WebSocket server for the chat interface.
 ### Agent Adapters — `src/agents/`
 - `adapter.ts` — `AgentAdapter` interface contract: `launch`, `sendPrompt`, `sendResponse`, `abort`, `shutdown`, `exitAgent`, `getCharacteristics`, `getSkillsDir`, `getCapabilitiesFile`, `getOpenSpecCommands`. Types: `LaunchOptions`, `ExitAgentResult`, `OpenSpecCommands`, `AgentCharacteristics`.
 - `claude-code.ts` — **`ClaudeCodeAdapter`** ([claude-code.ts:13](src/agents/claude-code.ts:13)). Launches `claude --permission-mode auto [--resume <id>]`. Auto-clears the stuck `❯ (current)` state. Activity regex is **case-sensitive** ([claude-code.ts:233](src/agents/claude-code.ts:233)).
-- `codex.ts` — **`CodexAdapter`** ([codex.ts:13](src/agents/codex.ts:13)). Launches `codex --full-auto [resume <id>]`.
+- `codex.ts` — **`CodexAdapter`** ([codex.ts:13](src/agents/codex.ts:13)). Launches `codex --sandbox workspace-write --ask-for-approval never` (resume via `codex resume <id> …`). The old `--full-auto` flag was removed in Codex 0.142; the sandbox+approval pair is the non-interactive equivalent. Also passes `-c projects."<dir>".trust_level="trusted"` and `-c check_for_update_on_startup=false` to pre-empt the startup trust dialog and update nag; the "try the new model" nudge is sidestepped by pinning `--model`.
 - `claude-code-skills/` — built-in skills bundled with the Claude Code adapter (e.g. `commit/SKILL.md`); copied into `dist/agents/` by the build step.
 
 ### Tmux — `src/tmux/`

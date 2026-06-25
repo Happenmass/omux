@@ -1,3 +1,4 @@
+import type { AgentCharacteristics } from "../agents/adapter.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
@@ -13,6 +14,8 @@ export interface TaskInfo {
 	preHash: string;
 	startedAt: number;
 	abortController: AbortController;
+	/** Adapter-specific state-detection patterns for this agent's pane. */
+	characteristics?: AgentCharacteristics;
 	/** Set by cleanup()/shutdown() before aborting, so the polling loop skips the (always spurious) "aborted" settle callback. */
 	suppressSettleCallback?: boolean;
 }
@@ -52,7 +55,7 @@ export class AgentMonitor {
 	dispatch(
 		agentId: string,
 		paneTarget: string,
-		opts: { preHash: string; summary: string; taskContext?: string },
+		opts: { preHash: string; summary: string; taskContext?: string; characteristics?: AgentCharacteristics },
 	): DispatchResult {
 		const existing = this.tasks.get(agentId);
 		if (existing) {
@@ -79,6 +82,7 @@ export class AgentMonitor {
 			preHash: opts.preHash,
 			startedAt: Date.now(),
 			abortController: new AbortController(),
+			characteristics: opts.characteristics,
 		};
 
 		this.tasks.set(agentId, task);
@@ -149,6 +153,7 @@ export class AgentMonitor {
 				const result = await this.stateDetector.waitForSettled(paneTarget, task.taskContext, {
 					preHash: task.preHash,
 					isAborted: () => task.abortController.signal.aborted,
+					characteristics: task.characteristics,
 				});
 
 				// Check if aborted

@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { getAllProviders, getProvider } from "../llm/providers/registry.js";
-import type { CliclawConfig } from "../utils/config.js";
+import { type CliclawConfig, KNOWN_AGENTS, normalizeAgents } from "../utils/config.js";
 import { BoxComponent } from "./components/box.js";
 import type { Component } from "./components/renderer.js";
 import type { SelectItem } from "./components/select-list.js";
@@ -9,6 +9,14 @@ import { TextComponent } from "./components/text.js";
 import { TextInputComponent } from "./components/text-input.js";
 
 type ConfigMode = "list" | "submenu" | "textinput";
+
+/** Human-readable label for an adapter key (e.g. "claude-code" → "Claude Code"). */
+function agentDisplayName(name: string): string {
+	return name
+		.split(/[-_]/)
+		.map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+		.join(" ");
+}
 
 interface ConfigMenuItem {
 	key: string;
@@ -99,17 +107,17 @@ export class ConfigView implements Component {
 				type: "cycle",
 			},
 			{
-				key: "agent",
-				label: "Default Agent",
-				getValue: () => this.config.defaultAgent,
-				description: "The coding agent to use",
-				type: "cycle",
-			},
-			{
 				key: "baseUrl",
 				label: "Base URL",
 				getValue: () => this.config.llm.baseUrl || chalk.dim("(not set)"),
 				description: "Custom API endpoint (optional)",
+				type: "text",
+			},
+			{
+				key: "proxy",
+				label: "Proxy",
+				getValue: () => this.config.llm.proxy || chalk.dim("(not set)"),
+				description: "HTTP/HTTPS/SOCKS proxy for main-agent LLM calls only (sub-agents unaffected)",
 				type: "text",
 			},
 			{
@@ -125,6 +133,14 @@ export class ConfigView implements Component {
 				getValue: () => (this.config.learning?.enabled ? chalk.green("ON") : chalk.dim("OFF")),
 				description: "Track sub-agent changes and generate learning entries",
 				type: "cycle",
+			},
+			{
+				key: "activeAgents",
+				label: "Active Agents",
+				getValue: () => (this.config.enabledAgents ?? [this.config.defaultAgent]).join(", "),
+				description:
+					"Toggle which coding-agent adapters are active (Enter to open). The first active one is the default.",
+				type: "submenu",
 			},
 		];
 	}
@@ -190,6 +206,11 @@ export class ConfigView implements Component {
 	}
 
 	private openSubmenu(key: string): void {
+		if (key === "activeAgents") {
+			this.openActiveAgentsSubmenu();
+			return;
+		}
+
 		let items: SelectItem[];
 
 		if (key === "provider") {
@@ -246,12 +267,60 @@ export class ConfigView implements Component {
 		this.box.invalidate();
 	}
 
+	/** Checkbox submenu: Enter toggles an adapter on/off and stays open; Esc returns to the list. */
+	private openActiveAgentsSubmenu(): void {
+		this.selectList = new SelectListComponent(this.buildActiveAgentItems(), {
+			maxVisible: 8,
+			onSelect: (selected) => {
+				this.toggleActiveAgent(selected.value);
+				this.selectList?.setItems(this.buildActiveAgentItems(), { keepSelection: true });
+				this.cached = null;
+				this.box.invalidate();
+				this.onSave?.(this.config);
+			},
+			onCancel: () => {
+				this.mode = "list";
+				this.selectList = null;
+				this.cached = null;
+				this.box.invalidate();
+			},
+		});
+
+		this.mode = "submenu";
+		this.cached = null;
+		this.box.invalidate();
+	}
+
+	/** One checkbox row per known adapter, marking the active ones and the derived default. */
+	private buildActiveAgentItems(): SelectItem[] {
+		const enabled = new Set(this.config.enabledAgents ?? [this.config.defaultAgent]);
+		return KNOWN_AGENTS.map((name) => {
+			const box = enabled.has(name) ? "[x]" : "[ ]";
+			const isDefault = name === this.config.defaultAgent;
+			return {
+				value: name,
+				label: `${box} ${agentDisplayName(name)}${isDefault ? chalk.dim(" (default)") : ""}`,
+			};
+		});
+	}
+
+	/** Toggle one adapter's membership in enabledAgents, keeping at least one active. */
+	private toggleActiveAgent(name: string): void {
+		const enabled = new Set(this.config.enabledAgents ?? [this.config.defaultAgent]);
+		if (enabled.has(name)) {
+			if (enabled.size <= 1) return; // never leave zero adapters active
+			enabled.delete(name);
+		} else {
+			enabled.add(name);
+		}
+		// Preserve the canonical known-adapter order.
+		this.config.enabledAgents = [...KNOWN_AGENTS].filter((a) => enabled.has(a));
+		// Re-derive defaultAgent against the new active set.
+		normalizeAgents(this.config, true);
+	}
+
 	private cycleValue(key: string): void {
-		if (key === "agent") {
-			const agents = ["claude-code", "codex"];
-			const currentIdx = agents.indexOf(this.config.defaultAgent);
-			this.config.defaultAgent = agents[(currentIdx + 1) % agents.length];
-		} else if (key === "debug") {
+		if (key === "debug") {
 			this.config.debug = !this.config.debug;
 		} else if (key === "learning") {
 			if (!this.config.learning) this.config.learning = { enabled: false };
@@ -279,6 +348,9 @@ export class ConfigView implements Component {
 		} else if (key === "baseUrl") {
 			placeholder = "https://api.example.com/v1";
 			initialValue = this.config.llm.baseUrl ?? "";
+		} else if (key === "proxy") {
+			placeholder = "socks://127.0.0.1:10808";
+			initialValue = this.config.llm.proxy ?? "";
 		} else if (key === "customModel") {
 			placeholder = "Enter model name...";
 			initialValue = this.config.llm.model;
@@ -293,6 +365,8 @@ export class ConfigView implements Component {
 					this.config.llm.apiKey = value || undefined;
 				} else if (key === "baseUrl") {
 					this.config.llm.baseUrl = value || undefined;
+				} else if (key === "proxy") {
+					this.config.llm.proxy = value || undefined;
 				} else if (key === "customModel") {
 					this.config.llm.model = value;
 				}
@@ -344,14 +418,23 @@ export class ConfigView implements Component {
 			this.hintText.setText("  \u2191\u2193 Navigate  Enter Change  Esc Close");
 		} else if (this.mode === "submenu" && this.selectList) {
 			contentLines.push("");
+			const submenuKey = this.menuItems[this.selectedIndex].key;
 			const submenuTitle =
-				this.menuItems[this.selectedIndex].key === "provider" ? "Select Provider:" : "Select Model:";
+				submenuKey === "provider"
+					? "Select Provider:"
+					: submenuKey === "activeAgents"
+						? "Active Agents:"
+						: "Select Model:";
 			contentLines.push("  " + chalk.bold(submenuTitle));
 			contentLines.push("");
 			contentLines.push(...this.selectList.render(width - 4));
 			contentLines.push("");
 
-			this.hintText.setText("  \u2191\u2193 Navigate  Enter Select  Esc Back");
+			const submenuHint =
+				submenuKey === "activeAgents"
+					? "  \u2191\u2193 Navigate  Enter Toggle  Esc Back"
+					: "  \u2191\u2193 Navigate  Enter Select  Esc Back";
+			this.hintText.setText(submenuHint);
 		} else if (this.mode === "textinput" && this.textInput) {
 			contentLines.push("");
 			const inputLabel = this.menuItems[this.selectedIndex].label;
