@@ -131,20 +131,6 @@ describe("CodexAdapter.getCharacteristics", () => {
 	});
 });
 
-describe("CodexAdapter.getOpenSpecCommands", () => {
-	it("should return $ prefixed OpenSpec commands", () => {
-		const adapter = new CodexAdapter();
-		const cmds = adapter.getOpenSpecCommands();
-
-		expect(cmds.toolName).toBe("codex");
-		expect(cmds.explore).toBe("$openspec-explore");
-		expect(cmds.propose).toBe("$openspec-propose");
-		expect(cmds.apply).toBe("$openspec-apply-change");
-		expect(cmds.archive).toBe("$openspec-archive-change");
-		expect(cmds.wildcard).toBe("$openspec-*");
-	});
-});
-
 describe("CodexAdapter.getCapabilitiesFile", () => {
 	it("should return the codex adapter capabilities file path", () => {
 		const adapter = new CodexAdapter();

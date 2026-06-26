@@ -28,12 +28,6 @@ function createMockBridge() {
 	} as any;
 }
 
-function createMockSignalRouter() {
-	return {
-		notifyPromptSent: vi.fn(),
-	} as any;
-}
-
 function settledResult(status: PaneAnalysis["status"], detail = "done", timedOut = false): SettledResult {
 	return {
 		analysis: { status, confidence: 0.9, detail },
@@ -46,19 +40,16 @@ describe("AgentMonitor", () => {
 	let monitor: AgentMonitor;
 	let mockDetector: ReturnType<typeof createMockStateDetector>;
 	let mockBridge: ReturnType<typeof createMockBridge>;
-	let mockSignalRouter: ReturnType<typeof createMockSignalRouter>;
 	let workQueue: WorkQueue;
 
 	beforeEach(() => {
 		mockDetector = createMockStateDetector();
 		mockBridge = createMockBridge();
-		mockSignalRouter = createMockSignalRouter();
 		workQueue = new WorkQueue();
 
 		monitor = new AgentMonitor({
 			stateDetector: mockDetector as any,
 			bridge: mockBridge,
-			signalRouter: mockSignalRouter,
 			workQueue,
 		});
 	});
@@ -117,23 +108,16 @@ describe("AgentMonitor", () => {
 			}
 		});
 
-		it("should call notifyPromptSent on signalRouter", () => {
-			monitor.dispatch("session-1", "session-1:0.0", {
-				preHash: "abc123",
-				summary: "Fix the bug",
-				taskContext: "context for /opsx",
-			});
-
-			expect(mockSignalRouter.notifyPromptSent).toHaveBeenCalledWith("context for /opsx");
-		});
-
 		it("should use summary as taskContext when taskContext is not provided", () => {
 			monitor.dispatch("session-1", "session-1:0.0", {
 				preHash: "abc123",
 				summary: "Fix the bug",
 			});
 
-			expect(mockSignalRouter.notifyPromptSent).toHaveBeenCalledWith("Fix the bug");
+			expect(mockDetector.waitForSettled).toHaveBeenCalledWith("session-1:0.0", "Fix the bug", {
+				preHash: "abc123",
+				isAborted: expect.any(Function),
+			});
 		});
 
 		it("should call waitForSettled with correct arguments", () => {

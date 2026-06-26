@@ -54,7 +54,7 @@ function createMockLLMClient() {
 function createAgent(registry?: SkillRegistry) {
 	return new MainAgent({
 		contextManager: createMockContextManager(),
-		signalRouter: { onSignal: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), notifyPromptSent: vi.fn(), resetCaptureExpansion: vi.fn(), isPaused: vi.fn().mockReturnValue(false), isAborted: vi.fn().mockReturnValue(false), emit: vi.fn(), on: vi.fn() } as any,
+		signalRouter: { onSignal: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), isPaused: vi.fn().mockReturnValue(false), isAborted: vi.fn().mockReturnValue(false), emit: vi.fn(), on: vi.fn() } as any,
 		llmClient: createMockLLMClient(),
 		adapter: { sendPrompt: vi.fn(), sendResponse: vi.fn(), abort: vi.fn(), getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,

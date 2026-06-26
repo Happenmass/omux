@@ -37,8 +37,6 @@ function createMockSignalRouter() {
 		onSignal: vi.fn(),
 		startMonitoring: vi.fn(),
 		stopMonitoring: vi.fn(),
-		notifyPromptSent: vi.fn(),
-		resetCaptureExpansion: vi.fn(),
 		isPaused: vi.fn().mockReturnValue(false),
 		isAborted: vi.fn().mockReturnValue(false),
 		emit: vi.fn(),

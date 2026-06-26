@@ -145,27 +145,13 @@ describe("SignalRouter", () => {
 			expect(router.getCaptureLines()).toBe(50);
 		});
 
-		it("should expand lines after /opsx prompt", () => {
-			router.notifyPromptSent("/opsx:ff implement auth");
-			expect(router.getCaptureLines()).toBe(300);
-		});
-
 		it("should expand lines when pane contains spec keywords", () => {
-			expect(router.getCaptureLines("checking openspec changes")).toBe(300);
 			expect(router.getCaptureLines("reading proposal.md")).toBe(300);
+			expect(router.getCaptureLines("editing design.md")).toBe(300);
 		});
 
-		it("should reset to default on resetCaptureExpansion", () => {
-			router.notifyPromptSent("/opsx:ff test");
-			expect(router.getCaptureLines()).toBe(300);
-
-			router.resetCaptureExpansion();
-			expect(router.getCaptureLines()).toBe(50);
-		});
-
-		it("should not expand for non-opsx prompts", () => {
-			router.notifyPromptSent("implement the login page");
-			expect(router.getCaptureLines()).toBe(50);
+		it("should not expand for ordinary pane content", () => {
+			expect(router.getCaptureLines("implementing the login page")).toBe(50);
 		});
 	});
 

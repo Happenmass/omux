@@ -2,13 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import { logger } from "../utils/logger.js";
-import type {
-	AgentAdapter,
-	AgentCharacteristics,
-	ExitAgentResult,
-	LaunchOptions,
-	OpenSpecCommands,
-} from "./adapter.js";
+import type { AgentAdapter, AgentCharacteristics, ExitAgentResult, LaunchOptions } from "./adapter.js";
 
 export class CodexAdapter implements AgentAdapter {
 	readonly name = "codex";
@@ -147,17 +141,6 @@ export class CodexAdapter implements AgentAdapter {
 
 	getCapabilitiesFile(): string {
 		return "adapters/codex.md";
-	}
-
-	getOpenSpecCommands(): OpenSpecCommands {
-		return {
-			toolName: "codex",
-			explore: "$openspec-explore",
-			propose: "$openspec-propose",
-			apply: "$openspec-apply-change",
-			archive: "$openspec-archive-change",
-			wildcard: "$openspec-*",
-		};
 	}
 
 	async exitAgent(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult> {
