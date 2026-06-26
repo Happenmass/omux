@@ -34,9 +34,11 @@ So I built cliclaw instead.
 
 cliclaw is a chat-driven meta-agent that runs *your* CLI coding agent for you — whichever one you've chosen.
 
-You configure your tool of choice once via `cliclaw config`: Claude Code, Codex, aider, a local Qwen-Coder, anything with a tmux-friendly CLI. **The MainAgent doesn't know or care which one.** It operates against a generic agent contract — spawn, send, confirm, await — implemented per tool as a thin adapter (a couple hundred lines).
+You configure your tools of choice once via `cliclaw config`: Claude Code, Codex, etc. — anything with a tmux-friendly CLI. The *orchestration mechanics* don't care which tool sits behind them: the MainAgent operates against a generic agent contract — spawn, send, confirm, await — implemented per tool as a thin adapter (a couple hundred lines).
 
-When you assign work, cliclaw spawns one or more instances of your configured tool in tmux panes. It reads those panes like a human reads a terminal — recognizing spinners, confirmation prompts, error messages, completion markers. It sends keystrokes back. When a pane goes idle, it evaluates the result and decides what to do next.
+When you assign work, cliclaw spawns one or more instances of your configured tools in tmux panes. It reads those panes like a human reads a terminal — recognizing spinners, confirmation prompts, error messages, completion markers. It sends keystrokes back. When a pane goes idle, it evaluates the result and decides what to do next.
+
+**Enable more than one agent and the MainAgent routes by fit.** It sees every adapter you've turned on and its strengths, then assigns each task to the agent best suited to it — **Codex** for gnarly single-point reasoning and deep debugging, **Claude Code** for broad multi-file edit→test→rerun loops — and hands the diff to the *other* one for an independent review pass. You don't pick the agent per task; you describe the work and let the loop choose, always within the toolset you turned on (it never reaches for one you didn't enable). Roles aren't hard-wired — either can implement, either can review.
 
 That's the entire idea. Switching tools is a config change. Adding support for a new tool is one adapter file. The orchestration layer never changes.
 
@@ -54,7 +56,7 @@ There's a name for the shift happening to coding agents this year — **loop eng
 
 The idea: stop hand-prompting the agent turn by turn. Stand up a system that prompts it for you, iterates until the goal is *verifiably* met, and only comes back when it genuinely needs you. The human moves from prompter to **loop designer**.
 
-**cliclaw's MainAgent is that loop, pre-built.** You talk to it in plain language; it writes the prompts to Claude Code / Codex, reads their panes, decides the next move, and keeps going until the success criteria are met. You don't write the loop in bash — cliclaw *is* the loop.
+**cliclaw's MainAgent is that general loop, pre-built.** You talk to it in plain language; it writes the prompts to Claude Code / Codex, reads their panes, decides the next move, and keeps going until the success criteria are met. You don't write the loop in bash — cliclaw *is* the loop.
 
 Osmani names six primitives a loop-engineering setup needs. cliclaw ships four of them outright and approximates the other two:
 
@@ -229,7 +231,7 @@ If you want something specific, open an issue — this is still a solo project a
 ## FAQ
 
 **Does cliclaw decide which CLI agent to use for a task?**
-By default, no. You configure your tool of choice (`cliclaw config`, or `--agent` at launch), and the MainAgent orchestrates instances of *that* tool against a generic contract — it doesn't second-guess your choice and has no idea whether it's Claude Code, Codex, or aider. It never silently auto-routes across vendors. The one exception is opt-in: if you enable **multiple** adapters, you've told it to use both, and it picks per task — Claude Code to implement, Codex to review (see the execute-then-review FAQ below). Roles are interchangeable; the split is a heuristic, not hard-wired.
+Within the adapters *you've enabled*, yes. The MainAgent sees every active adapter and its characteristics (listed under "Agent Capabilities" in its prompt) and picks per task by fit — lead with **Codex** for gnarly single-point reasoning and deep debugging, lean **Claude Code** for broad multi-file work and tight edit→test→rerun loops, then have the *other* one review (see the execute-then-review FAQ below). If you've enabled only one adapter there's nothing to choose — it just runs that. The menu is always exactly the adapters you turned on: it never silently pulls in a tool you didn't enable. Roles aren't hard-wired — either can implement, either can review; the implement/review split is a heuristic, not a fixed division of labor.
 
 **Can I run Claude Code and Codex together?**
 Yes — as of v3.0.0 it's a headline feature. Enable both adapters and cliclaw runs an **execute-then-review loop** in a single session: Claude Code implements, then a *separate* Codex agent independently reviews the diff — correctness, edge cases, regressions — and routes fixes back. They stay distinct agents you address individually, and the roles are interchangeable: either can implement, either can review. The default heuristic is Claude-implements / Codex-reviews; you override per task. (Want two fully independent sessions instead? Run two cliclaw instances on different ports.)
@@ -241,7 +243,7 @@ Because tool-soup hurts. Every MCP you load injects its tool descriptions into t
 Some things you teach an agent are about *you* — your coding style, your tone, your colleagues' names. Re-teaching that every time you `cd` into a new repo is wasteful. Other things are about *this codebase* — its conventions, its open todos, its architectural quirks — and shouldn't bleed into unrelated projects. cliclaw splits memory into both layers and searches them together. Both run on the same hybrid-search index and the same editing tools, so the experience is identical at either level.
 
 **Can I change the context window size?**
-Yes — `--context-window` at launch, or `contextWindow` in `~/.cliclaw/config.json`. cliclaw watches usage and auto-compresses (or flushes to memory) when you cross the threshold, so you can match the window to your model and budget without babysitting it.
+Yes — `--context-window` at launch, or `context.contextWindowLimit` in `~/.cliclaw/config.json`. cliclaw watches usage and auto-compresses (or flushes to memory) when you cross the threshold, so you can match the window to your model and budget without babysitting it.
 
 **Why tmux and not the Anthropic SDK / OpenAI Assistants API?**
 Because the experience of Claude Code or Codex is not in their API — it's in their TUI. The interactive confirmations, the step-by-step reasoning, the "here's what I'm about to do" preview — all of that is TUI output. Wrapping the API strips it. Driving the TUI keeps it, and as a bonus you get compatibility with any CLI agent that ever ships.
