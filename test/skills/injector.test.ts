@@ -135,8 +135,9 @@ describe("buildAgentCapabilitiesSection", () => {
 		expect(section).toContain('`claude-code` (default)');
 		expect(section).toContain("### Multi-Agent Orchestration");
 		// claude-code + codex present → the execute-then-review playbook is used
-		expect(section).toContain("Execute with Claude Code");
-		expect(section).toContain("Review with Codex");
+		expect(section).toContain("full implementers");
+		expect(section).toContain("execute with Claude Code, review with Codex");
+		expect(section).toContain("Choose by task-fit");
 	});
 
 	it("marks the default adapter and not the others", () => {

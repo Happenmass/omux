@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CommandRouter } from "../../src/server/command-router.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
+import { loadConfig } from "../../src/utils/config.js";
+
+// /autocontinue re-reads config from disk on each invocation; stub it so tests control maxConsecutive.
+vi.mock("../../src/utils/config.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../src/utils/config.js")>()),
+	loadConfig: vi.fn().mockResolvedValue({ autoContinue: { enabled: true, maxConsecutive: 20 } }),
+}));
 
 function createMockMainAgent(state: "idle" | "executing" = "idle") {
 	let autoContinue = false;
+	let autoContinueMax = 10;
 	return {
 		state,
 		handleMessage: vi.fn().mockResolvedValue(undefined),
@@ -13,6 +21,11 @@ function createMockMainAgent(state: "idle" | "executing" = "idle") {
 		setAutoContinueEnabled: vi.fn((on: boolean) => {
 			autoContinue = on;
 			return autoContinue;
+		}),
+		getAutoContinueMax: vi.fn(() => autoContinueMax),
+		setAutoContinueMax: vi.fn((max: number) => {
+			autoContinueMax = max;
+			return autoContinueMax;
 		}),
 	} as any;
 }
@@ -290,6 +303,26 @@ describe("CommandRouter", () => {
 			expect(mockAgent.setAutoContinueEnabled).toHaveBeenLastCalledWith(false);
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 				expect.objectContaining({ type: "system", message: expect.stringContaining("已关闭") }),
+			);
+		});
+
+		it("re-reads config and applies maxConsecutive, surfacing the effective limit when turning on", async () => {
+			setup("idle");
+			await commandRouter.handle("autocontinue");
+			expect(loadConfig).toHaveBeenCalled();
+			expect(mockAgent.setAutoContinueMax).toHaveBeenCalledWith(20);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("上限 20") }),
+			);
+		});
+
+		it("still toggles even if config reload fails", async () => {
+			setup("idle");
+			vi.mocked(loadConfig).mockRejectedValueOnce(new Error("bad json"));
+			await commandRouter.handle("autocontinue");
+			expect(mockAgent.setAutoContinueEnabled).toHaveBeenCalledWith(true);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("已开启") }),
 			);
 		});
 	});

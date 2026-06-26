@@ -7,6 +7,7 @@ import type { SignalRouter } from "../core/signal-router.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
 import type { MemoryStore } from "../memory/store.js";
+import { loadConfig } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandDescriptor, CommandRegistry } from "./command-registry.js";
@@ -136,11 +137,20 @@ export class CommandRouter {
 		// The MainAgent's executeToolLoop will check isStopRequested between rounds
 	}
 
-	private handleAutoContinue(): void {
+	private async handleAutoContinue(): Promise<void> {
+		// Re-read config from disk so edits to autoContinue.maxConsecutive take effect without a
+		// server restart (config is otherwise only read once at startup).
+		try {
+			const config = await loadConfig();
+			this.mainAgent.setAutoContinueMax(config.autoContinue.maxConsecutive);
+		} catch (err: any) {
+			logger.warn("command-router", `/autocontinue: config reload failed, keeping current limit: ${err.message}`);
+		}
 		const on = this.mainAgent.setAutoContinueEnabled(!this.mainAgent.isAutoContinueEnabled());
+		const max = this.mainAgent.getAutoContinueMax();
 		this.broadcaster.broadcast({
 			type: "system",
-			message: `auto-continue 已${on ? "开启" : "关闭"}`,
+			message: on ? `auto-continue 已开启 · 上限 ${max} 次` : "auto-continue 已关闭",
 		});
 	}
 

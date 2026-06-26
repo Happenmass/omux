@@ -98,13 +98,16 @@ export function buildAgentCapabilitiesSection(adapters: AdapterCapabilityInput[]
 		parts.push("Multiple adapters are active, so you can orchestrate them per task. General playbook:");
 		if (hasClaude && hasCodex) {
 			parts.push(
-				'- **Execute with Claude Code** (`adapter: "claude-code"`): use it as the primary implementer — writing code, running tests/builds, and git operations.',
+				"- **Both adapters are full implementers** — Claude Code and Codex can each write code, run tests/builds, and do git work. The execute/review split below is a *role assignment*, not a capability limit: either can implement, and either can review the other.",
 			);
 			parts.push(
-				'- **Review with Codex** (`adapter: "codex"`): once Claude Code reports a change complete, launch a *separate* Codex agent in the same `working_dir` to independently review the diff — correctness, edge cases, regressions. Give it the concrete scope (changed files + the goal), collect its findings, then route any fixes back to Claude Code.',
+				'- **Recommended default — execute with Claude Code, review with Codex.** Use `adapter: "claude-code"` as the primary implementer; once it reports a change complete, launch a *separate* `adapter: "codex"` agent in the same `working_dir` to independently review the diff (correctness, edge cases, regressions). Give it the concrete scope (changed files + the goal), collect its findings, then route any fixes back to Claude Code.',
 			);
 			parts.push(
-				"- Keep them as distinct agents (distinct `agent_id`s) and send each instruction to the right one. This execute-then-review loop catches mistakes a single agent would miss.",
+				"- **Choose by task-fit, not habit.** Lead with **Codex** when the work suits it — gnarly single-point reasoning, deep debugging, or when the user prefers it or Claude Code is unavailable. Lean **Claude Code** for broad multi-file changes and tight edit→test→rerun loops. Then have the *other* adapter review — the review direction is symmetric.",
+			);
+			parts.push(
+				"- Keep them as distinct agents (distinct `agent_id`s) and send each instruction to the right one. The execute-then-review loop catches mistakes a single agent would miss.",
 			);
 		} else {
 			parts.push(

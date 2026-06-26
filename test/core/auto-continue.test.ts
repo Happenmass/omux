@@ -7,7 +7,7 @@ function createAgent(opts: { enabled?: boolean; max?: number } = {}) {
 	const llmClient = { complete } as any;
 	const promptLoader = { resolve: vi.fn().mockReturnValue("GATE PROMPT") } as any;
 	const signalRouter = {
-		notifyPromptSent: vi.fn(), on: vi.fn(), emit: vi.fn(),
+		on: vi.fn(), emit: vi.fn(),
 		isStopRequested: vi.fn().mockReturnValue(false),
 	} as any;
 	const agent = new MainAgent({
@@ -113,5 +113,29 @@ describe("maybeAutoContinue", () => {
 		expect(agent.isAutoContinueEnabled()).toBe(false);
 		expect(agent.setAutoContinueEnabled(true)).toBe(true);
 		expect(agent.isAutoContinueEnabled()).toBe(true);
+	});
+
+	it("setAutoContinueMax updates the cap at runtime and getAutoContinueMax reflects it", () => {
+		const { agent } = createAgent({ enabled: true, max: 10 });
+		expect(agent.getAutoContinueMax()).toBe(10);
+		expect(agent.setAutoContinueMax(20)).toBe(20);
+		expect(agent.getAutoContinueMax()).toBe(20);
+	});
+
+	it("setAutoContinueMax ignores non-positive / non-integer values and keeps the current cap", () => {
+		const { agent } = createAgent({ enabled: true, max: 10 });
+		expect(agent.setAutoContinueMax(0)).toBe(10);
+		expect(agent.setAutoContinueMax(-5)).toBe(10);
+		expect(agent.setAutoContinueMax(3.5)).toBe(10);
+		expect(agent.getAutoContinueMax()).toBe(10);
+	});
+
+	it("a runtime-raised cap lets the gate continue past the old limit", async () => {
+		const { agent, complete } = createAgent({ enabled: true, max: 1 });
+		(agent as any).autoContinueCount = 1; // at the old cap of 1 → would stop
+		agent.setAutoContinueMax(5); // raise the cap at runtime
+		complete.mockResolvedValue(gateResponse({ continue: true, reason: "more to do", driverText: "keep going" }));
+		expect(await run(agent)).toBe(true);
+		expect((agent as any).autoContinueCount).toBe(2);
 	});
 });

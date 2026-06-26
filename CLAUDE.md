@@ -213,6 +213,8 @@ Run a single file: `npx vitest test/core/main-agent.test.ts`. Match by name: `np
 - `enabled` — auto-continue mode (default `false`). When on, a gate LLM decides at loop-exit whether to keep going.
 - `maxConsecutive` — consecutive auto-continues before forced hand-back (default 10).
 
+Config is read once at startup. `/autocontinue` re-reads `config.json` on each invocation and applies the latest `maxConsecutive` (via `MainAgent.setAutoContinueMax`) before toggling `enabled`, so cap edits take effect without a restart; the confirmation message surfaces the effective cap.
+
 ## i18n / Language
 
 Cliclaw auto-detects system language; supports `zh-CN` and `en-US`. Resolution order:

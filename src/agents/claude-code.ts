@@ -2,13 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import { logger } from "../utils/logger.js";
-import type {
-	AgentAdapter,
-	AgentCharacteristics,
-	ExitAgentResult,
-	LaunchOptions,
-	OpenSpecCommands,
-} from "./adapter.js";
+import type { AgentAdapter, AgentCharacteristics, ExitAgentResult, LaunchOptions } from "./adapter.js";
 
 export class ClaudeCodeAdapter implements AgentAdapter {
 	readonly name = "claude-code";
@@ -172,17 +166,6 @@ export class ClaudeCodeAdapter implements AgentAdapter {
 
 	getCapabilitiesFile(): string {
 		return "adapters/claude-code.md";
-	}
-
-	getOpenSpecCommands(): OpenSpecCommands {
-		return {
-			toolName: "claude",
-			explore: "/opsx:explore",
-			propose: "/opsx:propose",
-			apply: "/opsx:apply",
-			archive: "/opsx:archive",
-			wildcard: "/opsx:*",
-		};
 	}
 
 	async exitAgent(bridge: TmuxBridge, paneTarget: string): Promise<ExitAgentResult> {

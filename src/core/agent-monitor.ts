@@ -2,7 +2,6 @@ import type { AgentCharacteristics } from "../agents/adapter.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
-import type { SignalRouter } from "./signal-router.js";
 import type { WorkQueue } from "./work-queue.js";
 
 export interface TaskInfo {
@@ -31,14 +30,12 @@ export interface BusyResult {
 interface AgentMonitorOptions {
 	stateDetector: StateDetector;
 	bridge: TmuxBridge;
-	signalRouter: SignalRouter;
 	workQueue: WorkQueue;
 }
 
 export class AgentMonitor {
 	private stateDetector: StateDetector;
 	private bridge: TmuxBridge;
-	private signalRouter: SignalRouter;
 	private workQueue: WorkQueue;
 
 	private tasks = new Map<string, TaskInfo>();
@@ -48,7 +45,6 @@ export class AgentMonitor {
 	constructor(opts: AgentMonitorOptions) {
 		this.stateDetector = opts.stateDetector;
 		this.bridge = opts.bridge;
-		this.signalRouter = opts.signalRouter;
 		this.workQueue = opts.workQueue;
 	}
 
@@ -87,8 +83,6 @@ export class AgentMonitor {
 
 		this.tasks.set(agentId, task);
 		this.paneTargets.set(agentId, paneTarget);
-
-		this.signalRouter.notifyPromptSent(taskContext);
 
 		// Fire-and-forget background polling
 		this.startPolling(agentId, paneTarget, task);

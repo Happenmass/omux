@@ -5,7 +5,7 @@
  */
 
 export interface CommandDescriptor {
-	/** Command name without leading `/`, e.g. "stop", "opsx:new" */
+	/** Command name without leading `/`, e.g. "stop", "commit" */
 	name: string;
 	/** Short human-readable description */
 	description: string;

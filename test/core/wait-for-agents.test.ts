@@ -24,7 +24,7 @@ function createAgent() {
 			getContextWindowLimit: vi.fn().mockReturnValue(200000),
 			setCompactTuning: vi.fn(),
 		} as any,
-		signalRouter: { notifyPromptSent: vi.fn(), on: vi.fn(), emit: vi.fn() } as any,
+		signalRouter: { on: vi.fn(), emit: vi.fn() } as any,
 		llmClient: {} as any,
 		adapter: { getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,

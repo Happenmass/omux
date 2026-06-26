@@ -545,6 +545,28 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		return this.autoContinueEnabled;
 	}
 
+	/** Current consecutive-auto-continue cap. */
+	getAutoContinueMax(): number {
+		return this.autoContinueMax;
+	}
+
+	/**
+	 * Update the consecutive-auto-continue cap at runtime. Used by /autocontinue to pick up edits to
+	 * config.autoContinue.maxConsecutive without a server restart. Invalid values (non-positive,
+	 * non-integer) are ignored and the current cap is kept. Returns the effective cap.
+	 */
+	setAutoContinueMax(max: number): number {
+		if (Number.isInteger(max) && max > 0) {
+			if (max !== this.autoContinueMax) {
+				logger.info("main-agent:autocontinue", `maxConsecutive updated ${this.autoContinueMax} → ${max} (runtime)`);
+			}
+			this.autoContinueMax = max;
+		} else {
+			logger.warn("main-agent:autocontinue", `Ignored invalid maxConsecutive=${max}; keeping ${this.autoContinueMax}`);
+		}
+		return this.autoContinueMax;
+	}
+
 	/** Replace the skill registry at runtime (used by /reset). */
 	setSkillRegistry(registry: SkillRegistry): void {
 		this.skillRegistry = registry;
@@ -654,7 +676,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.agentMonitor = new AgentMonitor({
 			stateDetector: this.stateDetector,
 			bridge: this.bridge,
-			signalRouter: this.signalRouter,
 			workQueue: this.workQueue,
 		});
 

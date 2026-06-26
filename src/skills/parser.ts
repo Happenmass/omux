@@ -59,7 +59,7 @@ function parseFrontmatterBlock(block: string): Partial<SkillFrontmatter> {
 			}
 
 			case "commands": {
-				// Inline array: commands: [/opsx:new, /opsx:ff]
+				// Inline array: commands: [/commit, /review]
 				if (value.startsWith("[")) {
 					result.commands = parseInlineArray(value);
 				} else if (value === "") {
@@ -120,7 +120,7 @@ function parseFrontmatterBlock(block: string): Partial<SkillFrontmatter> {
 	return result;
 }
 
-/** Parse inline array like `[/opsx:new, /opsx:ff]` or `["darwin", "linux"]` */
+/** Parse inline array like `[/commit, /review]` or `["darwin", "linux"]` */
 function parseInlineArray(value: string): string[] {
 	const inner = value.replace(/^\[/, "").replace(/\]$/, "").trim();
 	if (!inner) return [];

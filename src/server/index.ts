@@ -24,6 +24,14 @@ import { CommandRouter } from "./command-router.js";
 import { UiEventStore } from "./ui-events.js";
 import { handleWebSocket } from "./ws-handler.js";
 
+/**
+ * Prefixes of synthetic role:"user" messages that exist only for LLM-context continuity
+ * and must never render as chat bubbles in the reconnect history. Kept in sync with the
+ * defensive skip-list in web/app.js. New internal markers added to the MainAgent context
+ * must be added here too.
+ */
+const INTERNAL_HISTORY_PREFIXES = ["[AGENT_EVENT", "[CONTEXT_RECOVERY]", "[HUMAN]", "[RESUME]"];
+
 export interface ServerOptions {
 	host?: string;
 	port: number;
@@ -105,7 +113,17 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 	app.get("/api/history", (_req, res) => {
 		try {
 			const messages = conversationStore.loadMessagesWithCreatedAt();
-			res.json(messages);
+			// Internal orchestration messages are persisted as role:"user" purely for LLM-context
+			// continuity (agent callbacks carrying full sub-agent pane output, post-compaction
+			// recovery, queued human notes). They never render during live execution and must not
+			// surface as chat bubbles on reconnect — strip them here so raw sub-agent output and
+			// system markers don't leak into the UI. LLM restore uses loadMessages() and is unaffected.
+			const visible = messages.filter((m) => {
+				if (m.role !== "user" || typeof m.content !== "string") return true;
+				const text = m.content;
+				return !INTERNAL_HISTORY_PREFIXES.some((p) => text.startsWith(p));
+			});
+			res.json(visible);
 		} catch (err: any) {
 			logger.error("server", `Failed to load history: ${err.message}`);
 			res.status(500).json({ error: "Failed to load history" });

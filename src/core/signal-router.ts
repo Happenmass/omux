@@ -23,15 +23,13 @@ export interface SignalRouterEvents {
 	log: [message: string];
 }
 
-const OPSX_PATTERN = /\/opsx[:\s]/i;
-const SPEC_KEYWORDS = /openspec|proposal\.md|design\.md|tasks\.md|artifact|spec\.md/i;
+const SPEC_KEYWORDS = /proposal\.md|design\.md|tasks\.md|artifact|spec\.md/i;
 
 export class SignalRouter extends EventEmitter<SignalRouterEvents> {
 	private stateDetector: StateDetector;
 
 	private defaultLines = 50;
 	private expandedLines = 300;
-	private expandUntilNextPrompt = false;
 
 	private signalHandler: SignalHandler | null = null;
 	private unsubscribe: (() => void) | null = null;
@@ -78,24 +76,7 @@ export class SignalRouter extends EventEmitter<SignalRouterEvents> {
 		this.signalHandler = handler;
 	}
 
-	notifyPromptSent(prompt: string): void {
-		if (OPSX_PATTERN.test(prompt)) {
-			this.expandUntilNextPrompt = true;
-			logger.info("signal-router", "Detected /opsx command in prompt, expanding capture lines");
-		}
-	}
-
-	resetCaptureExpansion(): void {
-		if (this.expandUntilNextPrompt) {
-			this.expandUntilNextPrompt = false;
-			logger.info("signal-router", "Resetting capture lines to default");
-		}
-	}
-
 	getCaptureLines(paneContent?: string): number {
-		if (this.expandUntilNextPrompt) {
-			return this.expandedLines;
-		}
 		if (paneContent && SPEC_KEYWORDS.test(paneContent)) {
 			return this.expandedLines;
 		}
