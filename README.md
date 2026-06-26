@@ -42,6 +42,38 @@ That's the entire idea. Switching tools is a config change. Adding support for a
 
 A side benefit of this layered design: **you and the MainAgent can talk in one language while the MainAgent talks to the coding agents in another.** Chat with the MainAgent in Chinese; have it brief Claude Code or Codex in English (or vice versa). cliclaw injects per-locale instructions into the prompts crossing each boundary, so the language you read is independent of the language the agents reason in.
 
+## cliclaw is a loop, not a prompt box
+
+There's a name for the shift happening to coding agents this year — **loop engineering**, structured by Google's Addy Osmani after [Boris Cherny](https://addyosmani.com/blog/loop-engineering/) (who built Claude Code) and Peter Steinberger (OpenClaw) kept saying the same thing out loud:
+
+> "I don't prompt Claude anymore. I have loops running that prompt Claude and figuring out what to do. My job is to write loops."
+> — **Boris Cherny**, *Acquired Unplugged*, June 2026
+
+> "You shouldn't be prompting coding agents anymore. You should be designing loops that prompt your agents."
+> — **Peter Steinberger**
+
+The idea: stop hand-prompting the agent turn by turn. Stand up a system that prompts it for you, iterates until the goal is *verifiably* met, and only comes back when it genuinely needs you. The human moves from prompter to **loop designer**.
+
+**cliclaw's MainAgent is that loop, pre-built.** You talk to it in plain language; it writes the prompts to Claude Code / Codex, reads their panes, decides the next move, and keeps going until the success criteria are met. You don't write the loop in bash — cliclaw *is* the loop.
+
+Osmani names six primitives a loop-engineering setup needs. cliclaw ships four of them outright and approximates the other two:
+
+| Loop-engineering primitive | cliclaw |
+|---|---|
+| **Sub-agents** — maker ≠ checker | ✓ Claude Code implements, **Codex independently reviews the diff** — different vendor, different model, in one session |
+| **State / memory** — external, persistent | ✓ two-tier hybrid memory (global + project) + shared `tasks.txt` / `progress.txt` for cross-agent handoff |
+| **Skills** — codified knowledge | ✓ SKILL.md frontmatter, conditional activation |
+| **Connectors** — MCP | ✓ and *per-agent scoped*, not tool-soup |
+| **Parallel isolation** — worktrees | ~ parallel agents in separate tmux panes / working dirs (process-level, not git-worktree-level) |
+| **Automations** — scheduled triage | ~ self-continues once started (below); no cron triage yet |
+
+Two v3.0.0 pieces make the loop real:
+
+- **Auto-continue gate (`/autocontinue`).** At every natural stopping point a gate model asks *is the goal actually met, or is there a next round?* — and either keeps the loop running or hands back to you, capped so it can't run away.
+- **A loop-shaped system prompt.** The MainAgent prompt is written around a TDD loop where a failing test is a *continue* signal, not a stop, and independent work fans out to parallel sub-agents instead of blocking on one.
+
+Honest about the edges: cliclaw gives you *one general* loop (the MainAgent) rather than asking you to script task-specific ones, and its parallel isolation is panes-and-working-dirs, not git worktrees. But the core bet — **you converse with a loop that prompts the coding agents, instead of prompting them yourself** — is exactly the transition Cherny is describing.
+
 ## Demo
 
 [![cliclaw demo — click to play](assets/cliclaw_demo_poster.png)](https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo.mp4)
@@ -173,7 +205,8 @@ Supported LLM providers: OpenAI, Anthropic, OpenRouter, DeepSeek, Gemini, Groq, 
 
 | Command | Effect |
 |---|---|
-| `/stop` · `/resume` | Interrupt or resume the current task |
+| `/stop` | Interrupt the current task (continuation is handled by the auto-resume model) |
+| `/autocontinue` | Toggle auto-continue — the loop self-continues at stop points until the goal is met (capped) |
 | `/clear` · `/reset` | Clear conversation (reset also reloads prompts/skills) |
 | `/compact` | Force-compress conversation history |
 | `/context` | Show token usage for the current context |
@@ -181,7 +214,7 @@ Supported LLM providers: OpenAI, Anthropic, OpenRouter, DeepSeek, Gemini, Groq, 
 
 ## Status & roadmap
 
-**Today (v2.2.4):** works for me, daily, against Claude Code and Codex. Memory + skills + hybrid search shipped. TUI dashboard works. Not battle-tested against production team workflows yet.
+**Today (v3.0.0):** works for me, daily, against Claude Code and Codex — now with cross-vendor **execute-then-review** (Claude implements, Codex reviews), an **auto-continue loop**, and a loop-shaped MainAgent prompt. Memory + skills + hybrid search shipped. TUI dashboard works. Not battle-tested against production team workflows yet.
 
 **Next:**
 - [ ] Per-agent skill scoping (MCP scoping already shipped)
@@ -196,10 +229,10 @@ If you want something specific, open an issue — this is still a solo project a
 ## FAQ
 
 **Does cliclaw decide which CLI agent to use for a task?**
-No. You configure your CLI tool of choice once (`cliclaw config`, or `--agent` at launch). The MainAgent spawns and orchestrates instances of that tool — it doesn't second-guess your choice, and it has no idea whether it's talking to Claude Code, Codex, or aider. The contract is the same. We chose this over auto-routing because cost and determinism matter more than the convenience of automated tool selection.
+By default, no. You configure your tool of choice (`cliclaw config`, or `--agent` at launch), and the MainAgent orchestrates instances of *that* tool against a generic contract — it doesn't second-guess your choice and has no idea whether it's Claude Code, Codex, or aider. It never silently auto-routes across vendors. The one exception is opt-in: if you enable **multiple** adapters, you've told it to use both, and it picks per task — Claude Code to implement, Codex to review (see the execute-then-review FAQ below). Roles are interchangeable; the split is a heuristic, not hard-wired.
 
-**Can I run Claude Code and Codex simultaneously?**
-Not in one cliclaw session — a session uses your one configured tool. If you want both, run two cliclaw instances on different ports. (Mixed-tool sessions are on the roadmap, but the design intent is "your tool of choice, in parallel" — not auto-routing across vendors.)
+**Can I run Claude Code and Codex together?**
+Yes — as of v3.0.0 it's a headline feature. Enable both adapters and cliclaw runs an **execute-then-review loop** in a single session: Claude Code implements, then a *separate* Codex agent independently reviews the diff — correctness, edge cases, regressions — and routes fixes back. They stay distinct agents you address individually, and the roles are interchangeable: either can implement, either can review. The default heuristic is Claude-implements / Codex-reviews; you override per task. (Want two fully independent sessions instead? Run two cliclaw instances on different ports.)
 
 **Why scope MCPs per-agent instead of globally?**
 Because tool-soup hurts. Every MCP you load injects its tool descriptions into the system prompt of every agent that has it enabled. A docs agent doesn't need your Postgres MCP, and the LLM gets distracted by tools it'll never call. cliclaw lets you give each agent a focused toolset — smaller prompts, faster decisions, no name collisions. Per-agent skill scoping is on the way next.
@@ -232,4 +265,4 @@ Yes. tmux is designed for detached sessions. SSH in, start cliclaw, detach, come
 
 Built by [@happenmass](https://github.com/Happenmass). MIT.
 
-Architectural nods to [openspec](https://github.com/Fission-AI/OpenSpec) for the spec-driven workflow and to the Claude Code team for setting the bar that made cliclaw worth building.
+Architectural nods to the Claude Code team for setting the bar that made cliclaw worth building.
