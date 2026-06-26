@@ -512,7 +512,13 @@ function loadHistory() {
 					const msg = entry.payload;
 					if (msg.role === "user") {
 						const content = typeof msg.content === "string" ? msg.content : "[complex content]";
-						if (content.startsWith("[HUMAN]") || content.startsWith("[RESUME]")) continue;
+						if (
+							content.startsWith("[HUMAN]") ||
+							content.startsWith("[RESUME]") ||
+							content.startsWith("[AGENT_EVENT") ||
+							content.startsWith("[CONTEXT_RECOVERY]")
+						)
+							continue;
 						addMessageBubble("user", content, ts);
 					} else if (msg.role === "assistant") {
 						const text = extractText(msg.content);

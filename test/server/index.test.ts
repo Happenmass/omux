@@ -153,6 +153,44 @@ describe("startServer", () => {
 		authorizedWs.close();
 	});
 
+	it("should hide internal orchestration messages from /api/history", async () => {
+		const conversationStore = createConversationStoreMock();
+		conversationStore.loadMessagesWithCreatedAt = () => [
+			{ role: "user", content: "fix the bug", createdAt: 1 },
+			{ role: "assistant", content: "on it", createdAt: 2 },
+			{
+				role: "user",
+				content: "[AGENT_EVENT agent_id=a task_id=t status=completed duration=5s]\nfull pane output here",
+				createdAt: 3,
+			},
+			{ role: "user", content: "[CONTEXT_RECOVERY] history compressed", createdAt: 4 },
+			{ role: "user", content: "[HUMAN] a queued note", createdAt: 5 },
+		];
+
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent: createMainAgentMock(),
+			signalRouter: createSignalRouterMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore,
+			broadcaster: createBroadcasterMock(),
+			bridge: createBridgeMock(),
+			commandRegistry: new CommandRegistry(),
+		});
+
+		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
+		const cookie = getCookieHeader(landing);
+		const response = await fetch(`http://127.0.0.1:${server.port}/api/history`, {
+			headers: { Cookie: cookie },
+		});
+
+		expect(response.status).toBe(200);
+		const history = (await response.json()) as Array<{ role: string; content: string }>;
+		// Only the real user/assistant turns survive; synthetic internal messages are stripped.
+		expect(history.map((m) => m.content)).toEqual(["fix the bug", "on it"]);
+	});
+
 	it("should return agent terminals from the API", async () => {
 		const mainAgent = createMainAgentMock();
 		mainAgent.getActiveAgents = () => [
