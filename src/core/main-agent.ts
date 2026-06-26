@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
@@ -713,9 +713,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	 * exists); missing files are skipped, and content is capped to keep the gate prompt lean.
 	 */
 	private async readTaskList(maxChars = 6000): Promise<string> {
+		// Normalize working dirs before de-duping: agents share one tasks.txt per project,
+		// and `resolve` collapses trailing-slash / relative / `.` variants so the same file
+		// is never read (and injected) twice.
 		const dirs = new Set<string>();
-		for (const a of this.agents.values()) dirs.add(a.workingDir);
-		if (dirs.size === 0) dirs.add(this.getAgentWorkingDir());
+		for (const a of this.agents.values()) dirs.add(resolve(a.workingDir));
+		if (dirs.size === 0) dirs.add(resolve(this.getAgentWorkingDir()));
 
 		const blocks: string[] = [];
 		for (const dir of dirs) {
