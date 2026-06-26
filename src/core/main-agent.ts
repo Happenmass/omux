@@ -705,6 +705,35 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		return this.agents.get(this.activeAgentId)?.workingDir ?? process.cwd();
 	}
 
+	/**
+	 * Read the shared `tasks.txt` checklist(s) the sub-agents maintain (see the MainAgent prompt's
+	 * "traceable, transferable execution" section). Feeds the auto-continue gate an explicit source
+	 * of truth for "what's left" instead of letting it infer from the final message alone. Reads
+	 * tasks.txt from every known agent's working dir (falling back to the active dir when no agent
+	 * exists); missing files are skipped, and content is capped to keep the gate prompt lean.
+	 */
+	private async readTaskList(maxChars = 6000): Promise<string> {
+		const dirs = new Set<string>();
+		for (const a of this.agents.values()) dirs.add(a.workingDir);
+		if (dirs.size === 0) dirs.add(this.getAgentWorkingDir());
+
+		const blocks: string[] = [];
+		for (const dir of dirs) {
+			try {
+				const path = join(dir, "tasks.txt");
+				let text = (await readFile(path, "utf-8")).trim();
+				if (!text) continue;
+				if (text.length > maxChars) text = `${text.slice(0, maxChars)}\n…(tasks.txt truncated)…`;
+				blocks.push(dirs.size > 1 ? `# ${path}\n${text}` : text);
+			} catch {
+				// No tasks.txt in this working dir — skip.
+			}
+		}
+		return blocks.length > 0
+			? blocks.join("\n\n")
+			: "(no tasks.txt found — the sub-agents may not be maintaining one for this task)";
+	}
+
 	private resolveAgent(agentId?: string): { entry: AgentEntry; id: string } | { error: string } {
 		const id = agentId ?? this.activeAgentId;
 		if (!id) {
@@ -1182,6 +1211,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			language_instruction: getLanguageInstruction(this.locale),
 			last_output: lastText || "(the agent produced no text this turn)",
 			agent_status: agentStatus,
+			task_list: await this.readTaskList(),
 		});
 
 		// Full input/output trace at INFO level — the default log level is "info" and debug is
