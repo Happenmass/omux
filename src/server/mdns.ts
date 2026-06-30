@@ -131,3 +131,147 @@ export function startMdns(opts: StartMdnsOptions): MdnsHandle {
 
 	return startWithBonjour(opts, ips);
 }
+
+/** True if the two IP sets differ (order-insensitive). */
+export function ipsChanged(prev: string[], next: string[]): boolean {
+	if (prev.length !== next.length) return true;
+	const a = [...prev].sort();
+	const b = [...next].sort();
+	return a.some((ip, i) => ip !== b[i]);
+}
+
+export interface MdnsSupervisor {
+	/** The current live advertisement handle, or null if no LAN IPv4 is available yet. */
+	getHandle: () => MdnsHandle | null;
+	/** Re-publish against freshly-detected LAN IPs. Returns the new handle (or the existing one if no usable IP). */
+	rebind: (reason?: string) => Promise<MdnsHandle | null>;
+	/** Stop polling and tear down the current advertisement. */
+	stop: () => Promise<void>;
+}
+
+export interface StartMdnsSupervisorOptions extends StartMdnsOptions {
+	/** How often to poll for LAN IP changes. Default 5000ms. */
+	pollIntervalMs?: number;
+	/** Invoked after every successful re-publish so callers can refresh state / notify clients. */
+	onRebind?: (handle: MdnsHandle) => void;
+	/** Diagnostic logger. */
+	log?: (msg: string) => void;
+	/** Test seams — defaults to the real implementations. */
+	deps?: {
+		startMdns?: (opts: StartMdnsOptions) => MdnsHandle;
+		getLanIPv4?: () => string[];
+		setInterval?: typeof setInterval;
+		clearInterval?: typeof clearInterval;
+	};
+}
+
+/**
+ * Supervises an mDNS advertisement and re-publishes it whenever the host's LAN
+ * IPv4 set changes (e.g. after a Wi-Fi reconnect that hands out a new DHCP
+ * address). The `dns-sd -P` proxy hard-codes the IP captured at publish time
+ * and never self-updates, so without this watcher `<name>.local` keeps pointing
+ * at a dead address after any network change until the process restarts.
+ *
+ * Also exposes `rebind()` for an explicit manual trigger (wired to SIGHUP).
+ */
+export function startMdnsSupervisor(opts: StartMdnsSupervisorOptions): MdnsSupervisor {
+	if (!isValidMdnsName(opts.name)) {
+		throw new Error(`Invalid mDNS name "${opts.name}". Must match /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/i.`);
+	}
+	const pollIntervalMs = opts.pollIntervalMs ?? 5000;
+	const log = opts.log ?? (() => {});
+	const _startMdns = opts.deps?.startMdns ?? startMdns;
+	const _getLanIPv4 = opts.deps?.getLanIPv4 ?? getLanIPv4;
+	const _setInterval = opts.deps?.setInterval ?? setInterval;
+	const _clearInterval = opts.deps?.clearInterval ?? clearInterval;
+
+	let handle: MdnsHandle | null = null;
+	let advertisedIps: string[] = [];
+	let rebinding = false;
+	// True once the LAN went dark (no IPv4) after we had published. macOS's
+	// mDNSResponder drops the `dns-sd -P` proxy registration when the interface
+	// goes down, but our `dns-sd` child keeps running — so when the network comes
+	// back with the *same* IP, ipsChanged() is false and we'd never re-publish,
+	// leaving `<name>.local` silently unresolvable. Force a rebind on recovery.
+	let wasDown = false;
+
+	const baseOpts: StartMdnsOptions = { name: opts.name, port: opts.port };
+
+	const publish = (reason: string): MdnsHandle => {
+		const next = _startMdns(baseOpts);
+		handle = next;
+		advertisedIps = next.ips;
+		log(`mDNS advertising ${next.hostname} → [${advertisedIps.join(", ")}] (${reason})`);
+		opts.onRebind?.(next);
+		return next;
+	};
+
+	// Initial publish (skip if the host has no usable LAN IPv4 yet — the poller
+	// will pick it up once an address appears).
+	if (_getLanIPv4().length > 0) {
+		try {
+			publish("initial");
+		} catch (err: any) {
+			log(`mDNS initial publish failed (non-fatal): ${err?.message ?? err}`);
+		}
+	} else {
+		log("mDNS deferred: no LAN IPv4 available yet");
+	}
+
+	const rebind = async (reason = "manual"): Promise<MdnsHandle | null> => {
+		if (rebinding) return handle;
+		rebinding = true;
+		try {
+			const ips = _getLanIPv4();
+			if (ips.length === 0) {
+				log(`mDNS rebind skipped (${reason}): no LAN IPv4 available`);
+				return handle;
+			}
+			if (handle) {
+				try {
+					await handle.stop();
+				} catch {
+					/* best-effort */
+				}
+				handle = null;
+			}
+			return publish(reason);
+		} finally {
+			rebinding = false;
+		}
+	};
+
+	const timer = _setInterval(() => {
+		if (rebinding) return;
+		const ips = _getLanIPv4();
+		if (ips.length === 0) {
+			// Network down — remember it so we re-publish on recovery even if the
+			// IP comes back unchanged (the proxy registration was lost meanwhile).
+			if (handle !== null) wasDown = true;
+			return;
+		}
+		if (handle === null || wasDown || ipsChanged(advertisedIps, ips)) {
+			const reason = wasDown ? "network-recovered" : "ip-change";
+			wasDown = false;
+			void rebind(reason);
+		}
+	}, pollIntervalMs);
+	// Never hold the event loop open just for this housekeeping poll.
+	if (typeof (timer as any).unref === "function") (timer as any).unref();
+
+	return {
+		getHandle: () => handle,
+		rebind,
+		stop: async () => {
+			_clearInterval(timer);
+			if (handle) {
+				try {
+					await handle.stop();
+				} catch {
+					/* best-effort */
+				}
+				handle = null;
+			}
+		},
+	};
+}

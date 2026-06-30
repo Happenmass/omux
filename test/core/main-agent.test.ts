@@ -568,6 +568,22 @@ describe("MainAgent State Machine", () => {
 				}),
 			);
 		});
+
+		it("records a paired tool result when a tool throws (prevents dangling function_call poison)", async () => {
+			// exec_command with no `command` (simulates the model streaming truncated JSON
+			// args) throws deep in the handler. The loop guard must still record a `tool`
+			// message paired with the call id so the Responses API never sees a dangling call.
+			const agent = setupAgent([toolCallResponse("exec_command", {}, "call_k28")]);
+
+			await agent.handleMessage("run something");
+
+			const toolMsg = mockCtx.addMessage.mock.calls
+				.map((c: any) => c[0])
+				.find((m: any) => m.role === "tool" && m.toolCallId === "call_k28");
+			expect(toolMsg).toBeDefined();
+			expect(toolMsg.content).toMatch(/failed/i);
+			expect(agent.state).toBe("idle");
+		});
 	});
 
 	describe("kill_agent tool", () => {

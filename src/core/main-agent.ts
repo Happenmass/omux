@@ -1005,7 +1005,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		while (true) {
 			// Execute all tool calls
 			for (const toolCall of toolCalls) {
-				const result = await this.executeTool(toolCall);
+				// CRITICAL: every function_call MUST get a paired tool result, even if the
+				// tool throws (e.g. the model streamed malformed/truncated JSON args, so a
+				// required field is undefined). If we let the throw escape, the assistant's
+				// function_call stays in context with no function_call_output, and the
+				// OpenAI Responses API then 400s ("No tool output found for function call …")
+				// on EVERY subsequent turn — a permanent, SQLite-persisted stuck state.
+				let result: { output: string; terminal: boolean };
+				try {
+					result = await this.executeTool(toolCall);
+				} catch (err: any) {
+					const message = err?.message ?? String(err);
+					logger.error("main-agent", `Tool ${toolCall.name} threw: ${message}`);
+					result = {
+						output: `Error: tool "${toolCall.name}" failed: ${message}. Check the arguments (they may have been malformed) and retry.`,
+						terminal: false,
+					};
+				}
 
 				// Add tool result to conversation
 				this.contextManager.addMessage({

@@ -490,7 +490,10 @@ export function buildRequestBody(args: {
 	const { model, messages, opts, store } = args;
 
 	const instructions = extractInstructions(messages, opts?.systemPrompt);
-	const input = buildInput(messages);
+	// Repair at the assembly layer (not in buildInput, which stays a pure 1:1 mapper):
+	// guarantee every function_call has a matching function_call_output before the wire
+	// goes out, so a dangling call from a thrown/interrupted tool can never 400 the API.
+	const input = repairDanglingFunctionCalls(buildInput(messages));
 	const tools = buildTools(opts?.tools);
 
 	// Reasoning is the toggle for `include = ["reasoning.encrypted_content"]`.
@@ -783,6 +786,39 @@ export function buildInput(messages: LLMMessage[]): ResponseItemWire[] {
 	}
 
 	return out;
+}
+
+/**
+ * Belt-and-suspenders: the Responses API rejects a request with 400
+ * ("No tool output found for function call …") if any `function_call` lacks a
+ * matching `function_call_output`. A dangling call can be left behind by a tool
+ * that threw before its result was recorded, or by the process dying between
+ * persisting the assistant message and writing the tool result (the dangling
+ * call then survives in SQLite and 400s on every turn after restore).
+ *
+ * Guarantee well-formed input regardless of how history got into this state:
+ * synthesize a placeholder output for any unanswered call. Appended at the end
+ * (after its function_call) — call_id pairing is positional-agnostic.
+ */
+export function repairDanglingFunctionCalls(items: ResponseItemWire[]): ResponseItemWire[] {
+	const answered = new Set<string>();
+	const calls: string[] = [];
+	for (const item of items) {
+		if (item.type === "function_call_output" && item.call_id) answered.add(item.call_id);
+		else if (item.type === "function_call" && item.call_id) calls.push(item.call_id);
+	}
+	const missing = calls.filter((id) => !answered.has(id));
+	if (missing.length === 0) return items;
+
+	const repaired = [...items];
+	for (const callId of missing) {
+		repaired.push({
+			type: "function_call_output",
+			call_id: callId,
+			output: "Error: tool execution did not complete (no output recorded). Please retry.",
+		});
+	}
+	return repaired;
 }
 
 /**

@@ -2,6 +2,20 @@
 // Note: Learning Sessions panel is hidden in this UI (deprecated).
 // Backend learning REST/WS endpoints still exist; they're simply not surfaced.
 import { initI18n } from "./i18n.js";
+import { marked } from "./vendor/marked.esm.js";
+import DOMPurify from "./vendor/purify.es.mjs";
+
+// GFM (tables, task lists, ~~strikethrough~~) + single-newline → <br> so the
+// rendered output matches what the model emits without relying on pre-wrap.
+marked.setOptions({ gfm: true, breaks: true });
+
+// Force external-looking links to open safely in a new tab.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+	if (node.tagName === "A" && node.getAttribute("href")) {
+		node.setAttribute("target", "_blank");
+		node.setAttribute("rel", "noopener noreferrer");
+	}
+});
 
 let messagesEl;
 let contentEl;
@@ -47,6 +61,9 @@ let themeIconMoonEl;
 
 let ws = null;
 let currentAssistantEl = null;
+let currentAssistantRaw = "";
+let assistantRenderScheduled = false;
+let stickToBottom = true;
 let reconnectTimer = null;
 let agentState = "idle";
 let thinkingEl = null;
@@ -104,16 +121,13 @@ export function escapeHtml(text) {
 		.replace(/>/g, "&gt;");
 }
 
+// Full GFM markdown → sanitized HTML. marked handles tables/lists/headings/
+// links/blockquotes; DOMPurify strips any unsafe markup (the result is injected
+// via innerHTML). Replaces the old hand-rolled regex renderer that only knew
+// code/bold/italic and dropped tables on the floor.
 export function renderMarkdown(text) {
-	let html = escapeHtml(text);
-	html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function (_match, _lang, code) {
-		return "<pre><code>" + code.trim() + "</code></pre>";
-	});
-	html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-	html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-	html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-	html = html.replace(/\n{3,}/g, "\n\n");
-	return html;
+	const raw = marked.parse(String(text ?? ""), { async: false });
+	return DOMPurify.sanitize(raw);
 }
 
 function styleStateToString(state) {
@@ -547,15 +561,19 @@ function handleServerMessage(data) {
 			hideThinkingIndicator();
 			if (!currentAssistantEl) {
 				currentAssistantEl = addMessageBubble("assistant", "", Date.now());
+				currentAssistantRaw = "";
 			}
-			currentAssistantEl.textContent += data.delta;
-			scrollToBottom();
+			currentAssistantRaw += data.delta;
+			scheduleAssistantRender();
 			break;
 
 		case "assistant_done":
+			flushAssistantRender();
 			if (currentAssistantEl) {
-				currentAssistantEl.innerHTML = renderMarkdown(currentAssistantEl.textContent);
+				currentAssistantEl.innerHTML = renderMarkdown(currentAssistantRaw);
+				currentAssistantEl.classList.add("md");
 				currentAssistantEl = null;
+				currentAssistantRaw = "";
 			}
 			if (agentState === "executing") {
 				showThinkingIndicator();
@@ -566,13 +584,13 @@ function handleServerMessage(data) {
 		case "agent_update":
 			addMessageBubble("agent-update", data.summary, Date.now());
 			moveThinkingIndicatorToEnd();
-			scrollToBottom();
+			maybeScrollToBottom();
 			break;
 
 		case "tool_activity":
 			addMessageBubble("tool-activity", data.summary, Date.now());
 			moveThinkingIndicatorToEnd();
-			scrollToBottom();
+			maybeScrollToBottom();
 			break;
 
 		case "state": {
@@ -597,7 +615,7 @@ function handleServerMessage(data) {
 		case "system":
 			addMessageBubble("system", data.message, Date.now());
 			moveThinkingIndicatorToEnd();
-			scrollToBottom();
+			maybeScrollToBottom();
 			break;
 
 		case "agent_terminals":
@@ -608,6 +626,8 @@ function handleServerMessage(data) {
 			hideThinkingIndicator();
 			messagesEl.innerHTML = "";
 			currentAssistantEl = null;
+			currentAssistantRaw = "";
+			stickToBottom = true;
 			addMessageBubble("system", "对话已清空", Date.now());
 			break;
 	}
@@ -638,6 +658,7 @@ function addMessageBubble(type, text, ts) {
 	el.className = "msg " + type;
 	if (type === "assistant" && text) {
 		el.innerHTML = renderMarkdown(text);
+		el.classList.add("md");
 	} else {
 		el.textContent = text;
 	}
@@ -655,6 +676,36 @@ function scrollToBottom() {
 	requestAnimationFrame(function () {
 		messagesEl.scrollTop = messagesEl.scrollHeight;
 	});
+}
+
+// True when the viewport is parked at (or very near) the bottom of the message
+// list. We only auto-follow new content while this holds, so a user who has
+// scrolled up to read earlier output is never yanked back down.
+function isNearBottom() {
+	if (!messagesEl) return true;
+	return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+}
+
+function maybeScrollToBottom() {
+	if (stickToBottom) scrollToBottom();
+}
+
+// Re-render the in-flight assistant bubble as Markdown on each delta, throttled
+// to one parse per animation frame. Closed Markdown (a finished code block,
+// list, table, …) renders the moment it arrives instead of waiting for
+// assistant_done; partial trailing syntax resolves as more text streams in.
+function scheduleAssistantRender() {
+	if (assistantRenderScheduled) return;
+	assistantRenderScheduled = true;
+	requestAnimationFrame(flushAssistantRender);
+}
+
+function flushAssistantRender() {
+	assistantRenderScheduled = false;
+	if (!currentAssistantEl) return;
+	currentAssistantEl.innerHTML = renderMarkdown(currentAssistantRaw);
+	currentAssistantEl.classList.add("md");
+	maybeScrollToBottom();
 }
 
 function showThinkingIndicator() {
@@ -698,7 +749,7 @@ function showThinkingIndicator() {
 		const sec = Math.floor((Date.now() - thinkingStartedAt) / 1000);
 		timerEl.textContent = "· " + sec + "s";
 	}, 1000);
-	scrollToBottom();
+	maybeScrollToBottom();
 }
 
 function hideThinkingIndicator() {
@@ -835,6 +886,7 @@ function sendMessage() {
 	} else {
 		ws.send(JSON.stringify({ type: "message", content: text }));
 		addMessageBubble("user", text, Date.now());
+		stickToBottom = true;
 		scrollToBottom();
 	}
 
@@ -1297,6 +1349,14 @@ function setupAgentTabsScroll() {
 function initApp() {
 	initDomReferences();
 	setupAgentTabsScroll();
+
+	// Track whether the user is parked at the bottom. Auto-follow only while
+	// they are; the moment they scroll up we stop yanking the view down.
+	if (messagesEl) {
+		messagesEl.addEventListener("scroll", function () {
+			stickToBottom = isNearBottom();
+		});
+	}
 
 	const stored = getStoredTheme();
 	applyTheme(stored === "light" || stored === "dark" ? stored : null, undefined);

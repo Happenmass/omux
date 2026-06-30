@@ -7,6 +7,7 @@ import {
 	isRetryableStreamError,
 	isTransientStreamFailureMessage,
 	OpenAIResponsesProvider,
+	repairDanglingFunctionCalls,
 	tryBuildIncremental,
 } from "../../src/llm/providers/openai-responses.js";
 import type { LLMMessage, ToolDefinition } from "../../src/llm/types.js";
@@ -430,6 +431,43 @@ describe("buildInput — LLMMessage → ResponseItem mapping", () => {
 			role: "assistant",
 			content: [{ type: "output_text", text: "answer" }],
 		});
+	});
+
+	it("keeps a dangling tool call as-is (buildInput is a pure 1:1 mapper; repair happens at assembly)", () => {
+		const items = buildInput([
+			{ role: "user", content: "do it" },
+			{
+				role: "assistant",
+				content: [{ type: "tool_call", id: "call_k28", name: "exec_command", arguments: { command: "ls" } }],
+			},
+		]);
+		// No synthesized output here — that is repairDanglingFunctionCalls' job.
+		expect(items.filter((i) => i.type === "function_call_output")).toHaveLength(0);
+		expect(items.filter((i) => i.type === "function_call")).toHaveLength(1);
+	});
+});
+
+describe("repairDanglingFunctionCalls", () => {
+	it("leaves well-paired input byte-identical (same array reference)", () => {
+		const items = [
+			{ type: "function_call" as const, name: "x", arguments: "{}", call_id: "c1" },
+			{ type: "function_call_output" as const, call_id: "c1", output: "ok" },
+		];
+		expect(repairDanglingFunctionCalls(items)).toBe(items);
+	});
+
+	it("appends a synthetic output for each unanswered call, preserving answered ones", () => {
+		const items = [
+			{ type: "function_call" as const, name: "a", arguments: "{}", call_id: "c1" },
+			{ type: "function_call_output" as const, call_id: "c1", output: "ok" },
+			{ type: "function_call" as const, name: "b", arguments: "{}", call_id: "c2" },
+		];
+		const out = repairDanglingFunctionCalls(items);
+		const outputs = out.filter((i) => i.type === "function_call_output");
+		expect(outputs.map((o) => (o as any).call_id).sort()).toEqual(["c1", "c2"]);
+		// Original three items are untouched; exactly one item appended.
+		expect(out).toHaveLength(4);
+		expect(out.slice(0, 3)).toEqual(items);
 	});
 });
 

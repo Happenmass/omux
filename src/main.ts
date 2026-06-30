@@ -32,7 +32,7 @@ import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
-import { type MdnsHandle, isValidMdnsName, startMdns } from "./server/mdns.js";
+import { isValidMdnsName, type MdnsSupervisor, startMdnsSupervisor } from "./server/mdns.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
@@ -1028,9 +1028,25 @@ async function main(): Promise<void> {
 	});
 
 	// ─── Start mDNS / Bonjour advertising ───────────────
-	let mdnsHandle: MdnsHandle | null = null;
+	const startedAt = new Date().toISOString();
+	let mdnsSupervisor: MdnsSupervisor | null = null;
 	let mdnsUrl: string | undefined;
 	let lanUrls: string[] = [];
+
+	// Persist runtime state so `cliclaw stop` and the startup banner can find us;
+	// re-called whenever the mDNS supervisor re-publishes after a network change.
+	const persistRuntimeState = () =>
+		saveServerRuntimeState({
+			pid: process.pid,
+			host: args.host,
+			port: serverInstance.port,
+			url: `http://${args.host}:${serverInstance.port}`,
+			cwd: args.cwd,
+			startedAt,
+			mdnsUrl,
+			lanUrls,
+		});
+
 	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
 	const mdnsName = args.mdnsName ?? config.mdns.name;
 	if (mdnsEnabled) {
@@ -1040,17 +1056,31 @@ async function main(): Promise<void> {
 			logger.warn("main", "mDNS skipped: server is bound to localhost only");
 		} else {
 			try {
-				mdnsHandle = startMdns({ name: mdnsName, port: serverInstance.port });
-				mdnsUrl = `http://${mdnsHandle.hostname}:${serverInstance.port}`;
-				lanUrls = mdnsHandle.ips.map((ip) => `http://${ip}:${serverInstance.port}`);
-				console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(mdnsUrl)}`);
-				if (lanUrls.length > 0) {
-					console.log(`${chalk.dim("Also at:  ")}${lanUrls.join(", ")}`);
-				}
-				logger.info(
-					"main",
-					`mDNS advertising ${mdnsHandle.hostname} on port ${serverInstance.port} via ${mdnsHandle.backend}`,
-				);
+				let firstPublish = true;
+				mdnsSupervisor = startMdnsSupervisor({
+					name: mdnsName,
+					port: serverInstance.port,
+					log: (msg) => logger.info("main", msg),
+					// Fires on initial publish and on every IP-change / manual rebind.
+					onRebind: (handle) => {
+						mdnsUrl = `http://${handle.hostname}:${serverInstance.port}`;
+						lanUrls = handle.ips.map((ip) => `http://${ip}:${serverInstance.port}`);
+						void persistRuntimeState();
+						if (firstPublish) {
+							firstPublish = false;
+							console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(mdnsUrl)}`);
+							if (lanUrls.length > 0) {
+								console.log(`${chalk.dim("Also at:  ")}${lanUrls.join(", ")}`);
+							}
+						} else {
+							// Network changed under us — tell connected clients the address moved.
+							broadcaster.broadcast({
+								type: "system",
+								message: `网络已变化，mDNS 已重新广播：${mdnsUrl}`,
+							});
+						}
+					},
+				});
 			} catch (err: any) {
 				logger.warn("main", `mDNS advertising failed (non-fatal): ${err?.message ?? err}`);
 			}
@@ -1068,17 +1098,9 @@ async function main(): Promise<void> {
 		}, 500);
 	}
 
-	// Save runtime state for both daemon and foreground modes so `stop` can find us
-	await saveServerRuntimeState({
-		pid: process.pid,
-		host: args.host,
-		port: serverInstance.port,
-		url: `http://${args.host}:${serverInstance.port}`,
-		cwd: args.cwd,
-		startedAt: new Date().toISOString(),
-		mdnsUrl,
-		lanUrls,
-	});
+	// Save runtime state for both daemon and foreground modes so `stop` can find us.
+	// (The mDNS supervisor re-persists this on every re-publish via persistRuntimeState.)
+	await persistRuntimeState();
 
 	// ─── Graceful Shutdown ──────────────────────────────
 
@@ -1102,10 +1124,10 @@ async function main(): Promise<void> {
 		// Preserve cliclaw-* tmux sessions across shutdown/restart — they are
 		// persisted in AgentStore and will be rediscovered on next startup.
 
-		// Stop mDNS advertising
-		if (mdnsHandle) {
+		// Stop mDNS advertising (also stops the IP-change poll loop)
+		if (mdnsSupervisor) {
 			try {
-				await mdnsHandle.stop();
+				await mdnsSupervisor.stop();
 			} catch {
 				/* best-effort */
 			}
@@ -1141,6 +1163,14 @@ async function main(): Promise<void> {
 
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
+
+	// SIGHUP → manually force an mDNS re-advertise (e.g. `kill -HUP <pid>` after a
+	// network change) without restarting the server.
+	process.on("SIGHUP", () => {
+		if (!mdnsSupervisor) return;
+		logger.info("main", "SIGHUP received — forcing mDNS rebind");
+		void mdnsSupervisor.rebind("SIGHUP");
+	});
 }
 
 main().catch((err) => {
