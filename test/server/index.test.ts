@@ -1,13 +1,27 @@
+import { request as httpRequest } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { startServer, type ServerInstance } from "../../src/server/index.js";
 import { CommandRegistry } from "../../src/server/command-registry.js";
+import { type ServerInstance, startServer } from "../../src/server/index.js";
 import { UiEventStore } from "../../src/server/ui-events.js";
+
+/** Issue a raw HTTP GET with an explicit Host header (fetch/undici forbids overriding Host). */
+function rawRequestStatus(port: number, path: string, host: string): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const req = httpRequest({ host: "127.0.0.1", port, path, method: "GET", headers: { Host: host } }, (res) => {
+			res.resume();
+			res.on("end", () => resolve(res.statusCode ?? 0));
+		});
+		req.on("error", reject);
+		req.end();
+	});
+}
 
 function createMainAgentMock() {
 	return {
 		state: "idle" as const,
 		handleMessage: async () => undefined,
+		requestStop: () => undefined,
 		waitForIdle: async () => undefined,
 		runMaintenance: async (fn: () => Promise<unknown>) => fn(),
 		setOnAgentChange: () => undefined,
@@ -20,14 +34,6 @@ function createMainAgentMock() {
 function createContextManagerMock() {
 	return {
 		clear: async () => undefined,
-	} as any;
-}
-
-function createSignalRouterMock() {
-	return {
-		stop: () => undefined,
-		resume: () => undefined,
-		isStopRequested: () => false,
 	} as any;
 }
 
@@ -86,12 +92,13 @@ describe("startServer", () => {
 		}
 	});
 
-	it("should require auth cookie for API endpoints", async () => {
+	it("serves loopback callers and sets the auth cookie on the landing page", async () => {
+		// Pairing model (SRV-1): loopback is trusted implicitly, so a cookieless request from
+		// 127.0.0.1 is served. Landing GETs still set the cookie so subsequent requests carry it.
 		server = await startServer({
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
@@ -99,8 +106,9 @@ describe("startServer", () => {
 			commandRegistry: new CommandRegistry(),
 		});
 
-		const unauthorized = await fetch(`http://127.0.0.1:${server.port}/api/status`);
-		expect(unauthorized.status).toBe(401);
+		// Loopback API request is served without a cookie (trusted single-machine UX).
+		const loopbackApi = await fetch(`http://127.0.0.1:${server.port}/api/status`);
+		expect(loopbackApi.status).toBe(200);
 
 		const landing = await fetch(`http://127.0.0.1:${server.port}/`);
 		expect(landing.status).toBe(200);
@@ -120,12 +128,32 @@ describe("startServer", () => {
 		});
 	});
 
+	it("rejects requests with a disallowed Host header (DNS rebinding, SRV-2)", async () => {
+		server = await startServer({
+			host: "127.0.0.1",
+			port: 0,
+			mainAgent: createMainAgentMock(),
+			contextManager: createContextManagerMock(),
+			conversationStore: createConversationStoreMock(),
+			broadcaster: createBroadcasterMock(),
+			bridge: createBridgeMock(),
+			commandRegistry: new CommandRegistry(),
+		});
+
+		// undici's fetch() forbids overriding the Host header, so use a raw http request.
+		const status = await rawRequestStatus(server.port, "/api/status", "evil.example.com");
+		expect(status).toBe(403);
+
+		// A Host matching the actual bind host is accepted.
+		const okStatus = await rawRequestStatus(server.port, "/api/status", `127.0.0.1:${server.port}`);
+		expect(okStatus).toBe(200);
+	});
+
 	it("should require auth cookie for websocket connections", async () => {
 		server = await startServer({
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
@@ -171,7 +199,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore,
 			broadcaster: createBroadcasterMock(),
@@ -204,7 +231,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
@@ -234,7 +260,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
@@ -269,7 +294,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),
@@ -322,7 +346,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster,
@@ -367,7 +390,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster,
@@ -392,7 +414,35 @@ describe("startServer", () => {
 			vi.useRealTimers();
 		});
 
-		it("should trigger tidy at 23:30", async () => {
+		const ENABLED_TIDY = { enabled: true, time: "23:30" as const };
+
+		it("does NOT schedule tidy when autoTidy is disabled (default)", async () => {
+			vi.setSystemTime(new Date("2026-04-03T23:00:00"));
+
+			const broadcasts: any[] = [];
+			const broadcaster = createBroadcasterMock();
+			broadcaster.broadcast = (msg: any) => {
+				broadcasts.push(msg);
+			};
+
+			server = await startServer({
+				host: "127.0.0.1",
+				port: 0,
+				mainAgent: createMainAgentMock(),
+				contextManager: createContextManagerMock(),
+				conversationStore: createConversationStoreMock(),
+				broadcaster,
+				bridge: createBridgeMock(),
+				commandRegistry: new CommandRegistry(),
+				// autoTidy omitted → disabled by default
+			});
+
+			// Advance well past 23:30 — nothing should fire.
+			await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+			expect(broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"))).toBeUndefined();
+		});
+
+		it("should trigger tidy at the configured time when enabled", async () => {
 			// Set current time to 23:00 — tidy should fire in 30 minutes
 			vi.setSystemTime(new Date("2026-04-03T23:00:00"));
 
@@ -406,23 +456,55 @@ describe("startServer", () => {
 				host: "127.0.0.1",
 				port: 0,
 				mainAgent: createMainAgentMock(),
-				signalRouter: createSignalRouterMock(),
 				contextManager: createContextManagerMock(),
 				conversationStore: createConversationStoreMock(),
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
-				// No llmClient/promptLoader/memoryStore → tidy will broadcast "不可用"
+				autoTidy: ENABLED_TIDY,
+				// No llmClient/promptLoader/memoryStore → tidy will broadcast "unavailable"
 			});
 
 			// Advance 30 minutes to hit 23:30
 			await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
 
-			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("不可用"));
+			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"));
 			expect(tidyMsg).toBeDefined();
 		});
 
-		it("should not trigger tidy before 23:30", async () => {
+		it("skips (does not stop) the tidy when MainAgent is executing", async () => {
+			vi.setSystemTime(new Date("2026-04-03T23:00:00"));
+
+			const broadcasts: any[] = [];
+			const broadcaster = createBroadcasterMock();
+			broadcaster.broadcast = (msg: any) => {
+				broadcasts.push(msg);
+			};
+
+			const mainAgent = createMainAgentMock();
+			mainAgent.requestStop = vi.fn();
+			mainAgent.state = "executing";
+
+			server = await startServer({
+				host: "127.0.0.1",
+				port: 0,
+				mainAgent,
+				contextManager: createContextManagerMock(),
+				conversationStore: createConversationStoreMock(),
+				broadcaster,
+				bridge: createBridgeMock(),
+				commandRegistry: new CommandRegistry(),
+				autoTidy: ENABLED_TIDY,
+			});
+
+			await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+			// It must NOT have run tidy (no broadcast) and must NOT have stopped execution.
+			expect(broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"))).toBeUndefined();
+			expect(mainAgent.requestStop).not.toHaveBeenCalled();
+		});
+
+		it("should not trigger tidy before the configured time", async () => {
 			vi.setSystemTime(new Date("2026-04-03T23:00:00"));
 
 			const broadcasts: any[] = [];
@@ -435,22 +517,22 @@ describe("startServer", () => {
 				host: "127.0.0.1",
 				port: 0,
 				mainAgent: createMainAgentMock(),
-				signalRouter: createSignalRouterMock(),
 				contextManager: createContextManagerMock(),
 				conversationStore: createConversationStoreMock(),
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
+				autoTidy: ENABLED_TIDY,
 			});
 
 			// Advance only 20 minutes — should NOT trigger yet
 			await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
 
-			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("不可用"));
+			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"));
 			expect(tidyMsg).toBeUndefined();
 		});
 
-		it("should schedule for next day if already past 23:30", async () => {
+		it("should schedule for next day if already past the configured time", async () => {
 			// Set current time to 23:45 — should schedule for tomorrow 23:30
 			vi.setSystemTime(new Date("2026-04-03T23:45:00"));
 
@@ -464,21 +546,21 @@ describe("startServer", () => {
 				host: "127.0.0.1",
 				port: 0,
 				mainAgent: createMainAgentMock(),
-				signalRouter: createSignalRouterMock(),
 				contextManager: createContextManagerMock(),
 				conversationStore: createConversationStoreMock(),
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
+				autoTidy: ENABLED_TIDY,
 			});
 
 			// Advance 30 minutes (still today) — should NOT trigger
 			await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
-			expect(broadcasts.find((m) => m.type === "system" && m.message.includes("不可用"))).toBeUndefined();
+			expect(broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"))).toBeUndefined();
 
 			// Advance to tomorrow 23:30 (23h15m more from 00:15)
 			await vi.advanceTimersByTimeAsync(23 * 60 * 60 * 1000 + 15 * 60 * 1000);
-			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("不可用"));
+			const tidyMsg = broadcasts.find((m) => m.type === "system" && m.message.includes("unavailable"));
 			expect(tidyMsg).toBeDefined();
 		});
 
@@ -495,22 +577,22 @@ describe("startServer", () => {
 				host: "127.0.0.1",
 				port: 0,
 				mainAgent: createMainAgentMock(),
-				signalRouter: createSignalRouterMock(),
 				contextManager: createContextManagerMock(),
 				conversationStore: createConversationStoreMock(),
 				broadcaster,
 				bridge: createBridgeMock(),
 				commandRegistry: new CommandRegistry(),
+				autoTidy: ENABLED_TIDY,
 			});
 
 			// First trigger at 23:30
 			await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
-			const firstCount = broadcasts.filter((m) => m.type === "system" && m.message.includes("不可用")).length;
+			const firstCount = broadcasts.filter((m) => m.type === "system" && m.message.includes("unavailable")).length;
 			expect(firstCount).toBe(1);
 
 			// Advance 24 hours to next 23:30
 			await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
-			const secondCount = broadcasts.filter((m) => m.type === "system" && m.message.includes("不可用")).length;
+			const secondCount = broadcasts.filter((m) => m.type === "system" && m.message.includes("unavailable")).length;
 			expect(secondCount).toBe(2);
 		});
 	});
@@ -528,7 +610,6 @@ describe("startServer", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent: createMainAgentMock(),
-			signalRouter: createSignalRouterMock(),
 			contextManager: createContextManagerMock(),
 			conversationStore: createConversationStoreMock(),
 			broadcaster: createBroadcasterMock(),

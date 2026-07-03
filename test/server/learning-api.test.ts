@@ -79,7 +79,6 @@ describe("learning REST API", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: {} as any,
 			contextManager: {} as any,
 			conversationStore: {
 				loadMessages: () => [],

@@ -22,7 +22,6 @@ function createMainAgentMock() {
 function createMocks() {
 	return {
 		mainAgent: createMainAgentMock(),
-		signalRouter: { stop: () => {}, resume: () => {}, isStopRequested: () => false } as any,
 		contextManager: { clear: async () => {}, updateModule: () => {} } as any,
 		conversationStore: {
 			loadMessages: () => [],
@@ -130,7 +129,10 @@ describe("MCP Server Config API", () => {
 		expect(body.error).toBeDefined();
 	});
 
-	it("GET /api/config/mcp-servers requires auth", async () => {
+	it("serves the API to loopback callers without an explicit cookie (trusted single-machine UX)", async () => {
+		// Under the pairing model (SRV-1) loopback is trusted implicitly, so a cookieless
+		// request from 127.0.0.1 is served rather than 401'd. Remote (non-loopback) callers
+		// without a valid token still get 401 — covered by the auth unit tests.
 		server = await startServer({
 			host: "127.0.0.1",
 			port: 0,
@@ -138,6 +140,6 @@ describe("MCP Server Config API", () => {
 		});
 
 		const res = await fetch(`http://127.0.0.1:${server.port}/api/config/mcp-servers`);
-		expect(res.status).toBe(401);
+		expect(res.status).toBe(200);
 	});
 });
