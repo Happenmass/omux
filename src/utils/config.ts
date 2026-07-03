@@ -34,6 +34,16 @@ export interface TmuxConfig {
 	sessionPrefix: string;
 }
 
+export interface AutoTidyConfig {
+	/**
+	 * When true, a nightly `/tidy` runs on a schedule to archive outdated memory entries.
+	 * Default false — otherwise it silently interrupts long overnight autonomous runs.
+	 */
+	enabled: boolean;
+	/** Local wall-clock time to run the nightly tidy, "HH:MM". Default "23:30". */
+	time?: string;
+}
+
 export interface MemoryConfig {
 	/** Embedding provider: "auto" | "local" | "openai" | "gemini" | "voyage" | "mistral" | "none" */
 	embeddingProvider: string;
@@ -55,11 +65,21 @@ export interface MemoryConfig {
 	flushThreshold: number;
 	/** Number of recent tool results to keep in full context. Older results are summarized. Default 20. */
 	toolResultRetention: number;
+	/** Scheduled nightly memory tidy. Disabled by default so it never interrupts overnight runs. */
+	autoTidy: AutoTidyConfig;
 }
 
 export interface SkillsConfig {
 	/** Skill names to disable (won't be loaded even if discovered) */
 	disabled: string[];
+	/**
+	 * Absolute workspace directories whose `.cliclaw/skills/` are trusted to be loaded.
+	 * Workspace skills execute with orchestrator authority (prompt-enrichment lands in the
+	 * MainAgent SYSTEM PROMPT, main-agent-tool bodies carry tool-result authority), so a
+	 * cloned repo's skills are NOT loaded unless its absolute path is listed here. Default [].
+	 * Adapter-bundled skills are unaffected.
+	 */
+	trustedWorkspaceDirs?: string[];
 }
 
 export interface LearningConfig {
@@ -93,8 +113,13 @@ export interface MdnsConfig {
 }
 
 export interface ContextConfig {
-	/** Context window size in tokens. Should match the model's actual context limit. Default 500000. */
-	contextWindowLimit: number;
+	/**
+	 * Explicit context window size in tokens. When set, it overrides the automatic per-model
+	 * lookup ContextManager performs from the model id. Leave unset (omit / 0) to let Cliclaw
+	 * pick a sensible window for known model families (claude → 200k, gemini/gpt-4.1 → 1M, …),
+	 * falling back to 500000 with a startup warning for unrecognized models.
+	 */
+	contextWindowLimit?: number;
 	/** Compression threshold ratio (0-1). Conversation is compressed when usage exceeds this ratio. Default 0.7. */
 	compressionThreshold: number;
 }
@@ -151,7 +176,8 @@ const DEFAULT_CONFIG: CliclawConfig = {
 		thinking: "off",
 	},
 	context: {
-		contextWindowLimit: 500000,
+		// contextWindowLimit intentionally omitted: ContextManager derives it from the model id
+		// (per-model lookup → 500k fallback). Users can still set it explicitly to override.
 		compressionThreshold: 0.7,
 	},
 	stateDetector: {
@@ -172,9 +198,14 @@ const DEFAULT_CONFIG: CliclawConfig = {
 		decayHalfLifeDays: 30,
 		flushThreshold: 0.6,
 		toolResultRetention: 20,
+		autoTidy: {
+			enabled: false,
+			time: "23:30",
+		},
 	},
 	skills: {
 		disabled: [],
+		trustedWorkspaceDirs: [],
 	},
 	learning: {
 		enabled: false,
@@ -222,7 +253,11 @@ export async function loadConfig(): Promise<CliclawConfig> {
 			context: { ...DEFAULT_CONFIG.context, ...userConfig.context },
 			stateDetector: { ...DEFAULT_CONFIG.stateDetector, ...userConfig.stateDetector },
 			tmux: { ...DEFAULT_CONFIG.tmux, ...userConfig.tmux },
-			memory: { ...DEFAULT_CONFIG.memory, ...userConfig.memory },
+			memory: {
+				...DEFAULT_CONFIG.memory,
+				...userConfig.memory,
+				autoTidy: { ...DEFAULT_CONFIG.memory.autoTidy, ...userConfig.memory?.autoTidy },
+			},
 			skills: { ...DEFAULT_CONFIG.skills, ...userConfig.skills },
 			learning: { ...DEFAULT_CONFIG.learning, ...userConfig.learning },
 			autoContinue: { ...DEFAULT_CONFIG.autoContinue, ...userConfig.autoContinue },

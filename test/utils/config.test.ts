@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type CliclawConfig,
-	type McpServerDefinition,
 	getGlobalStorageDir,
 	loadConfig,
+	type McpServerDefinition,
 	normalizeAgents,
 	saveConfig,
 } from "../../src/utils/config.js";
@@ -116,6 +116,41 @@ describe("autoContinue config", () => {
 		await writeFile(configFile, JSON.stringify({ autoContinue: { enabled: true } }), "utf-8");
 		const config = await loadConfig();
 		expect(config.autoContinue).toEqual({ enabled: true, maxConsecutive: 10 });
+	});
+});
+
+describe("autoTidy config", () => {
+	const configDir = join(homedir(), ".cliclaw");
+	const configFile = join(configDir, "config.json");
+	let saved: string | null = null;
+
+	beforeEach(async () => {
+		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
+	});
+	afterEach(async () => {
+		if (saved !== null) await writeFile(configFile, saved, "utf-8");
+		else if (existsSync(configFile)) await rm(configFile);
+	});
+
+	it("defaults memory.autoTidy to disabled at 23:30", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ debug: false }), "utf-8");
+		const config = await loadConfig();
+		expect(config.memory.autoTidy).toEqual({ enabled: false, time: "23:30" });
+	});
+
+	it("deep-merges a partial memory.autoTidy over the defaults (keeps default time)", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ memory: { autoTidy: { enabled: true } } }), "utf-8");
+		const config = await loadConfig();
+		expect(config.memory.autoTidy).toEqual({ enabled: true, time: "23:30" });
+	});
+
+	it("preserves a custom autoTidy time", async () => {
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configFile, JSON.stringify({ memory: { autoTidy: { enabled: true, time: "02:15" } } }), "utf-8");
+		const config = await loadConfig();
+		expect(config.memory.autoTidy).toEqual({ enabled: true, time: "02:15" });
 	});
 });
 
