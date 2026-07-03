@@ -21,6 +21,14 @@ export interface ToolCallContent {
 export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
+	/**
+	 * Anthropic extended-thinking signature. The API requires the original `signature`
+	 * to be replayed verbatim alongside the thinking text in tool-use loops — a
+	 * signature-less thinking block is rejected. Legacy history persisted before this
+	 * field existed will have `signature` undefined; the anthropic provider DROPS such
+	 * blocks on replay rather than sending them signature-less.
+	 */
+	signature?: string;
 }
 
 /**

@@ -64,28 +64,42 @@ export class AnthropicProvider implements LLMProvider {
 		const params = this.buildParams(chatMessages, systemPrompt, opts, true);
 		const stream = this.client.messages.stream(params as any);
 
-		let fullText = "";
-		const contentBlocks: MessageContent[] = [];
 		let thinkingChars = 0;
+		// Track the id/name of each tool_use block by its content-block index. Anthropic only
+		// carries these on `content_block_start`; the `input_json_delta` events that follow have
+		// index + partial_json only. Cache them here so every tool_call_delta can surface the
+		// id/name (matching openai-compatible's event shape).
+		const toolBlockByIndex = new Map<number, { id: string; name: string }>();
 
 		for await (const event of stream) {
 			if (event.type === "content_block_start") {
 				const block = event.content_block;
-				if (block.type === "thinking") {
-					// Thinking block start
+				if (block.type === "tool_use") {
+					toolBlockByIndex.set(event.index, { id: block.id, name: block.name });
+					// Emit an opening tool_call_delta carrying id + name so downstream consumers
+					// have them before the argument deltas start streaming (no args yet).
+					yield {
+						type: "tool_call_delta",
+						index: event.index,
+						id: block.id,
+						name: block.name,
+						argumentsDelta: "",
+					};
 				}
 			} else if (event.type === "content_block_delta") {
 				if (event.delta.type === "text_delta") {
-					fullText += event.delta.text;
 					yield { type: "text_delta", delta: event.delta.text };
 				} else if (event.delta.type === "thinking_delta") {
 					const chunk = event.delta.thinking ?? "";
 					thinkingChars += chunk.length;
 					yield { type: "thinking_delta", delta: chunk };
 				} else if (event.delta.type === "input_json_delta") {
+					const block = toolBlockByIndex.get(event.index);
 					yield {
 						type: "tool_call_delta",
 						index: event.index,
+						id: block?.id,
+						name: block?.name,
 						argumentsDelta: event.delta.partial_json || "",
 					};
 				}
@@ -128,8 +142,22 @@ export class AnthropicProvider implements LLMProvider {
 			params.max_tokens = opts.maxTokens;
 		}
 
+		// Prompt caching: mark the stable prefix with `cache_control` breakpoints so the API
+		// reuses cached tokens across turns instead of re-billing the full prefix each time.
+		// Anthropic allows at most 4 breakpoints; we place one on the system block, one on the
+		// last tool, and one on the last message (see convertMessages), staying well under 4.
 		if (systemPrompt) {
-			params.system = systemPrompt;
+			if (typeof systemPrompt === "string") {
+				params.system = [
+					{
+						type: "text",
+						text: systemPrompt,
+						cache_control: { type: "ephemeral" },
+					},
+				];
+			} else {
+				params.system = systemPrompt;
+			}
 		}
 
 		if (opts?.temperature !== undefined) {
@@ -158,10 +186,12 @@ export class AnthropicProvider implements LLMProvider {
 
 		// Tools
 		if (opts?.tools && opts.tools.length > 0) {
-			params.tools = opts.tools.map((t) => ({
+			params.tools = opts.tools.map((t, i) => ({
 				name: t.name,
 				description: t.description,
 				input_schema: t.parameters,
+				// Cache breakpoint on the LAST tool caches the whole (stable) tool block.
+				...(i === opts.tools!.length - 1 ? { cache_control: { type: "ephemeral" } } : {}),
 			}));
 
 			if (opts.toolChoice) {
@@ -196,24 +226,35 @@ export class AnthropicProvider implements LLMProvider {
 		}
 
 		const chatMessages: Anthropic.MessageParam[] = [];
+		// Tracks the user message currently accumulating tool_result blocks, so consecutive
+		// `role:"tool"` messages (parallel tool calls) coalesce into ONE user turn. Anthropic
+		// expects every tool_result answering the prior assistant turn in the single next user
+		// message — separate user messages per result would break the tool-use protocol.
+		let pendingToolResult: { role: "user"; content: any[] } | null = null;
 
 		for (const msg of messages) {
 			if (msg.role === "system") continue;
 
 			if (msg.role === "tool") {
 				// Anthropic uses tool_result blocks
-				chatMessages.push({
-					role: "user",
-					content: [
-						{
-							type: "tool_result",
-							tool_use_id: msg.toolCallId || "",
-							content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
-						} as any,
-					],
-				});
+				const toolResultBlock = {
+					type: "tool_result",
+					tool_use_id: msg.toolCallId || "",
+					content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+				} as any;
+				if (pendingToolResult) {
+					// Coalesce into the in-progress tool-result user message.
+					pendingToolResult.content.push(toolResultBlock);
+				} else {
+					const toolMsg = { role: "user" as const, content: [toolResultBlock] };
+					chatMessages.push(toolMsg);
+					pendingToolResult = toolMsg;
+				}
 				continue;
 			}
+
+			// Any non-tool message closes the current tool-result group.
+			pendingToolResult = null;
 
 			if (typeof msg.content === "string") {
 				chatMessages.push({
@@ -248,10 +289,18 @@ export class AnthropicProvider implements LLMProvider {
 							});
 							break;
 						case "thinking":
-							parts.push({
-								type: "thinking",
-								thinking: block.thinking,
-							});
+							// Anthropic requires the original `signature` to be replayed verbatim
+							// with the thinking text in tool-use loops. A signature-less thinking
+							// block is rejected by the API, so DROP legacy blocks (persisted before
+							// the signature was captured) rather than sending them signature-less —
+							// mirrors the deliberate drop in openai-compatible.ts.
+							if (typeof block.signature === "string" && block.signature.length > 0) {
+								parts.push({
+									type: "thinking",
+									thinking: block.thinking,
+									signature: block.signature,
+								});
+							}
 							break;
 					}
 				}
@@ -263,7 +312,40 @@ export class AnthropicProvider implements LLMProvider {
 			}
 		}
 
+		// Prompt-cache breakpoint on the LAST message caches the whole conversation prefix.
+		// The last block of the last message is the freshest stable content; marking it lets the
+		// server reuse everything before it on the next turn.
+		this.applyLastMessageCacheBreakpoint(chatMessages);
+
 		return { systemPrompt, chatMessages };
+	}
+
+	/**
+	 * Attach `cache_control: {type:"ephemeral"}` to the last content block of the last message.
+	 * Normalizes string content into a single text block so the breakpoint has somewhere to
+	 * live. No-op when there are no messages. This is one of the (max 4) cache breakpoints —
+	 * see buildParams for the system + last-tool breakpoints.
+	 */
+	private applyLastMessageCacheBreakpoint(chatMessages: Anthropic.MessageParam[]): void {
+		const last = chatMessages[chatMessages.length - 1];
+		if (!last) return;
+
+		if (typeof last.content === "string") {
+			last.content = [
+				{
+					type: "text",
+					text: last.content,
+					cache_control: { type: "ephemeral" },
+				} as any,
+			];
+			return;
+		}
+
+		const blocks = last.content as any[];
+		const lastBlock = blocks[blocks.length - 1];
+		if (lastBlock) {
+			lastBlock.cache_control = { type: "ephemeral" };
+		}
 	}
 
 	private parseResponse(response: any): LLMResponse {
@@ -275,7 +357,15 @@ export class AnthropicProvider implements LLMProvider {
 				fullText += block.text;
 				contentBlocks.push({ type: "text", text: block.text });
 			} else if (block.type === "thinking") {
-				contentBlocks.push({ type: "thinking", thinking: block.thinking });
+				// Capture the signature alongside the thinking text — the API rejects a
+				// signature-less thinking block when it's replayed in a tool-use loop.
+				contentBlocks.push({
+					type: "thinking",
+					thinking: block.thinking,
+					...(typeof block.signature === "string" && block.signature.length > 0
+						? { signature: block.signature }
+						: {}),
+				});
 			} else if (block.type === "tool_use") {
 				contentBlocks.push({
 					type: "tool_call",
