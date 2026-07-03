@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAdapter } from "../../src/agents/codex.js";
 import type { TmuxBridge } from "../../src/tmux/bridge.js";
 
@@ -135,5 +135,47 @@ describe("CodexAdapter.getCapabilitiesFile", () => {
 	it("should return the codex adapter capabilities file path", () => {
 		const adapter = new CodexAdapter();
 		expect(adapter.getCapabilitiesFile()).toBe("adapters/codex.md");
+	});
+});
+
+describe("CodexAdapter.sendResponse", () => {
+	const pane = "test:0.0";
+
+	// ADP-1: shared base — a negative response must not be hijacked into approval.
+	it("should send 'n' (NOT 'y') when responding 'n' to a (y/n) prompt", async () => {
+		const adapter = new CodexAdapter();
+		const bridge = createMockBridge("Do you want to proceed? (y/n)");
+
+		await adapter.sendResponse(bridge, pane, "n");
+
+		expect(bridge.sendKeys).toHaveBeenCalledWith(pane, "n", { literal: true });
+		const yCalls = (bridge.sendKeys as any).mock.calls.filter((c: any[]) => c[1] === "y");
+		expect(yCalls).toHaveLength(0);
+	});
+
+	it("should auto-confirm with 'y' when responding 'y' to a (y/n) prompt", async () => {
+		const adapter = new CodexAdapter();
+		const bridge = createMockBridge("Do you want to proceed? (y/n)");
+
+		await adapter.sendResponse(bridge, pane, "y");
+
+		expect(bridge.sendKeys).toHaveBeenCalledWith(pane, "y", { literal: true });
+		expect(bridge.sendEnter).toHaveBeenCalledWith(pane);
+	});
+
+	// ADP-3: shared base — malformed directives throw for codex too.
+	it("should throw on a malformed arrow directive", async () => {
+		const adapter = new CodexAdapter();
+		const bridge = createMockBridge("");
+
+		await expect(adapter.sendResponse(bridge, pane, "arrow:sideways")).rejects.toThrow(/arrow directive/i);
+		expect(bridge.sendKeys).not.toHaveBeenCalled();
+	});
+
+	it("should throw on an unknown keys: name", async () => {
+		const adapter = new CodexAdapter();
+		const bridge = createMockBridge("");
+
+		await expect(adapter.sendResponse(bridge, pane, "keys:Bogus")).rejects.toThrow(/Invalid key/i);
 	});
 });

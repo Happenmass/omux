@@ -16,7 +16,6 @@ describe("ClaudeCodeAdapter activePatterns — busy detection", () => {
 		{ pollIntervalMs: 0, stableThresholdMs: 0, captureLines: 50 },
 		{} as any,
 	);
-	detector.setCharacteristics(characteristics);
 
 	const busyPanes: Array<[string, string]> = [
 		[
@@ -34,20 +33,20 @@ describe("ClaudeCodeAdapter activePatterns — busy detection", () => {
 
 	for (const [label, pane] of busyPanes) {
 		it(`classifies busy as active (not completed): ${label}`, () => {
-			const result = detector.quickPatternCheck(pane);
+			const result = detector.quickPatternCheck(pane, characteristics);
 			expect(result?.status).toBe("active");
 		});
 	}
 
 	it("still classifies a genuinely idle pane as completed", () => {
-		const result = detector.quickPatternCheck("All tests passed!\nDone.\n❯ ");
+		const result = detector.quickPatternCheck("All tests passed!\nDone.\n❯ ", characteristics);
 		expect(result?.status).toBe("completed");
 	});
 
 	it("does not false-trigger active on a plain idle prompt with no busy markers", () => {
 		// A bare summary ending in ellipsis must NOT read as busy (the active
 		// ellipsis rule is anchored to "… (" status-line shape, not any "…").
-		const result = detector.quickPatternCheck("Summary: refactored the parser…\n❯ ");
+		const result = detector.quickPatternCheck("Summary: refactored the parser…\n❯ ", characteristics);
 		expect(result?.status).toBe("completed");
 	});
 
@@ -63,7 +62,7 @@ describe("ClaudeCodeAdapter activePatterns — busy detection", () => {
 			"❯ \n" +
 			"────────────────────────────────────────\n" +
 			"  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents";
-		const result = detector.quickPatternCheck(pane);
+		const result = detector.quickPatternCheck(pane, characteristics);
 		expect(result?.status).toBe("completed");
 	});
 });

@@ -31,10 +31,6 @@ export interface AgentCharacteristics {
 	errorPatterns: RegExp[];
 	/** Patterns indicating the agent is actively working (spinners, progress) */
 	activePatterns: RegExp[];
-	/** Key sequence to send for confirmation */
-	confirmKey: string;
-	/** Key sequence to abort current operation */
-	abortKey: string;
 }
 
 export interface AgentAdapter {
