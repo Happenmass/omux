@@ -173,8 +173,10 @@ HTTP + WebSocket server for the chat interface.
 - `memory-flush.md` — extract decisions/preferences/knowledge for persistence (uses `memory_edit`).
 - `memory-tidy.md` — LLM-driven memory file review, outputs structured JSON (retained/archived/summary).
 - `learning-summary.md`, `learning-chat.md`, `learning-memory.md` — learning sessions prompts.
-- `error-analyzer.md`, `session-summarizer.md` — diagnostics & recap.
+- `error-analyzer.md` — deep error analysis (`StateDetector.deepAnalyze`; output schema mirrors `DeepAnalysis`).
 - `adapters/` — per-adapter prompt fragments.
+
+Note: `main-agent.md` keeps the mutable `{{compressed_history}}` section at the **end** of the file so a compaction rewrite doesn't invalidate the prompt-cache prefix for the stable sections above it. Keep new sections above it.
 
 ### Chat UI — `web/`
 Vanilla HTML/CSS/JS served by Express as static files.

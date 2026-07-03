@@ -7,10 +7,8 @@ import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 
 export type PromptName =
-	| "planner"
 	| "state-analyzer"
 	| "error-analyzer"
-	| "session-summarizer"
 	| "main-agent"
 	| "history-compressor"
 	| "memory-flush"
@@ -21,10 +19,8 @@ export type PromptName =
 	| "auto-continue";
 
 const PROMPT_FILE_MAP: Record<PromptName, string> = {
-	planner: "planner.md",
 	"state-analyzer": "state-analyzer.md",
 	"error-analyzer": "error-analyzer.md",
-	"session-summarizer": "session-summarizer.md",
 	"main-agent": "main-agent.md",
 	"history-compressor": "history-compressor.md",
 	"memory-flush": "memory-flush.md",
