@@ -1,5 +1,4 @@
 import type { MainAgent } from "../core/main-agent.js";
-import type { SignalRouter } from "../core/signal-router.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import { loadConfig, saveConfig } from "../utils/config.js";
 import { TUIRenderer } from "./components/renderer.js";
@@ -9,16 +8,14 @@ import { Dashboard } from "./dashboard.js";
 export class AppTUI {
 	private renderer: TUIRenderer;
 	private dashboard: Dashboard;
-	private signalRouter: SignalRouter;
 	private mainAgent: MainAgent;
 	private refreshTimer: ReturnType<typeof setInterval> | null = null;
 	private configOverlayActive = false;
 	private configView: ConfigView | null = null;
 
-	constructor(signalRouter: SignalRouter, mainAgent: MainAgent, _bridge: TmuxBridge) {
+	constructor(mainAgent: MainAgent, _bridge: TmuxBridge) {
 		this.renderer = new TUIRenderer();
 		this.dashboard = new Dashboard();
-		this.signalRouter = signalRouter;
 		this.mainAgent = mainAgent;
 
 		this.renderer.setRoot(this.dashboard);
@@ -68,17 +65,17 @@ export class AppTUI {
 
 			switch (data) {
 				case "q":
-					this.signalRouter.stop();
+					this.mainAgent.requestStop();
 					this.stop();
 					process.exit(0);
 					break;
 
 				case "p":
-					if (this.signalRouter.isStopRequested()) {
-						this.signalRouter.resume();
+					if (this.mainAgent.isStopRequested()) {
+						this.mainAgent.clearStopRequest();
 						this.dashboard.addLog("Resumed");
 					} else {
-						this.signalRouter.stop();
+						this.mainAgent.requestStop();
 						this.dashboard.addLog("Stopped");
 					}
 					this.renderer.requestRender();

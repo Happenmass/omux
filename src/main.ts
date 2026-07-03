@@ -9,7 +9,7 @@ import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { CodexAdapter } from "./agents/codex.js";
-import { VERSION, parseCliArgs, printHelp, printVersion } from "./cli.js";
+import { parseCliArgs, printHelp, printVersion, VERSION } from "./cli.js";
 import { ChangeTracker } from "./core/change-tracker.js";
 import { ContextManager } from "./core/context-manager.js";
 import { LearningChat } from "./core/learning-chat.js";
@@ -18,7 +18,6 @@ import { LearningStore } from "./core/learning-store.js";
 import { LearningSummarizer } from "./core/learning-summarizer.js";
 import { MainAgent } from "./core/main-agent.js";
 import { PromptTracker } from "./core/prompt-tracker.js";
-import { SignalRouter } from "./core/signal-router.js";
 import { runDoctor } from "./doctor/run.js";
 import { LLMClient } from "./llm/client.js";
 import { PromptLoader } from "./llm/prompt-loader.js";
@@ -32,7 +31,8 @@ import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
-import { isValidMdnsName, type MdnsSupervisor, startMdnsSupervisor } from "./server/mdns.js";
+import { getLanIPv4, isValidMdnsName, type MdnsSupervisor, startMdnsSupervisor } from "./server/mdns.js";
+import { t } from "./server/messages.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
@@ -47,7 +47,6 @@ import {
 	ensureGlobalStorageDir,
 	getConfigDir,
 	getGlobalDbPath,
-	getGlobalStorageDir,
 	getLogsDir,
 	KNOWN_AGENTS,
 	loadConfig,
@@ -209,7 +208,6 @@ function createAdapter(agentName: string): AgentAdapter {
 	switch (agentName) {
 		case "codex":
 			return new CodexAdapter();
-		case "claude-code":
 		default:
 			return new ClaudeCodeAdapter();
 	}
@@ -624,7 +622,7 @@ async function main(): Promise<void> {
 	});
 
 	// Initialize PromptLoader
-	const promptLoader = new PromptLoader();
+	const promptLoader = new PromptLoader(undefined, locale);
 	await promptLoader.load(args.cwd);
 
 	// Initialize global storage directory (~/.cliclaw/memory/)
@@ -763,7 +761,10 @@ async function main(): Promise<void> {
 		memoryStore,
 		syncMemory,
 		memoryReloader: reloadGlobalMemory,
+		// Explicit override (CLI flag or config); when unset, ContextManager derives the window
+		// from the model id via KNOWN_CONTEXT_WINDOWS (→ 500k fallback with a startup warning).
 		contextWindowLimit: args.contextWindow || config.context.contextWindowLimit,
+		model: llmModel,
 		compressionThreshold: config.context.compressionThreshold,
 		flushThreshold: config.memory.flushThreshold,
 		toolResultRetention: config.memory.toolResultRetention,
@@ -784,6 +785,7 @@ async function main(): Promise<void> {
 	const discoveredSkills = await discoverSkills({
 		adapterSkillsDir,
 		workspaceDir: args.cwd,
+		trustedWorkspaceDirs: config.skills?.trustedWorkspaceDirs,
 	});
 	const filteredSkills = filterSkills(discoveredSkills, { disabled: config.skills?.disabled }, args.cwd);
 	const capabilityInputs = buildAdapterCapabilityInputs(adapters, defaultAgentName, promptLoader);
@@ -812,12 +814,9 @@ async function main(): Promise<void> {
 	const skillRegistry = new SkillRegistry(filteredSkills);
 	logger.info("main", `Skills loaded: ${skillRegistry.size} (${filteredSkills.map((s) => s.name).join(", ")})`);
 
-	// Initialize SignalRouter and MainAgent
-	const signalRouter = new SignalRouter(stateDetector, bridge, contextManager);
-
+	// Initialize MainAgent (the stop latch lives on MainAgent itself)
 	const mainAgent = new MainAgent({
 		contextManager,
-		signalRouter,
 		llmClient,
 		adapters,
 		defaultAdapter: defaultAgentName,
@@ -934,6 +933,7 @@ async function main(): Promise<void> {
 		const resetDiscovered = await discoverSkills({
 			adapterSkillsDir: resetAdapterSkillsDir,
 			workspaceDir: args.cwd,
+			trustedWorkspaceDirs: config.skills?.trustedWorkspaceDirs,
 		});
 		const resetFiltered = filterSkills(resetDiscovered, { disabled: config.skills?.disabled }, args.cwd);
 
@@ -1004,11 +1004,18 @@ async function main(): Promise<void> {
 
 	// ─── Start Server ───────────────────────────────────
 
+	// mDNS advertising decision — computed here so the Host/Origin allowlist and pairing URLs
+	// can include the LAN IPs and `<name>.local` even though the supervisor starts below.
+	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
+	const mdnsName = args.mdnsName ?? config.mdns.name;
+	const advertisesMdns =
+		mdnsEnabled && isValidMdnsName(mdnsName) && args.host !== "127.0.0.1" && args.host !== "localhost";
+	const lanIps = getLanIPv4();
+
 	const serverInstance = await startServer({
 		host: args.host,
 		port: args.port,
 		mainAgent,
-		signalRouter,
 		contextManager,
 		conversationStore,
 		broadcaster,
@@ -1025,6 +1032,9 @@ async function main(): Promise<void> {
 		learningChat,
 		learningEnabled: config.learning.enabled,
 		locale,
+		autoTidy: config.memory.autoTidy,
+		lanIps,
+		mdnsName: advertisesMdns ? mdnsName : undefined,
 	});
 
 	// ─── Start mDNS / Bonjour advertising ───────────────
@@ -1047,8 +1057,6 @@ async function main(): Promise<void> {
 			lanUrls,
 		});
 
-	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
-	const mdnsName = args.mdnsName ?? config.mdns.name;
 	if (mdnsEnabled) {
 		if (!isValidMdnsName(mdnsName)) {
 			logger.warn("main", `Invalid mDNS name "${mdnsName}", skipping advertisement`);
@@ -1076,7 +1084,7 @@ async function main(): Promise<void> {
 							// Network changed under us — tell connected clients the address moved.
 							broadcaster.broadcast({
 								type: "system",
-								message: `网络已变化，mDNS 已重新广播：${mdnsUrl}`,
+								message: t("mdns_rebroadcast", locale, { url: mdnsUrl }),
 							});
 						}
 					},
@@ -1093,7 +1101,7 @@ async function main(): Promise<void> {
 		setTimeout(() => {
 			broadcaster.broadcast({
 				type: "system",
-				message: `已从上次会话恢复 ${restoredMessageCount} 条消息`,
+				message: t("restored_messages", locale, { count: restoredMessageCount }),
 			});
 		}, 500);
 	}
@@ -1116,7 +1124,7 @@ async function main(): Promise<void> {
 
 		// Stop MainAgent if executing
 		if (mainAgent.state === "executing") {
-			signalRouter.stop();
+			mainAgent.requestStop();
 			// Give the loop a moment to exit cleanly
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}

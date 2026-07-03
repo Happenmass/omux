@@ -34,19 +34,6 @@ function createMockContextManager() {
 	} as any;
 }
 
-function createMockSignalRouter() {
-	return {
-		onSignal: vi.fn(),
-		startMonitoring: vi.fn(),
-		stopMonitoring: vi.fn(),
-		isStopRequested: vi.fn().mockReturnValue(false),
-		stop: vi.fn(),
-		resume: vi.fn(),
-		emit: vi.fn(),
-		on: vi.fn(),
-	} as any;
-}
-
 function createMockBroadcaster() {
 	return {
 		broadcast: vi.fn(),
@@ -90,8 +77,6 @@ function createMockAdapter() {
 			completionPatterns: [],
 			errorPatterns: [],
 			activePatterns: [],
-			confirmKey: "Enter",
-			abortKey: "C-c",
 		}),
 	} as any;
 }
@@ -191,7 +176,6 @@ function createDeferred() {
 
 describe("MainAgent State Machine", () => {
 	let mockCtx: ReturnType<typeof createMockContextManager>;
-	let mockRouter: ReturnType<typeof createMockSignalRouter>;
 	let mockBroadcaster: ReturnType<typeof createMockBroadcaster>;
 	let mockAdapter: ReturnType<typeof createMockAdapter>;
 	let mockBridge: ReturnType<typeof createMockBridge>;
@@ -203,7 +187,6 @@ describe("MainAgent State Machine", () => {
 		{ withMonitor = false }: { withMonitor?: boolean } = {},
 	) {
 		mockCtx = createMockContextManager();
-		mockRouter = createMockSignalRouter();
 		mockBroadcaster = createMockBroadcaster();
 		mockAdapter = createMockAdapter();
 		mockBridge = createMockBridge();
@@ -213,7 +196,6 @@ describe("MainAgent State Machine", () => {
 
 		const agent = new MainAgent({
 			contextManager: mockCtx,
-			signalRouter: mockRouter,
 			llmClient: mockLLM,
 			adapter: mockAdapter,
 			bridge: mockBridge,
@@ -280,7 +262,6 @@ describe("MainAgent State Machine", () => {
 
 		it("should serialize concurrent idle messages", async () => {
 			mockCtx = createMockContextManager();
-			mockRouter = createMockSignalRouter();
 			mockBroadcaster = createMockBroadcaster();
 			mockAdapter = createMockAdapter();
 			mockBridge = createMockBridge();
@@ -326,7 +307,6 @@ describe("MainAgent State Machine", () => {
 
 			const agent = new MainAgent({
 				contextManager: mockCtx,
-				signalRouter: mockRouter,
 				llmClient: mockLLM as any,
 				adapter: mockAdapter,
 				bridge: mockBridge,
@@ -352,7 +332,7 @@ describe("MainAgent State Machine", () => {
 			]);
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith({
 				type: "system",
-				message: "消息已排队，将在当前操作完成后处理",
+				message: "Message queued; it will be handled after the current operation completes",
 			});
 		});
 	});
@@ -443,14 +423,13 @@ describe("MainAgent State Machine", () => {
 				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
 			]);
 
-			// Patch signalRouter with special isStopRequested behavior
+			// Simulate /stop landing during execution: false on the first between-round
+			// check, true afterwards (the latch now lives on MainAgent itself).
 			let stopCallCount = 0;
-			const specialRouter = createMockSignalRouter();
-			specialRouter.isStopRequested.mockImplementation(() => {
+			vi.spyOn(agent, "isStopRequested").mockImplementation(() => {
 				stopCallCount++;
 				return stopCallCount > 1;
 			});
-			(agent as any).signalRouter = specialRouter;
 
 			await agent.handleMessage("do stuff");
 
@@ -461,8 +440,71 @@ describe("MainAgent State Machine", () => {
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 				expect.objectContaining({
 					type: "system",
-					message: "执行已停止",
+					message: "Execution stopped",
 				}),
+			);
+		});
+	});
+
+	describe("execution control (stop latch)", () => {
+		it("tracks requestStop / clearStopRequest / isStopRequested", () => {
+			const agent = setupAgent([]);
+			expect(agent.isStopRequested()).toBe(false);
+			agent.requestStop();
+			expect(agent.isStopRequested()).toBe(true);
+			agent.clearStopRequest();
+			expect(agent.isStopRequested()).toBe(false);
+		});
+
+		it("MA-1: a stale stop request is cleared when a fresh user message dispatches", async () => {
+			const agent = setupAgent([
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
+				textResponse("All good."),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			// /stop raced the loop's return to idle: the flag is latched while nothing executes.
+			agent.requestStop();
+			expect(agent.isStopRequested()).toBe(true);
+
+			await agent.handleMessage("check status");
+
+			// The fresh message supersedes the stale stop: NO truncation after one tool round.
+			expect(agent.isStopRequested()).toBe(false);
+			expect(agent.state).toBe("idle");
+			const stopMsgs = mockBroadcaster.broadcast.mock.calls.filter(
+				(c: any) => c[0].type === "system" && c[0].message === "Execution stopped",
+			);
+			expect(stopMsgs).toHaveLength(0);
+			// Both LLM rounds ran (tool round + final text round).
+			expect(mockCtx.addMessage).toHaveBeenCalledWith(
+				expect.objectContaining({ role: "assistant", content: "All good." }),
+			);
+		});
+
+		it("MA-1: a stop requested mid-execution still halts the loop between rounds", async () => {
+			const agent = setupAgent([
+				toolCallResponse("inspect_agent", { lines: 100 }, "tc1"),
+				textResponse("should never be reached"),
+			]);
+			agent.setPaneTarget("test:0.0");
+
+			// Latch the stop while the first tool round is executing (i.e. after dispatch
+			// consumed any stale flag): hook the pane capture that inspect_agent performs.
+			mockBridge.capturePane.mockImplementation(async () => {
+				agent.requestStop();
+				return { content: "pane content", lines: 50, timestamp: Date.now() };
+			});
+
+			await agent.handleMessage("check status");
+
+			expect(agent.state).toBe("idle");
+			expect(agent.isStopRequested()).toBe(false); // consumed by the loop
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: "Execution stopped" }),
+			);
+			expect(mockCtx.addMessage).not.toHaveBeenCalledWith(
+				expect.objectContaining({ role: "assistant", content: "should never be reached" }),
 			);
 		});
 	});
@@ -484,7 +526,7 @@ describe("MainAgent State Machine", () => {
 	});
 
 	describe("interrupt_agent tool", () => {
-		it("should send Escape and cleanup agent monitor task", async () => {
+		it("should abort via the adapter and cleanup agent monitor task", async () => {
 			const agent = setupAgent(
 				[
 					toolCallResponse("create_agent", {}, "tc0"),
@@ -503,12 +545,101 @@ describe("MainAgent State Machine", () => {
 			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 				expect.objectContaining({
 					type: "system",
-					message: expect.stringContaining("中断 agent"),
+					message: expect.stringContaining("Interrupting agent"),
 				}),
 			);
 
-			// Should have called sendEscape on the bridge
-			expect(mockBridge.sendEscape).toHaveBeenCalled();
+			// MA-6: must go through the adapter contract (double Escape etc.), not a raw
+			// single bridge.sendEscape.
+			expect(mockAdapter.abort).toHaveBeenCalledWith(mockBridge, "test-session:0.0");
+			expect(mockBridge.sendEscape).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("respond_to_agent preHash ordering", () => {
+		it("MA-3: captures preHash BEFORE sendResponse so a fast-settling agent cannot wedge Phase 1", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("respond_to_agent", { value: "1", summary: "Picking menu option" }, "tc1"),
+					textResponse("Response sent."),
+					textResponse("Agent settled."),
+				],
+				{},
+				{ withMonitor: true },
+			);
+			agent.setPaneTarget("test:0.0", "cliclaw-menu");
+
+			// Inject a waiting_input task so respond_to_agent passes its status gate.
+			(agent as any).agentMonitor.tasks.set("cliclaw-menu", {
+				taskId: "task_1",
+				agentId: "cliclaw-menu",
+				status: "waiting_input",
+				summary: "test",
+				taskContext: "test",
+				preHash: "old-hash",
+				startedAt: Date.now(),
+				abortController: new AbortController(),
+			});
+			(agent as any).agentMonitor.paneTargets.set("cliclaw-menu", "test:0.0");
+
+			const order: string[] = [];
+			mockDetector.captureHash.mockImplementation(async () => {
+				order.push("captureHash");
+				return "pre-send-hash";
+			});
+			mockAdapter.sendResponse.mockImplementation(async () => {
+				order.push("sendResponse");
+			});
+			const resumeSpy = vi.spyOn((agent as any).agentMonitor, "resumeTask");
+
+			await agent.handleMessage("answer the menu");
+
+			// The pre-send pane is the baseline: the response echo itself satisfies Phase 1.
+			expect(order).toEqual(["captureHash", "sendResponse"]);
+			expect(resumeSpy).toHaveBeenCalledWith("cliclaw-menu", "pre-send-hash");
+		});
+
+		// ── MT-5: a malformed value now THROWS in the adapter (strict arrow:/keys: grammar).
+		//     The paired-tool-result guard must convert that throw into a readable tool result,
+		//     never a dangling function_call. ──
+		it("surfaces an adapter throw (malformed directive) as a readable error tool result", async () => {
+			const agent = setupAgent(
+				[
+					toolCallResponse("respond_to_agent", { value: "arrow:sideways", summary: "bad directive" }, "call_x"),
+					textResponse("Recovered."),
+				],
+				{},
+				{ withMonitor: true },
+			);
+			agent.setPaneTarget("test:0.0", "cliclaw-menu");
+			(agent as any).agentMonitor.tasks.set("cliclaw-menu", {
+				taskId: "task_1",
+				agentId: "cliclaw-menu",
+				status: "waiting_input",
+				summary: "test",
+				taskContext: "test",
+				preHash: "old-hash",
+				startedAt: Date.now(),
+				abortController: new AbortController(),
+			});
+			(agent as any).agentMonitor.paneTargets.set("cliclaw-menu", "test:0.0");
+
+			// Simulate the strict adapter rejecting a malformed arrow directive.
+			mockAdapter.sendResponse.mockRejectedValue(
+				new Error('Invalid arrow directive "arrow:sideways". Expected "arrow:up" or "arrow:down".'),
+			);
+
+			await agent.handleMessage("respond badly");
+
+			// The throw must be recorded as a paired tool result (same call id), readable, non-terminal.
+			const toolMsg = mockCtx.addMessage.mock.calls
+				.map((c: any) => c[0])
+				.find((m: any) => m.role === "tool" && m.toolCallId === "call_x");
+			expect(toolMsg).toBeDefined();
+			expect(toolMsg.content).toMatch(/failed/i);
+			expect(toolMsg.content).toContain("arrow");
+			// The loop recovered to idle instead of wedging on a dangling call.
+			expect(agent.state).toBe("idle");
 		});
 	});
 
@@ -540,6 +671,40 @@ describe("MainAgent State Machine", () => {
 
 			expect(mockCtx.compress).toHaveBeenCalled();
 		});
+
+		// ── MT-4: auto-compaction must NOT wipe the visible chat transcript. Unlike the
+		//     /clear COMMAND path, it emits a system divider instead of {type:"clear"}. ──
+		it("auto-compaction between rounds emits a divider, never {type:'clear'}", async () => {
+			const agent = setupAgent([toolCallResponse("create_agent", {}, "tc0"), textResponse("Done")]);
+
+			mockCtx.shouldCompress.mockReturnValue(true);
+
+			await agent.handleMessage("do task");
+
+			expect(mockCtx.compress).toHaveBeenCalled();
+			// The web UI transcript must survive: no clear broadcast on the compaction path.
+			const broadcasts = mockBroadcaster.broadcast.mock.calls.map((c: any) => c[0]);
+			expect(broadcasts.some((m: any) => m.type === "clear")).toBe(false);
+			// A system divider is surfaced instead so the user knows earlier turns were summarized.
+			expect(broadcasts).toContainEqual(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("compacted") }),
+			);
+		});
+
+		it("pre-turn auto-compaction also emits a divider, never {type:'clear'}", async () => {
+			// shouldCompress true at the very start of streamLLMResponse (before the first LLM call).
+			const agent = setupAgent([textResponse("Answer")]);
+			mockCtx.shouldCompress.mockReturnValue(true);
+
+			await agent.handleMessage("hello");
+
+			expect(mockCtx.compress).toHaveBeenCalled();
+			const broadcasts = mockBroadcaster.broadcast.mock.calls.map((c: any) => c[0]);
+			expect(broadcasts.some((m: any) => m.type === "clear")).toBe(false);
+			expect(broadcasts).toContainEqual(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("compacted") }),
+			);
+		});
 	});
 
 	describe("error recovery", () => {
@@ -565,6 +730,13 @@ describe("MainAgent State Machine", () => {
 					type: "state",
 					state: "idle",
 					queueSize: expect.any(Number),
+				}),
+			);
+			// MA-5: the failure must be surfaced to the user, not swallowed silently.
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: "system",
+					message: expect.stringContaining("flush failed"),
 				}),
 			);
 		});
@@ -648,6 +820,74 @@ describe("MainAgent State Machine", () => {
 
 			expect(mockBridge.killSession).toHaveBeenCalled();
 			expect(agent.state).toBe("idle");
+		});
+
+		// ── MT-1: kill_agent "all" must respect the taken-over guard and not touch
+		//     tmux sessions this process does not manage. ──
+		it('kill_agent "all" must NOT kill human-taken-over agents and reports them skipped', async () => {
+			const agent = setupAgent(
+				[toolCallResponse("kill_agent", { agent_id: "all", summary: "kill all" }, "tc1"), textResponse("Done.")],
+				{},
+				{ withMonitor: true },
+			);
+			agent.restoreAgent("cliclaw-free", { paneTarget: "free:0.0", workingDir: "/free" });
+			agent.restoreAgent("cliclaw-taken", { paneTarget: "taken:0.0", workingDir: "/taken" });
+			agent.setTakenOver("cliclaw-taken", true);
+
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			mockBridge.listCliclawAgents.mockResolvedValue([
+				{ name: "cliclaw-free", windows: 1, attached: false },
+				{ name: "cliclaw-taken", windows: 1, attached: false },
+			]);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
+
+			await agent.handleMessage("kill everything");
+
+			// The taken-over session must survive; only the free agent is killed.
+			expect(mockBridge.killSession).toHaveBeenCalledWith("cliclaw-free");
+			expect(mockBridge.killSession).not.toHaveBeenCalledWith("cliclaw-taken");
+			expect(agent.isTakenOver("cliclaw-taken")).toBe(true);
+			// The taken-over agent is still in the registry (not cleaned up).
+			expect(agent.getActiveAgents().map((a) => a.agentName)).toContain("cliclaw-taken");
+
+			// The tool result names the skipped agent.
+			const toolResult = mockCtx.addMessage.mock.calls
+				.map((c: any) => c[0])
+				.find(
+					(m: any) => m.role === "tool" && typeof m.content === "string" && m.content.includes("cliclaw-taken"),
+				);
+			expect(toolResult).toBeTruthy();
+			expect(toolResult.content).toMatch(/[Ss]kipped/);
+		});
+
+		it('kill_agent "all" must NOT kill unmanaged cliclaw-* tmux sessions and lists them left untouched', async () => {
+			const agent = setupAgent(
+				[toolCallResponse("kill_agent", { agent_id: "all", summary: "kill all" }, "tc1"), textResponse("Done.")],
+				{},
+				{ withMonitor: true },
+			);
+			// Only cliclaw-mine is managed; cliclaw-other belongs to another cliclaw instance.
+			agent.restoreAgent("cliclaw-mine", { paneTarget: "mine:0.0", workingDir: "/mine" });
+
+			mockAdapter.exitAgent = vi.fn().mockResolvedValue({ content: "exited", resumeId: null });
+			mockBridge.listCliclawAgents.mockResolvedValue([
+				{ name: "cliclaw-mine", windows: 1, attached: false },
+				{ name: "cliclaw-other", windows: 1, attached: false },
+			]);
+			mockBridge.killSession = vi.fn().mockResolvedValue(undefined);
+
+			await agent.handleMessage("kill everything");
+
+			expect(mockBridge.killSession).toHaveBeenCalledWith("cliclaw-mine");
+			expect(mockBridge.killSession).not.toHaveBeenCalledWith("cliclaw-other");
+
+			const toolResult = mockCtx.addMessage.mock.calls
+				.map((c: any) => c[0])
+				.find(
+					(m: any) => m.role === "tool" && typeof m.content === "string" && m.content.includes("cliclaw-other"),
+				);
+			expect(toolResult).toBeTruthy();
+			expect(toolResult.content).toMatch(/[Ll]eft untouched/);
 		});
 	});
 
@@ -1280,8 +1520,6 @@ describe("MainAgent State Machine", () => {
 					completionPatterns: [],
 					errorPatterns: [],
 					activePatterns: [],
-					confirmKey: "Enter",
-					abortKey: "C-c",
 				}),
 			} as any;
 		}
@@ -1380,7 +1618,7 @@ describe("MainAgent State Machine", () => {
 
 			expect(agent.getPendingUserMessageCount()).toBe(1);
 			const queuedNotice = mockBroadcaster.broadcast.mock.calls.find(
-				(c: any) => c[0].type === "system" && String(c[0].message).includes("已排队"),
+				(c: any) => c[0].type === "system" && String(c[0].message).includes("Message queued"),
 			);
 			expect(queuedNotice).toBeTruthy();
 			// Must NOT have been processed yet — no assistant output while the lock is held.
@@ -1435,7 +1673,6 @@ describe("MainAgent State Machine", () => {
 			// Messages arriving during EXECUTING go into the unified WorkQueue
 			// and are processed as independent user turns after execution completes.
 			mockCtx = createMockContextManager();
-			mockRouter = createMockSignalRouter();
 			mockBroadcaster = createMockBroadcaster();
 			mockAdapter = createMockAdapter();
 			mockBridge = createMockBridge();
@@ -1469,7 +1706,6 @@ describe("MainAgent State Machine", () => {
 
 			const agent = new MainAgent({
 				contextManager: mockCtx,
-				signalRouter: mockRouter,
 				llmClient: mockLLM as any,
 				adapter: mockAdapter,
 				bridge: mockBridge,
@@ -1491,7 +1727,7 @@ describe("MainAgent State Machine", () => {
 
 			// Verify queued notification was broadcast
 			const systemMsgs = mockBroadcaster.broadcast.mock.calls.filter(
-				(c: any) => c[0].type === "system" && c[0].message.includes("消息已排队"),
+				(c: any) => c[0].type === "system" && c[0].message.includes("Message queued"),
 			);
 			expect(systemMsgs.length).toBeGreaterThanOrEqual(1);
 
@@ -1685,7 +1921,6 @@ describe("MainAgent State Machine", () => {
 			// the agent event in the queue should be processed.
 
 			mockCtx = createMockContextManager();
-			mockRouter = createMockSignalRouter();
 			mockBroadcaster = createMockBroadcaster();
 			mockAdapter = createMockAdapter();
 			mockBridge = createMockBridge();
@@ -1756,7 +1991,6 @@ describe("MainAgent State Machine", () => {
 
 			const agent = new MainAgent({
 				contextManager: mockCtx,
-				signalRouter: mockRouter,
 				llmClient: mockLLM,
 				adapter: mockAdapter,
 				bridge: mockBridge,
@@ -2277,6 +2511,72 @@ describe("MainAgent State Machine", () => {
 
 			const agents = agent.getActiveAgents();
 			expect(agents[0].status).toBe("idle");
+		});
+	});
+
+	// ── MT-3: list_agents merges the actionable registry view with a separate
+	//     "unmanaged" section so the LLM never tries to drive a session it can't. ──
+	describe("list_agents merged view", () => {
+		async function runListAgents(agent: MainAgent) {
+			await agent.handleMessage("list agents");
+			const call = mockCtx.addMessage.mock.calls
+				.map((c: any) => c[0])
+				.find((m: any) => m.role === "tool" && typeof m.content === "string");
+			return call?.content as string;
+		}
+
+		it("shows managed agents with adapter, model, cwd, status and taken-over flag", async () => {
+			const agent = setupAgent([toolCallResponse("list_agents", {}), textResponse("ok")], {}, { withMonitor: true });
+			agent.restoreAgent("cliclaw-mine", { paneTarget: "mine:0.0", workingDir: "/proj/mine" });
+			agent.setTakenOver("cliclaw-mine", true);
+			mockBridge.listCliclawAgents.mockResolvedValue([{ name: "cliclaw-mine", windows: 1, attached: false }]);
+
+			const out = await runListAgents(agent);
+
+			expect(out).toContain("Managed agents");
+			expect(out).toContain("cliclaw-mine");
+			expect(out).toContain("/proj/mine");
+			expect(out).toContain("Test Agent"); // adapter displayName
+			expect(out).toContain("test-model"); // model
+			expect(out).toMatch(/taken over/i);
+		});
+
+		it("lists cliclaw-* sessions outside the registry in a separate unmanaged section", async () => {
+			const agent = setupAgent([toolCallResponse("list_agents", {}), textResponse("ok")], {}, { withMonitor: true });
+			agent.restoreAgent("cliclaw-mine", { paneTarget: "mine:0.0", workingDir: "/mine" });
+			mockBridge.listCliclawAgents.mockResolvedValue([
+				{ name: "cliclaw-mine", windows: 1, attached: false },
+				{ name: "cliclaw-other", windows: 1, attached: false },
+			]);
+
+			const out = await runListAgents(agent);
+
+			expect(out).toContain("Managed agents");
+			expect(out).toContain("cliclaw-mine");
+			expect(out).toMatch(/[Uu]nmanaged/);
+			expect(out).toContain("cliclaw-other");
+			// The unmanaged section warns against driving those sessions.
+			expect(out).toMatch(/NOT controllable|not controllable/);
+		});
+
+		it("reports the registry view even when the tmux query fails", async () => {
+			const agent = setupAgent([toolCallResponse("list_agents", {}), textResponse("ok")], {}, { withMonitor: true });
+			agent.restoreAgent("cliclaw-mine", { paneTarget: "mine:0.0", workingDir: "/mine" });
+			mockBridge.listCliclawAgents.mockRejectedValue(new Error("tmux gone"));
+
+			const out = await runListAgents(agent);
+
+			expect(out).toContain("Managed agents");
+			expect(out).toContain("cliclaw-mine");
+		});
+
+		it("returns 'No active agents found.' when there are neither managed nor unmanaged sessions", async () => {
+			const agent = setupAgent([toolCallResponse("list_agents", {}), textResponse("ok")], {}, { withMonitor: true });
+			mockBridge.listCliclawAgents.mockResolvedValue([]);
+
+			const out = await runListAgents(agent);
+
+			expect(out).toContain("No active agents found.");
 		});
 	});
 });

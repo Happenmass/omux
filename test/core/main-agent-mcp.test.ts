@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MainAgent } from "../../src/core/main-agent.js";
 import type { LLMStreamEvent } from "../../src/llm/types.js";
 
@@ -23,9 +23,7 @@ vi.mock("../../src/utils/mcp-config.js", async (importOriginal) => {
 
 // Import after mocking
 const { loadConfig } = await import("../../src/utils/config.js");
-const { selectMcpServers, generateMcpConfigFile, cleanupMcpConfigFile } = await import(
-	"../../src/utils/mcp-config.js"
-);
+const { selectMcpServers, generateMcpConfigFile, cleanupMcpConfigFile } = await import("../../src/utils/mcp-config.js");
 
 // ─── Mock factories ──────────────────────────────────
 
@@ -46,19 +44,6 @@ function createMockContextManager() {
 		getContextWindowLimit: vi.fn().mockReturnValue(200000),
 		getConversationId: vi.fn().mockReturnValue("test-conversation-id"),
 		setCompactTuning: vi.fn(),
-	} as any;
-}
-
-function createMockSignalRouter() {
-	return {
-		onSignal: vi.fn(),
-		startMonitoring: vi.fn(),
-		stopMonitoring: vi.fn(),
-		isStopRequested: vi.fn().mockReturnValue(false),
-		stop: vi.fn(),
-		resume: vi.fn(),
-		emit: vi.fn(),
-		on: vi.fn(),
 	} as any;
 }
 
@@ -101,8 +86,6 @@ function createMockAdapter() {
 			completionPatterns: [],
 			errorPatterns: [],
 			activePatterns: [],
-			confirmKey: "Enter",
-			abortKey: "C-c",
 		}),
 	} as any;
 }
@@ -193,7 +176,6 @@ describe("MainAgent MCP server integration", () => {
 
 	function setupAgent(responses: LLMStreamEvent[][], overrides: Record<string, any> = {}) {
 		const mockCtx = createMockContextManager();
-		const mockRouter = createMockSignalRouter();
 		const mockBroadcaster = createMockBroadcaster();
 		mockAdapter = createMockAdapter();
 		mockBridge = createMockBridge();
@@ -202,7 +184,6 @@ describe("MainAgent MCP server integration", () => {
 
 		return new MainAgent({
 			contextManager: mockCtx,
-			signalRouter: mockRouter,
 			llmClient: mockLLM,
 			adapter: mockAdapter,
 			bridge: mockBridge,
@@ -260,10 +241,7 @@ describe("MainAgent MCP server integration", () => {
 		});
 
 		it("should not generate MCP config when mcp_servers is omitted", async () => {
-			const agent = setupAgent([
-				toolCallResponse("create_agent", { agent_name: "test" }),
-				textResponse("Done."),
-			]);
+			const agent = setupAgent([toolCallResponse("create_agent", { agent_name: "test" }), textResponse("Done.")]);
 			await agent.handleMessage("create agent");
 
 			expect(loadConfig).not.toHaveBeenCalled();
@@ -294,7 +272,7 @@ describe("MainAgent MCP server integration", () => {
 				mcpServers: { known: { command: "x", type: "stdio" } },
 			});
 			(selectMcpServers as any).mockReturnValue({
-				error: 'Unknown MCP server(s): unknown. Available servers: known',
+				error: "Unknown MCP server(s): unknown. Available servers: known",
 			});
 
 			const agent = setupAgent([

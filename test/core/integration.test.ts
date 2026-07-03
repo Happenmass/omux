@@ -1,27 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentAdapter, AgentCharacteristics } from "../../src/agents/adapter.js";
 import { ContextManager } from "../../src/core/context-manager.js";
 import { MainAgent } from "../../src/core/main-agent.js";
-import { SignalRouter } from "../../src/core/signal-router.js";
-import type { AgentAdapter, AgentCharacteristics } from "../../src/agents/adapter.js";
+import type { PromptLoader } from "../../src/llm/prompt-loader.js";
 import type { LLMStreamEvent } from "../../src/llm/types.js";
 import type { TmuxBridge } from "../../src/tmux/bridge.js";
-import type { StateDetector } from "../../src/tmux/state-detector.js";
-import type { PromptLoader } from "../../src/llm/prompt-loader.js";
 
 /**
  * Integration test: simulates the full handleMessage → streaming LLM → tool execution flow
  * through the MainAgent state machine.
  *
  * Components wired together:
- *   ContextManager (real) ← SignalRouter (real) ← MainAgent (real)
+ *   ContextManager (real) ← MainAgent (real)
  *   LLMClient, Adapter, Bridge, StateDetector, PromptLoader, Broadcaster (mocked)
  */
 
 function createMockPromptLoader(): PromptLoader {
 	return {
-		getRaw: vi.fn().mockReturnValue(
-			"You are the Main Agent.\nHistory: {{compressed_history}}\nMemory: {{memory}}\nCapabilities: {{agent_capabilities}}",
-		),
+		getRaw: vi
+			.fn()
+			.mockReturnValue(
+				"You are the Main Agent.\nHistory: {{compressed_history}}\nMemory: {{memory}}\nCapabilities: {{agent_capabilities}}",
+			),
 		resolve: vi.fn().mockReturnValue("compressor prompt"),
 		load: vi.fn().mockResolvedValue(undefined),
 		setGlobalContext: vi.fn(),
@@ -51,8 +51,6 @@ function createMockAdapter(): AgentAdapter {
 			completionPatterns: [/^>\s*$/m],
 			errorPatterns: [/Error:/i],
 			activePatterns: [/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/],
-			confirmKey: "y",
-			abortKey: "Escape",
 		} satisfies AgentCharacteristics),
 	};
 }
@@ -97,12 +95,7 @@ function createMockStateDetector() {
 
 // ─── Streaming helpers ──────────────────────────────
 
-function toolCallEvents(
-	toolName: string,
-	args: Record<string, any>,
-	toolCallId = "tc1",
-	text = "",
-): LLMStreamEvent[] {
+function toolCallEvents(toolName: string, args: Record<string, any>, toolCallId = "tc1", text = ""): LLMStreamEvent[] {
 	const events: LLMStreamEvent[] = [];
 	if (text) {
 		events.push({ type: "text_delta", delta: text });
@@ -188,11 +181,9 @@ describe("Integration: Chat mode end-to-end", () => {
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 
 		const mainAgent = new MainAgent({
 			contextManager,
-			signalRouter,
 			llmClient,
 			adapter,
 			bridge,
@@ -213,21 +204,15 @@ describe("Integration: Chat mode end-to-end", () => {
 			type: "agent_update",
 			summary: "Implementing feature",
 		});
-		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "assistant_done" }),
-		);
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: "assistant_done" }));
 	});
 
 	it("should complete via text response directly (no agent interaction)", async () => {
-		const llmClient = createMockStreamingLLM([
-			textResponseEvents("Goal achieved directly."),
-		]);
+		const llmClient = createMockStreamingLLM([textResponseEvents("Goal achieved directly.")]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 		const mainAgent = new MainAgent({
 			contextManager,
-			signalRouter,
 			llmClient,
 			adapter,
 			bridge,
@@ -239,9 +224,7 @@ describe("Integration: Chat mode end-to-end", () => {
 		await mainAgent.handleMessage("Quick goal");
 
 		expect(mainAgent.state).toBe("idle");
-		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "assistant_done" }),
-		);
+		expect(broadcaster.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: "assistant_done" }));
 	});
 
 	it("should handle multi-step tool use: create_agent → inspect_agent → send_to_agent → text response", async () => {
@@ -253,10 +236,8 @@ describe("Integration: Chat mode end-to-end", () => {
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 		const mainAgent = new MainAgent({
 			contextManager,
-			signalRouter,
 			llmClient,
 			adapter,
 			bridge,
@@ -280,10 +261,8 @@ describe("Integration: Chat mode end-to-end", () => {
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 		const mainAgent = new MainAgent({
 			contextManager,
-			signalRouter,
 			llmClient,
 			adapter,
 			bridge,
@@ -296,7 +275,7 @@ describe("Integration: Chat mode end-to-end", () => {
 
 		expect(mainAgent.state).toBe("idle");
 		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "system", message: expect.stringContaining("任务失败") }),
+			expect.objectContaining({ type: "system", message: expect.stringContaining("Task failed") }),
 		);
 	});
 
@@ -306,10 +285,8 @@ describe("Integration: Chat mode end-to-end", () => {
 		]);
 
 		const contextManager = new ContextManager({ llmClient, promptLoader });
-		const signalRouter = new SignalRouter(stateDetector as any, bridge, contextManager);
 		const mainAgent = new MainAgent({
 			contextManager,
-			signalRouter,
 			llmClient,
 			adapter,
 			bridge,
@@ -322,7 +299,7 @@ describe("Integration: Chat mode end-to-end", () => {
 
 		expect(mainAgent.state).toBe("idle");
 		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "system", message: expect.stringContaining("需要人工介入") }),
+			expect.objectContaining({ type: "system", message: expect.stringContaining("Human intervention needed") }),
 		);
 	});
 });

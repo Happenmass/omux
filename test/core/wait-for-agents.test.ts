@@ -24,7 +24,6 @@ function createAgent() {
 			getContextWindowLimit: vi.fn().mockReturnValue(200000),
 			setCompactTuning: vi.fn(),
 		} as any,
-		signalRouter: { on: vi.fn(), emit: vi.fn() } as any,
 		llmClient: {} as any,
 		adapter: { getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,
@@ -77,7 +76,7 @@ describe("wait_for_agents", () => {
 		expect(result.output).toContain("Parked");
 		expect(result.output).toContain("cliclaw-a");
 		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "system", message: expect.stringContaining("挂起") }),
+			expect.objectContaining({ type: "system", message: expect.stringContaining("Parked, waiting for") }),
 		);
 	});
 

@@ -1,42 +1,28 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { AgentAdapter } from "../agents/adapter.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
-import type {
-	LLMMessage,
-	LLMStreamEvent,
-	MessageContent,
-	ThinkingLevel,
-	ToolCallContent,
-	ToolDefinition,
-} from "../llm/types.js";
-import { buildCategoryPathFilter } from "../memory/category.js";
-import { readPersistentMemory, updatePersistentMemory, validateProjectDir } from "../memory/persistent.js";
-import { searchMemory } from "../memory/search.js";
+import type { MessageContent, ThinkingLevel, ToolCallContent } from "../llm/types.js";
 import { isMemoryPath, type MemoryStore } from "../memory/store.js";
-import type { EmbeddingProvider, HybridSearchConfig, MemoryCategory } from "../memory/types.js";
+import type { EmbeddingProvider, HybridSearchConfig } from "../memory/types.js";
 import type { AgentStore } from "../persistence/agent-store.js";
 import type { ChatBroadcaster } from "../server/chat-broadcaster.js";
+import { t } from "../server/messages.js";
 import type { UiEvent, UiEventStore, UiEventType } from "../server/ui-events.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
-import { loadConfig } from "../utils/config.js";
 import { getLanguageInstruction, type SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
-import { cleanupMcpConfigFile, generateMcpConfigFile, selectMcpServers } from "../utils/mcp-config.js";
 import { AgentMonitor } from "./agent-monitor.js";
 import type { ChangeTracker } from "./change-tracker.js";
 import type { ContextManager } from "./context-manager.js";
 import type { LearningPipeline } from "./learning-pipeline.js";
 import type { PromptTracker } from "./prompt-tracker.js";
-import type { Signal, SignalRouter } from "./signal-router.js";
+import { buildToolHandlers, TOOL_DEFINITIONS, type ToolContext, type ToolHandler } from "./tools/index.js";
 import { type AgentEvent, WorkQueue } from "./work-queue.js";
 
 // ─── Types ──────────────────────────────────────────────
@@ -57,335 +43,10 @@ export interface MainAgentEvents {
 	log: [message: string];
 }
 
-// ─── Tool definitions ───────────────────────────────────
-
-const TOOL_DEFINITIONS: ToolDefinition[] = [
-	{
-		name: "send_to_agent",
-		description:
-			"Send an instruction prompt to the coding agent. Returns immediately with a task_id. The agent executes asynchronously — you will receive a callback message when the agent finishes, encounters an error, or needs input. If the target agent is busy, returns the current task info and recent agent logs instead. If agent_id is omitted, routes to the most recently used agent.",
-		parameters: {
-			type: "object",
-			properties: {
-				prompt: { type: "string", description: "The instruction prompt to send to the coding agent" },
-				summary: {
-					type: "string",
-					description:
-						"A brief human-readable summary of the current action for the chat interface (e.g., 'Asking agent to add JWT auth to auth/login.ts')",
-				},
-				agent_id: {
-					type: "string",
-					description: "Target agent name. If omitted, routes to the active agent.",
-				},
-			},
-			required: ["prompt", "summary"],
-		},
-	},
-	{
-		name: "respond_to_agent",
-		description:
-			"Respond to an agent waiting for input. Only callable when the agent has an active task in waiting_input status. Returns immediately — you will receive a callback when the agent settles again. Formats: 'Enter', 'Escape', 'y', 'n', 'arrow:down:N', 'keys:K1,K2,...', or plain text (including menu option numbers like '2'). If agent_id is omitted, routes to the most recently used agent.",
-		parameters: {
-			type: "object",
-			properties: {
-				value: { type: "string", description: "The response value to send" },
-				summary: {
-					type: "string",
-					description:
-						"A brief human-readable summary of this response for the chat interface (e.g., 'Confirming dependency installation')",
-				},
-				agent_id: {
-					type: "string",
-					description: "Target agent name. If omitted, routes to the active agent.",
-				},
-			},
-			required: ["value", "summary"],
-		},
-	},
-	{
-		name: "interrupt_agent",
-		description:
-			"Interrupt a coding agent that is going off track by sending an Escape key to its tmux session. This immediately interrupts the agent's current operation without destroying the session. Use when the agent is deviating from the goal and you want to regain control before sending a corrected instruction. If agent_id is omitted, routes to the most recently used agent.",
-		parameters: {
-			type: "object",
-			properties: {
-				summary: {
-					type: "string",
-					description:
-						"A brief human-readable summary explaining why the agent is being interrupted (e.g., 'Agent is modifying wrong file, interrupting to redirect')",
-				},
-				agent_id: {
-					type: "string",
-					description: "Target agent name. If omitted, routes to the active agent.",
-				},
-			},
-			required: ["summary"],
-		},
-	},
-	{
-		name: "inspect_agent",
-		description:
-			"Inspect an agent's current pane content and task status. Can be used at any time — during agent execution, while waiting, or after completion. Useful for checking progress, understanding what an agent is doing, or getting more context beyond what a callback provided. If agent_id is omitted, routes to the most recently used agent.",
-		parameters: {
-			type: "object",
-			properties: {
-				lines: { type: "number", description: "Number of lines to capture (e.g. 100, 200, 500)" },
-				agent_id: {
-					type: "string",
-					description: "Target agent name. If omitted, routes to the active agent.",
-				},
-			},
-			required: ["lines"],
-		},
-	},
-	{
-		name: "mark_failed",
-		description:
-			"Mark the current task as failed and return to idle state. Use when the task cannot be accomplished.",
-		parameters: {
-			type: "object",
-			properties: {
-				reason: { type: "string", description: "Why the task failed" },
-			},
-			required: ["reason"],
-		},
-	},
-	{
-		name: "escalate_to_human",
-		description:
-			"Escalate the current situation to the human operator and return to idle state. Use when proceeding autonomously would be riskier than pausing: destructive/irreversible operations, ambiguous user intent, major architectural trade-offs, scope expansion beyond the original request, security-sensitive changes, or production/shared resource modifications.",
-		parameters: {
-			type: "object",
-			properties: {
-				reason: { type: "string", description: "Why human intervention is needed" },
-			},
-			required: ["reason"],
-		},
-	},
-	{
-		name: "memory_search",
-		description:
-			"Search project memory for relevant information. Use this before answering questions about prior work, decisions, dates, people, preferences, or todos.",
-		parameters: {
-			type: "object",
-			properties: {
-				query: { type: "string", description: "Search query text (natural language)" },
-				maxResults: { type: "number", description: "Maximum results to return (default 10)" },
-				minScore: { type: "number", description: "Minimum relevance score 0-1 (default 0.1)" },
-				category: {
-					type: "string",
-					description: 'Optional category filter: "core", "preferences", "people", "todos", "daily", "topic"',
-				},
-			},
-			required: ["query"],
-		},
-	},
-	{
-		name: "memory_get",
-		description:
-			"Read a specific memory file. Returns at most 500 lines by default (hard cap 2000). The output starts with a metadata header showing `lines X-Y/total | N bytes`; when truncated, the trailer tells you the exact `from=` to pass next call to continue. Use after memory_search to read full context around a search hit, and page through large files instead of asking for one giant blob.",
-		parameters: {
-			type: "object",
-			properties: {
-				path: { type: "string", description: 'Relative path (e.g. "memory/core.md")' },
-				from: { type: "number", description: "1-indexed start line (default 1)" },
-				lines: { type: "number", description: "Number of lines to read (default 500, max 2000)" },
-			},
-			required: ["path"],
-		},
-	},
-	{
-		name: "memory_edit",
-		description:
-			"Edit a file in the SEARCHABLE memory store (memory/*.md, indexed for memory_search / memory_get). Supports append (default), overwrite, search-and-replace, and delete. Only memory/*.md files are allowed. This is NOT the always-in-prompt MEMORY.md — to edit the global/project MEMORY.md snapshot, use persistent_memory.",
-		parameters: {
-			type: "object",
-			properties: {
-				path: { type: "string", description: 'Relative path (e.g. "memory/core.md")' },
-				content: { type: "string", description: "Content to write (for append/overwrite/replace)" },
-				mode: {
-					type: "string",
-					enum: ["append", "overwrite", "replace", "delete"],
-					description: "Edit mode (default: append)",
-				},
-				match: {
-					type: "string",
-					description: "Text to find for replace/delete operations. Must be an exact match in the file.",
-				},
-			},
-			required: ["path"],
-		},
-	},
-	{
-		name: "read_skill",
-		description:
-			"Read the full instructions of a skill by name. Use this when you need detailed guidance on how to use a specific skill (e.g., command usage, workflow, tips).",
-		parameters: {
-			type: "object",
-			properties: {
-				name: { type: "string", description: 'The skill name (e.g. "commit")' },
-			},
-			required: ["name"],
-		},
-	},
-	{
-		name: "create_agent",
-		description:
-			'Create a tmux session with the "cliclaw-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/inspect_agent. On naming conflict, returns an error so you can retry with a different name.\n\nIMPORTANT: If the user provides a resume id (or one was found in memory), you MUST pass it as resume_id. Omitting it will lose the agent\'s prior conversation context.',
-		parameters: {
-			type: "object",
-			properties: {
-				agent_name: {
-					type: "string",
-					description: 'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
-				},
-				adapter: {
-					type: "string",
-					description:
-						'Which coding-agent adapter to launch (e.g. "claude-code", "codex"). Must be one of the active adapters listed under \'Agent Capabilities\'. When omitted, the configured default adapter is used. Pick per task — see the Multi-Agent Orchestration guidance when more than one adapter is active.',
-				},
-				working_dir: {
-					type: "string",
-					description: "Working directory for the agent. Defaults to process.cwd() if omitted.",
-				},
-				model: {
-					type: "string",
-					description:
-						"Model to launch the agent with, passed through to the underlying CLI via --model. When omitted, the adapter's default is used (Claude Code: opus, Codex: gpt-5.5). Must not contain whitespace.",
-				},
-				resume_id: {
-					type: "string",
-					description:
-						"Resume id for restoring a previous agent conversation. REQUIRED when the user supplies a resume id or one was retrieved from memory. When provided, launches with --resume to restore the agent's prior conversation. When omitted, a fresh agent starts and all previous context is lost.",
-				},
-				pre_commands: {
-					type: "array",
-					items: { type: "string" },
-					description:
-						'Shell commands to run before launching the agent. Each command is joined with " && " and prepended to the agent launch command. Example: ["export FOO=bar", "source .env"] results in: export FOO=bar && source .env && claude ...',
-				},
-				mcp_servers: {
-					type: "array",
-					items: { type: "string" },
-					description:
-						"Names of MCP servers to make available to this SubAgent. Uses server names from Cliclaw's MCP configuration. When provided, only these servers are available via --strict-mcp-config. When omitted, the SubAgent uses its default MCP behavior. Pass an empty array to launch with no MCP servers.",
-				},
-			},
-		},
-	},
-	{
-		name: "list_agents",
-		description:
-			"List all active coding agents (cliclaw- prefixed tmux sessions). Useful for checking existing agents before creating a new one.",
-		parameters: {
-			type: "object",
-			properties: {},
-		},
-	},
-	{
-		name: "kill_agent",
-		description:
-			'Gracefully exit a coding agent and destroy its tmux session. Returns captured output and a resume id (if available) for resuming later with --resume. If agent_id is omitted, targets the active agent. Set agent_id to "all" to kill all agents.',
-		parameters: {
-			type: "object",
-			properties: {
-				agent_id: {
-					type: "string",
-					description:
-						'Target agent name (e.g. "cliclaw-chat-1"). Omit to target the active agent. Set to "all" to kill all agents.',
-				},
-				summary: {
-					type: "string",
-					description: "A brief human-readable summary (e.g., 'Cleaning up agent after task complete')",
-				},
-			},
-			required: ["summary"],
-		},
-	},
-	{
-		name: "persistent_memory",
-		description:
-			"Read or update a persistent MEMORY.md file. (This is the ALWAYS-in-system-prompt memory; for the separate searchable memory/*.md store use memory_edit / memory_search.) Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
-		parameters: {
-			type: "object",
-			properties: {
-				action: {
-					type: "string",
-					enum: ["read", "update"],
-					description: "read: return current MEMORY.md content. update: add/modify/remove entries.",
-				},
-				scope: {
-					type: "string",
-					enum: ["project", "global"],
-					description: "project: workspace-level (requires project_dir). global: ~/.cliclaw/. Default: project.",
-				},
-				project_dir: {
-					type: "string",
-					description:
-						"Absolute path to the project root. REQUIRED when scope='project'. Must be an existing directory containing a project marker (.git, package.json, pyproject.toml, .cliclaw, etc.). Use exec_command to verify the path first if unsure. Ignored when scope='global'.",
-				},
-				section: {
-					type: "string",
-					enum: ["user_profile", "project_conventions", "key_decisions", "people_and_context", "active_notes"],
-					description: "Target section. Required when action is update.",
-				},
-				operation: {
-					type: "string",
-					enum: ["append", "remove", "replace"],
-					description:
-						"append: add entry. remove: delete matching entry. replace: rewrite section. Default: append.",
-				},
-				content: {
-					type: "string",
-					description: "The memory content to write/match/replace.",
-				},
-			},
-			required: ["action"],
-		},
-	},
-	{
-		name: "exec_command",
-		description:
-			"Execute a bash command directly for read-only reconnaissance. Use for reading files, browsing directories, searching code, and checking environment info. NEVER use for modifications, tests, builds, git operations, or any command with side effects — those MUST go through send_to_agent.\n\nLarge-file pre-flight: bare reads such as `cat <file>` / `less <file>` / `more <file>` / `bat <file>` / `view <file>` / `nl <file>` are intercepted before execution. If the target exceeds 500 lines or 50 KB, the command is REFUSED and you receive file metadata plus paging hints (head/tail/sed). Add an output limiter (`| head -200`, `head -n 200 file`, `sed -n '1,200p' file`, etc.) to bypass the check. For memory/ files, prefer memory_get which pages natively.",
-		parameters: {
-			type: "object",
-			properties: {
-				command: { type: "string", description: "The bash command to execute (read-only operations only)" },
-				summary: {
-					type: "string",
-					description:
-						"Very brief summary of the action for chat UI, max 20 chars (e.g., '查看目录结构', '搜索配置文件', 'Check deps')",
-				},
-				cwd: {
-					type: "string",
-					description:
-						"Working directory for execution. Defaults to agent working directory if an agent exists, otherwise process.cwd().",
-				},
-				timeout: {
-					type: "number",
-					description: "Timeout in milliseconds (default: 30000)",
-				},
-			},
-			required: ["command", "summary"],
-		},
-	},
-	{
-		name: "wait_for_agents",
-		description:
-			"Yield the execution loop and wait for running sub-agents to report back — WITHOUT polling. Call this as your final action of the turn when the only thing left to do is wait for one or more sub-agents that are still working. Every sub-agent is monitored in the background, and you will be AUTOMATICALLY resumed with a fresh turn the instant any agent completes, errors, needs input, or times out. Because of that callback, repeatedly calling inspect_agent to 'keep watching' is pure waste — it burns tokens on the full context every round and changes nothing. If at least one agent is still working (or an event is already queued), this parks you efficiently until the next callback. If nothing is working, it tells you so — then judge for yourself: keep driving with send_to_agent if the goal isn't met yet, or reply to the user to end the loop if it is.",
-		parameters: {
-			type: "object",
-			properties: {},
-			required: [],
-		},
-	},
-];
-
 // ─── MainAgent ──────────────────────────────────────────
 
 export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private contextManager: ContextManager;
-	private signalRouter: SignalRouter;
 	private llmClient: LLMClient;
 	/** Active adapters keyed by name; an agent's launch adapter is recorded in its AgentEntry. */
 	private adapters: Map<string, AgentAdapter>;
@@ -428,6 +89,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private autoContinueEnabled = false;
 	private autoContinueMax = 10;
 	private autoContinueCount = 0;
+	/**
+	 * The most recent *real* user instruction. Set only in handleMessage (auto-continue driverText
+	 * bypasses it via enqueueUserMessage), so it stays pinned to the human's original ask across an
+	 * entire auto-continue streak — giving the gate the goal context to judge "is this what they
+	 * asked for, and is there more of it left?" alongside the agent's final output.
+	 */
+	private lastUserInstruction = "";
 	private searchConfig: HybridSearchConfig = {
 		enabled: true,
 		vectorWeight: 0.7,
@@ -436,8 +104,42 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		temporalDecay: { enabled: true, halfLifeDays: 30 },
 	};
 
+	// ─── Tool dispatch ─────────────────────────────────
+	// Built-in tool handlers keyed by tool name (built once at construction). Skill-declared
+	// tools are NOT in here — they fall through executeTool's default path to the registry.
+	private readonly toolHandlers: Map<string, ToolHandler> = buildToolHandlers();
+	// Live facade over this MainAgent handed to every handler. Reads `this.*` on each access,
+	// so post-construction mutations (tests set agentMonitor/workQueue/skillRegistry directly)
+	// are visible to handlers.
+	private readonly toolCtx: ToolContext = this.buildToolContext();
+
 	// ─── State Machine ─────────────────────────────────
 	state: AgentState = "idle";
+
+	// ─── Execution control (stop latch) ────────────────
+	// Formerly owned by SignalRouter — the latch was that class's only live
+	// responsibility, so it lives here now, next to the loop that consumes it.
+	private stopRequested = false;
+
+	/**
+	 * Request stop: the EXECUTING self-loop checks this after the current tool
+	 * round completes and returns to idle when set.
+	 */
+	requestStop(): void {
+		this.stopRequested = true;
+		logger.info("main-agent", "Stop requested — will pause after current tool round");
+		this.emit("log", "Stop requested — will pause after current tool round");
+	}
+
+	/** Clear the stop flag and allow execution to continue. */
+	clearStopRequest(): void {
+		this.stopRequested = false;
+	}
+
+	/** Check whether a stop has been requested. */
+	isStopRequested(): boolean {
+		return this.stopRequested;
+	}
 
 	getPendingUserMessageCount(): number {
 		return this.workQueue.pendingUserMessages();
@@ -445,7 +147,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 
 	constructor(opts: {
 		contextManager: ContextManager;
-		signalRouter: SignalRouter;
 		llmClient: LLMClient;
 		/** Single adapter (back-compat). Provide this OR `adapters`. */
 		adapter?: AgentAdapter;
@@ -477,7 +178,6 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	}) {
 		super();
 		this.contextManager = opts.contextManager;
-		this.signalRouter = opts.signalRouter;
 		this.llmClient = opts.llmClient;
 		// Resolve the active adapter set. `adapters` (map) wins; otherwise wrap the single
 		// back-compat `adapter`. Exactly one of the two must be provided.
@@ -562,7 +262,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			}
 			this.autoContinueMax = max;
 		} else {
-			logger.warn("main-agent:autocontinue", `Ignored invalid maxConsecutive=${max}; keeping ${this.autoContinueMax}`);
+			logger.warn(
+				"main-agent:autocontinue",
+				`Ignored invalid maxConsecutive=${max}; keeping ${this.autoContinueMax}`,
+			);
 		}
 		return this.autoContinueMax;
 	}
@@ -859,12 +562,13 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			);
 		}
 		this.autoContinueCount = 0;
+		this.lastUserInstruction = content;
 		this.workQueue.enqueueUserMessage(content);
 
 		if (this.state === "executing" || this.isDispatching || this.maintenanceInProgress) {
 			this.broadcaster.broadcast({
 				type: "system",
-				message: "消息已排队，将在当前操作完成后处理",
+				message: t("message_queued", this.locale),
 			});
 			this.broadcastState();
 			return;
@@ -885,8 +589,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		}
 		if (this.contextManager.shouldCompress()) {
 			await this.contextManager.compress();
-			this.broadcaster.broadcast({ type: "clear" });
-			this.broadcaster.broadcast({ type: "system", message: "上下文已压缩，历史对话已清空" });
+			// Auto-compaction must NOT wipe the web-UI transcript: unlike the /clear COMMAND
+			// path (command-router.ts), this fires mid-task and the user is still watching the
+			// same conversation. We only compact the MODEL context; the visible chat history and
+			// the model context are now intentionally decoupled on compaction. Surface a system
+			// divider instead of `{type:"clear"}` so earlier turns stay on screen.
+			this.broadcaster.broadcast({ type: "system", message: t("context_compacted_divider", this.locale) });
 		}
 
 		const { system, messages } = this.contextManager.prepareForLLM();
@@ -1040,12 +748,12 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			// ─── Between-round checks ──────────────────
 
 			// 1. Check stopRequested
-			if (this.signalRouter.isStopRequested()) {
-				this.signalRouter.resume(); // Clear the flag
+			if (this.isStopRequested()) {
+				this.clearStopRequest(); // Consume the flag
 				this.setState("idle");
 				this.broadcaster.broadcast({
 					type: "system",
-					message: "执行已停止",
+					message: t("execution_stopped", this.locale),
 				});
 				return;
 			}
@@ -1056,8 +764,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			}
 			if (this.contextManager.shouldCompress()) {
 				await this.contextManager.compress();
-				this.broadcaster.broadcast({ type: "clear" });
-				this.broadcaster.broadcast({ type: "system", message: "上下文已压缩，历史对话已清空" });
+				// Same as the pre-turn path above: auto-compaction decouples the visible chat
+				// history from the model context. Emit a divider, never `{type:"clear"}`, so the
+				// user's transcript survives mid-loop compaction (only /clear wipes the UI).
+				this.broadcaster.broadcast({ type: "system", message: t("context_compacted_divider", this.locale) });
 			}
 
 			// 4. Next LLM call
@@ -1115,6 +825,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	}
 
 	private async processUserMessage(content: string): Promise<void> {
+		// A stop flag latched while we are IDLE is necessarily stale: it raced the loop's
+		// return to idle (e.g. /stop arrived during the final text-only LLM stream, which
+		// never runs the between-round check). Left in place it would truncate THIS fresh
+		// message after exactly one tool round. A new instruction supersedes a stale stop.
+		// Mid-execution stop semantics are unaffected — this path only runs from idle, and
+		// a stop requested after this point is consumed by executeToolLoop between rounds.
+		if (this.stopRequested) {
+			logger.info("main-agent", "Clearing stale stop request — superseded by a new user message");
+			this.stopRequested = false;
+		}
 		// Optimistic state: show "executing" immediately so the UI responds fast
 		this.setState("executing");
 		this.contextManager.addMessage({ role: "user", content });
@@ -1192,7 +912,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			logger.warn(mod, "Gate skipped: promptLoader not configured");
 			return false;
 		}
-		if (this.signalRouter.isStopRequested()) {
+		if (this.isStopRequested()) {
 			logger.info(mod, "Gate skipped: stop requested — handing control back to user");
 			return false;
 		}
@@ -1206,7 +926,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 				mod,
 				`Gate skipped: consecutive cap reached (${this.autoContinueCount}/${this.autoContinueMax}) — handing control back to user`,
 			);
-			this.broadcaster.broadcast({ type: "system", message: "已达自动继续上限，交还控制权" });
+			this.broadcaster.broadcast({ type: "system", message: t("autocontinue_cap_reached", this.locale) });
 			return false;
 		}
 
@@ -1228,6 +948,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.promptLoader.reloadIfChanged?.("auto-continue");
 		const prompt = this.promptLoader.resolve("auto-continue", {
 			language_instruction: getLanguageInstruction(this.locale),
+			user_instruction: this.lastUserInstruction.trim() || "(no prior user instruction on record)",
 			last_output: lastText || "(the agent produced no text this turn)",
 			agent_status: agentStatus,
 			task_list: await this.readTaskList(),
@@ -1253,7 +974,10 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 					temperature: 0.2,
 				});
 				rawResponse = res.content;
-				logger.info(mod, `═══ Gate OUTPUT (attempt ${attempt + 1}, ${Date.now() - startedAt}ms) ═══\n${res.content}`);
+				logger.info(
+					mod,
+					`═══ Gate OUTPUT (attempt ${attempt + 1}, ${Date.now() - startedAt}ms) ═══\n${res.content}`,
+				);
 				decision = this.parseAutoContinueDecision(res.content);
 				break;
 			} catch (err: any) {
@@ -1285,6 +1009,19 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			return false;
 		}
 
+		// Re-check AFTER the (multi-second) gate call: a real user message that arrived while
+		// the gate was running must win the race. Enqueuing the driverText behind it would
+		// execute stale, possibly contradictory instructions after the human's new ask — and
+		// outside the streak cap (handleMessage resets the counter). Drop the driver text.
+		const lateUsers = this.workQueue.pendingUserMessages();
+		if (lateUsers > 0) {
+			logger.info(
+				mod,
+				`Gate result: CONTINUE (${elapsedMs}ms) but ${lateUsers} user message(s) arrived during the gate call — dropping driverText, deferring to human`,
+			);
+			return false;
+		}
+
 		this.autoContinueCount++;
 		logger.info(
 			mod,
@@ -1293,7 +1030,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		logger.info(mod, `Gate driverText enqueued: ${decision.driverText}`);
 		this.broadcaster.broadcast({
 			type: "system",
-			message: `🔄 自动继续 (${this.autoContinueCount}/${this.autoContinueMax}): ${decision.reason}`,
+			message: t("autocontinue_progress", this.locale, {
+				count: this.autoContinueCount,
+				max: this.autoContinueMax,
+				reason: decision.reason,
+			}),
 		});
 		this.workQueue.enqueueUserMessage(decision.driverText);
 		return true;
@@ -1320,6 +1061,16 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			this.setState("idle");
 		}
 		logger.error("main-agent", `${source} error: ${err.message}`);
+		// Tell the user. Without this, a provider failure mid-dispatch consumes the message
+		// silently: the UI flips executing → idle and nothing explains what happened.
+		try {
+			this.broadcaster.broadcast({
+				type: "system",
+				message: t("execution_error", this.locale, { error: err?.message ?? String(err) }),
+			});
+		} catch (broadcastErr: any) {
+			logger.warn("main-agent", `Failed to broadcast execution error: ${broadcastErr?.message ?? broadcastErr}`);
+		}
 	}
 
 	private emitUiEvent(type: UiEventType, summary: string): UiEvent {
@@ -1355,6 +1106,106 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		};
 	}
 
+	// ─── Tool context facade ───────────────────────────
+	// A thin, live view of this MainAgent handed to every tool handler. Getters read
+	// `this.*` on each access (so post-construction mutations are visible); mutating
+	// entry points delegate to the same private methods the switch used to call inline.
+	private buildToolContext(): ToolContext {
+		const self = this;
+		return {
+			// ─── Agent registry / adapters ─────────────
+			get agents() {
+				return self.agents;
+			},
+			get takenOverAgents() {
+				return self.takenOverAgents;
+			},
+			get adapters() {
+				return self.adapters;
+			},
+			get defaultAdapterName() {
+				return self.defaultAdapterName;
+			},
+			get activeAgentId() {
+				return self.activeAgentId;
+			},
+			set activeAgentId(id: string | null) {
+				self.activeAgentId = id;
+			},
+			adapterFor: (entry) => self.adapterFor(entry),
+			resolveAgent: (agentId) => self.resolveAgent(agentId),
+			cleanupAgent: (id) => self.cleanupAgent(id),
+			getActiveAgents: () => self.getActiveAgents(),
+			getAgentWorkingDir: () => self.getAgentWorkingDir(),
+			get createAgentSettleMs() {
+				return self.createAgentSettleMs;
+			},
+			notifyAgentChange: () => self.onAgentChange?.(),
+
+			// ─── Infrastructure ────────────────────────
+			get bridge() {
+				return self.bridge;
+			},
+			get stateDetector() {
+				return self.stateDetector;
+			},
+			get broadcaster() {
+				return self.broadcaster;
+			},
+			get locale() {
+				return self.locale;
+			},
+			get workQueue() {
+				return self.workQueue;
+			},
+			get agentMonitor() {
+				return self.agentMonitor;
+			},
+			get agentStore() {
+				return self.agentStore;
+			},
+			get promptTracker() {
+				return self.promptTracker;
+			},
+			get learningPipeline() {
+				return self.learningPipeline;
+			},
+			get changeTracker() {
+				return self.changeTracker;
+			},
+			emitLog: (message) => {
+				self.emit("log", message);
+			},
+			emitUiEvent: (type, summary) => self.emitUiEvent(type, summary),
+
+			// ─── Memory ────────────────────────────────
+			get memoryStore() {
+				return self.memoryStore;
+			},
+			get embeddingProvider() {
+				return self.embeddingProvider;
+			},
+			get searchConfig() {
+				return self.searchConfig;
+			},
+			get syncMemory() {
+				return self.syncMemory;
+			},
+			get globalDir() {
+				return self.globalDir;
+			},
+			resolveMemoryGetTarget: (rawPath) => self.resolveMemoryGetTarget(rawPath),
+
+			// ─── Skills ────────────────────────────────
+			get skillRegistry() {
+				return self.skillRegistry;
+			},
+
+			// ─── exec_command broadcast throttle ───────
+			incExecCommandBroadcastCount: () => ++self.execCommandBroadcastCount,
+		};
+	}
+
 	// ─── Helper: build assistant content blocks ────────
 
 	private buildAssistantBlocks(text: string, toolCalls: ToolCallContent[]): MessageContent[] {
@@ -1377,971 +1228,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		const { name, arguments: args } = toolCall;
 		logger.info("main-agent", `Executing tool: ${name}(${JSON.stringify(args)})`);
 
-		switch (name) {
-			case "send_to_agent": {
-				const resolved = this.resolveAgent(args.agent_id as string | undefined);
-				if ("error" in resolved) {
-					return { output: `Error: ${resolved.error}`, terminal: false };
-				}
-				const { entry: sendAgent, id: sendAgentId } = resolved;
-				this.activeAgentId = sendAgentId;
-
-				const prompt = args.prompt as string;
-				const summary = args.summary as string;
-
-				// Non-blocking: check if agent is busy
-				if (this.agentMonitor?.isBusy(sendAgentId)) {
-					const task = this.agentMonitor.getTask(sendAgentId)!;
-					const elapsed = Math.round((Date.now() - task.startedAt) / 1000);
-					let paneContent = "";
-					try {
-						const capture = await this.bridge.capturePane(sendAgent.paneTarget, { startLine: -100 });
-						paneContent = capture.content;
-					} catch {
-						paneContent = "(failed to capture pane content)";
-					}
-					return {
-						output: `Agent ${sendAgentId} is busy (task_id: ${task.taskId}, running for ${elapsed}s).\nCurrent task: ${task.summary}\nCurrent agent logs:\n${paneContent}`,
-						terminal: false,
-					};
-				}
-
-				this.emitUiEvent("agent_update", summary);
-
-				const sendAdapter = this.adapterFor(sendAgent);
-				const sendPreHash = await this.stateDetector.captureHash(sendAgent.paneTarget);
-				await sendAdapter.sendPrompt(this.bridge, sendAgent.paneTarget, prompt);
-				this.promptTracker?.record(sendAgentId, prompt);
-
-				if (this.agentMonitor) {
-					const result = this.agentMonitor.dispatch(sendAgentId, sendAgent.paneTarget, {
-						preHash: sendPreHash,
-						summary,
-						taskContext: prompt,
-						characteristics: sendAdapter.getCharacteristics(),
-					});
-
-					if (result.dispatched) {
-						return {
-							output: `Task dispatched. task_id: ${result.task.taskId}, agent: ${sendAgentId}.\nYou will receive a callback when the agent finishes.`,
-							terminal: false,
-						};
-					}
-					return {
-						output: `Agent ${sendAgentId} became busy unexpectedly.`,
-						terminal: false,
-					};
-				}
-
-				return { output: "Error: AgentMonitor not initialized", terminal: false };
-			}
-
-			case "respond_to_agent": {
-				const resolved = this.resolveAgent(args.agent_id as string | undefined);
-				if ("error" in resolved) {
-					return { output: `Error: ${resolved.error}`, terminal: false };
-				}
-				const { entry: respondAgent, id: respondAgentId } = resolved;
-				this.activeAgentId = respondAgentId;
-
-				const value = args.value as string;
-				const summary = args.summary as string;
-
-				// Check task state
-				if (this.agentMonitor) {
-					const task = this.agentMonitor.getTask(respondAgentId);
-					if (!task) {
-						return {
-							output: `Error: Agent ${respondAgentId} has no active task.`,
-							terminal: false,
-						};
-					}
-					if (task.status !== "waiting_input") {
-						return {
-							output: `Error: Agent ${respondAgentId} is not waiting for input (current status: ${task.status}).`,
-							terminal: false,
-						};
-					}
-				}
-
-				this.emitUiEvent("agent_update", summary);
-
-				await this.adapterFor(respondAgent).sendResponse(this.bridge, respondAgent.paneTarget, value);
-				this.promptTracker?.record(respondAgentId, value);
-
-				if (this.agentMonitor) {
-					// Wait for agent to begin processing the response before capturing hash.
-					// Without this delay, captureHash may snapshot the pre-processing state,
-					// causing Phase 1 to never see a hash change (stuck until timeout).
-					await new Promise((resolve) => setTimeout(resolve, 500));
-					const newPreHash = await this.stateDetector.captureHash(respondAgent.paneTarget);
-					const resumed = this.agentMonitor.resumeTask(respondAgentId, newPreHash);
-					if (!resumed) {
-						return {
-							output: `Error: Failed to resume task monitoring for agent ${respondAgentId}.`,
-							terminal: false,
-						};
-					}
-					return {
-						output: "Response sent, agent continuing execution.",
-						terminal: false,
-					};
-				}
-
-				return { output: "Error: AgentMonitor not initialized", terminal: false };
-			}
-
-			case "interrupt_agent": {
-				const resolved = this.resolveAgent(args.agent_id as string | undefined);
-				if ("error" in resolved) {
-					return { output: `Error: ${resolved.error}`, terminal: false };
-				}
-				const { entry: interruptAgent, id: interruptAgentId } = resolved;
-				this.activeAgentId = interruptAgentId;
-
-				const summary = args.summary as string;
-
-				this.emit("log", `Interrupting agent ${interruptAgentId}: ${summary}`);
-				this.broadcaster.broadcast({ type: "system", message: `中断 agent: ${summary}` });
-
-				await this.bridge.sendEscape(interruptAgent.paneTarget);
-
-				if (this.agentMonitor) {
-					this.agentMonitor.cleanup(interruptAgentId);
-				}
-
-				return {
-					output: `Agent ${interruptAgentId} interrupted. You can now send a new instruction with send_to_agent.`,
-					terminal: false,
-				};
-			}
-
-			case "inspect_agent": {
-				const resolved = this.resolveAgent(args.agent_id as string | undefined);
-				if ("error" in resolved) {
-					return { output: `Error: ${resolved.error}`, terminal: false };
-				}
-				const { id: inspectAgentId } = resolved;
-				const lines = args.lines as number;
-
-				let paneContent: string;
-				try {
-					const capture = await this.bridge.capturePane(resolved.entry.paneTarget, { startLine: -lines });
-					paneContent = capture.content;
-				} catch (err: any) {
-					return {
-						output: `Error: Failed to capture pane for agent ${inspectAgentId}: ${err.message}`,
-						terminal: false,
-					};
-				}
-
-				let statusLabel = "idle";
-				if (this.agentMonitor) {
-					const task = this.agentMonitor.getTask(inspectAgentId);
-					if (task) {
-						statusLabel = task.status;
-					}
-				}
-
-				return {
-					output: `[Agent ${inspectAgentId}] Status: ${statusLabel}\n${paneContent}`,
-					terminal: false,
-				};
-			}
-
-			case "mark_failed": {
-				const reason = args.reason as string;
-				this.emit("log", `Task failed: ${reason}`);
-				this.broadcaster.broadcast({ type: "system", message: `任务失败: ${reason}` });
-				return { output: `Task marked as failed: ${reason}`, terminal: true };
-			}
-
-			case "escalate_to_human": {
-				const reason = args.reason as string;
-				this.emit("log", `Escalated to human: ${reason}`);
-				this.broadcaster.broadcast({ type: "system", message: `需要人工介入: ${reason}` });
-				return { output: `Escalated to human: ${reason}`, terminal: true };
-			}
-
-			case "memory_search": {
-				if (!this.memoryStore) {
-					return { output: "Memory store not available.", terminal: false };
-				}
-				const query = args.query as string;
-				const maxResults = args.maxResults as number | undefined;
-				const minScore = args.minScore as number | undefined;
-				const category = args.category as MemoryCategory | undefined;
-
-				try {
-					let categoryPathFilter: string[] | undefined;
-					if (category) {
-						const trackedPaths = this.memoryStore.getTrackedFilePaths();
-						categoryPathFilter = buildCategoryPathFilter(category, trackedPaths);
-					}
-
-					const results = await searchMemory(this.memoryStore, query, this.embeddingProvider, this.searchConfig, {
-						maxResults,
-						minScore,
-						categoryPathFilter,
-					});
-
-					if (results.length === 0) {
-						return { output: "No memory results found for this query.", terminal: false };
-					}
-
-					const formatted = results
-						.map(
-							(r, i) =>
-								`[${i + 1}] ${r.path}:${r.startLine}-${r.endLine} (score: ${r.score.toFixed(3)})\n${r.snippet.slice(0, 300)}`,
-						)
-						.join("\n\n");
-
-					return { output: formatted, terminal: false };
-				} catch (err: any) {
-					logger.warn("main-agent", `memory_search failed: ${err.message}`);
-					return { output: `Memory search error: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "memory_get": {
-				if (!this.memoryStore) {
-					return { output: "Memory store not available.", terminal: false };
-				}
-				const rawPath = args.path as string;
-				const fromArg = args.from as number | undefined;
-				const lineCountArg = args.lines as number | undefined;
-				let storageDir: string;
-				let memGetPath: string;
-				try {
-					({ storageDir, relativePath: memGetPath } = this.resolveMemoryGetTarget(rawPath));
-				} catch (err: any) {
-					return { output: `Memory get error: ${err.message}`, terminal: false };
-				}
-
-				const DEFAULT_LIMIT = 500;
-				const HARD_LIMIT = 2000;
-
-				try {
-					const absPath = join(storageDir, memGetPath);
-					const content = await readFile(absPath, "utf-8");
-					const allLines = content.split("\n");
-					const totalLines = allLines.length;
-					const totalBytes = Buffer.byteLength(content, "utf-8");
-
-					const from = Math.max(1, fromArg ?? 1);
-					const requested = lineCountArg ?? DEFAULT_LIMIT;
-					const limit = Math.min(Math.max(1, requested), HARD_LIMIT);
-
-					const startIdx = from - 1;
-					if (startIdx >= totalLines) {
-						return {
-							output: `[file: ${memGetPath} | ${totalLines} lines / ${totalBytes} bytes]\n[from=${from} is past EOF (file has ${totalLines} lines)]`,
-							terminal: false,
-						};
-					}
-
-					const slice = allLines.slice(startIdx, startIdx + limit);
-					const endLine = startIdx + slice.length;
-					const header = `[file: ${memGetPath} | lines ${from}-${endLine}/${totalLines} | ${totalBytes} bytes]`;
-					const trailer =
-						endLine < totalLines
-							? `\n\n[Truncated. ${totalLines - endLine} more lines. Call memory_get again with from=${endLine + 1} to continue.]`
-							: "";
-
-					return { output: `${header}\n${slice.join("\n")}${trailer}`, terminal: false };
-				} catch (err: any) {
-					if (err.code === "ENOENT") {
-						return { output: `File not found: ${rawPath}`, terminal: false };
-					}
-					return { output: `Error reading file: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "memory_edit":
-			case "memory_write": {
-				if (!this.memoryStore) {
-					return { output: "Memory store not available.", terminal: false };
-				}
-				const editPath = args.path as string;
-				const editContent = args.content as string | undefined;
-				const editMode = (args.mode as "append" | "overwrite" | "replace" | "delete") ?? "append";
-				const editMatch = args.match as string | undefined;
-
-				try {
-					const result = await this.memoryStore.edit({
-						path: editPath,
-						content: editContent,
-						mode: editMode,
-						match: editMatch,
-					});
-					if (this.syncMemory) {
-						try {
-							await this.syncMemory();
-						} catch (err: any) {
-							return {
-								output: `Edited ${result.path} successfully. Warning: memory sync failed: ${err.message}`,
-								terminal: false,
-							};
-						}
-					}
-					return { output: `Edited ${result.path} successfully (${editMode}).`, terminal: false };
-				} catch (err: any) {
-					return { output: `Memory edit error: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "persistent_memory": {
-				const action = args.action as string;
-				const scope = (args.scope as string) ?? "project";
-
-				let filePath: string;
-				let resolvedProjectDir: string | undefined;
-
-				if (scope === "global") {
-					filePath = join(this.globalDir, "MEMORY.md");
-				} else {
-					const projectDir = args.project_dir as string | undefined;
-					if (!projectDir) {
-						return {
-							output:
-								"Error: 'project_dir' is required when scope='project'. Pass the absolute path to the project root (the directory containing .git/package.json/pyproject.toml/etc.). Use exec_command to confirm the path before retrying.",
-							terminal: false,
-						};
-					}
-					const validation = await validateProjectDir(projectDir);
-					if (!validation.ok) {
-						const reason =
-							validation.reason === "not_absolute"
-								? `must be an absolute path, got: ${validation.detail}`
-								: validation.reason === "not_found"
-									? `directory does not exist: ${validation.detail}`
-									: validation.reason === "not_directory"
-										? `path exists but is not a directory: ${validation.detail}`
-										: `no project marker (.git, package.json, pyproject.toml, .cliclaw, etc.) found in ${validation.detail}`;
-						return {
-							output: `Error: invalid project_dir — ${reason}. Verify the path with exec_command first.`,
-							terminal: false,
-						};
-					}
-					resolvedProjectDir = projectDir;
-					filePath = join(projectDir, ".cliclaw", "MEMORY.md");
-				}
-
-				try {
-					if (action === "read") {
-						const content = await readPersistentMemory(filePath);
-						if (!content) {
-							const where = scope === "global" ? "global scope" : `project ${resolvedProjectDir}`;
-							return { output: `No MEMORY.md found at ${where}.`, terminal: false };
-						}
-						return { output: content, terminal: false };
-					}
-
-					// action === "update"
-					const section = args.section as string;
-					const operation = (args.operation as "append" | "remove" | "replace") ?? "append";
-					const content = args.content as string;
-
-					if (!section) {
-						return { output: "Error: 'section' is required for update action.", terminal: false };
-					}
-					if (!content) {
-						return { output: "Error: 'content' is required for update action.", terminal: false };
-					}
-
-					await updatePersistentMemory({ filePath, section, operation, content });
-
-					// IMPORTANT: do NOT hot-reload {{memory}} into the system prompt here.
-					// Rewriting the prompt prefix mid-session invalidates the model's prompt
-					// cache and burns tokens. The on-disk MEMORY.md is the source of truth;
-					// the in-prompt {{memory}} snapshot is taken once at session start and
-					// only refreshed at explicit cache-invalidation breakpoints (/clear,
-					// /compact, /reset). Until then, the agent learns the effect of the
-					// write from this tool's return value, not from a prompt change.
-					let suffix: string;
-					if (scope === "global") {
-						suffix =
-							"Wrote to ~/.cliclaw/MEMORY.md. The system prompt's {{memory}} snapshot is intentionally NOT refreshed this turn (prompt-cache stability); on-disk content is now authoritative and the snapshot will be reloaded on the next /clear, /compact, or /reset.";
-					} else {
-						suffix = `Wrote to ${resolvedProjectDir}/.cliclaw/MEMORY.md; current session memory not modified (project memory is loaded by create_agent, not the system prompt).`;
-					}
-
-					const target = scope === "global" ? "global" : (resolvedProjectDir ?? "project");
-					return {
-						output: `Persistent memory updated (${target}/${section}/${operation}). ${suffix}`,
-						terminal: false,
-					};
-				} catch (err: any) {
-					return { output: `Persistent memory error: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "read_skill": {
-				if (!this.skillRegistry) {
-					return { output: "Skill registry not available.", terminal: false };
-				}
-				const skillName = args.name as string;
-				const skill = this.skillRegistry.getByName(skillName);
-				if (!skill) {
-					return { output: `Skill not found: ${skillName}`, terminal: false };
-				}
-				return { output: skill.body, terminal: false };
-			}
-
-			case "create_agent": {
-				logger.debug("main-agent", `create_agent raw args: ${JSON.stringify(args)}`);
-				const rawName = args.agent_name as string | undefined;
-				let agentName: string;
-				if (!rawName) {
-					agentName = generateAgentName("chat");
-				} else if (!rawName.startsWith("cliclaw-")) {
-					agentName = `cliclaw-${rawName}`;
-				} else {
-					agentName = rawName;
-				}
-
-				const rawWorkingDir = (args.working_dir as string | undefined) ?? process.cwd();
-				const workingDir = rawWorkingDir.startsWith("~/")
-					? join(homedir(), rawWorkingDir.slice(2))
-					: rawWorkingDir.startsWith("~")
-						? homedir()
-						: rawWorkingDir;
-				if (workingDir !== rawWorkingDir) {
-					logger.debug("main-agent", `create_agent expanded working_dir: "${rawWorkingDir}" → "${workingDir}"`);
-				}
-
-				try {
-					const dirStat = await stat(workingDir);
-					if (!dirStat.isDirectory()) {
-						return { output: `Error: "${workingDir}" is not a directory.`, terminal: false };
-					}
-				} catch {
-					return { output: `Error: Directory "${workingDir}" does not exist.`, terminal: false };
-				}
-
-				const exists = await this.bridge.hasSession(agentName);
-				if (exists) {
-					return {
-						output: `Error: Agent "${agentName}" already exists. Choose a different name or use list_agents to see existing agents.`,
-						terminal: false,
-					};
-				}
-
-				try {
-					const rawResumeId = args.resume_id as string | undefined;
-					const resumeId = rawResumeId?.trim() || undefined;
-					if (resumeId && /\s/.test(resumeId)) {
-						return {
-							output: `Error: resume_id must not contain whitespace: "${resumeId}"`,
-							terminal: false,
-						};
-					}
-					const rawModel = args.model as string | undefined;
-					const model = rawModel?.trim() || undefined;
-					if (model && /\s/.test(model)) {
-						return {
-							output: `Error: model must not contain whitespace: "${model}"`,
-							terminal: false,
-						};
-					}
-					const rawPreCommands = args.pre_commands as string[] | undefined;
-					const preCommands =
-						rawPreCommands && Array.isArray(rawPreCommands) && rawPreCommands.length > 0
-							? rawPreCommands.filter((c) => typeof c === "string" && c.trim())
-							: undefined;
-
-					// Resolve which adapter to launch: omitted → default; otherwise must be active.
-					const rawAdapter = (args.adapter as string | undefined)?.trim();
-					const adapterName = rawAdapter || this.defaultAdapterName;
-					const adapter = this.adapters.get(adapterName);
-					if (!adapter) {
-						const active = [...this.adapters.keys()].join(", ");
-						return {
-							output: `Error: adapter "${adapterName}" is not active. Active adapters: ${active}.`,
-							terminal: false,
-						};
-					}
-
-					// Handle mcp_servers: generate temp config file if specified
-					let mcpConfigPath: string | undefined;
-					const rawMcpServers = args.mcp_servers as string[] | undefined;
-					if (rawMcpServers !== undefined && Array.isArray(rawMcpServers)) {
-						const config = await loadConfig();
-						if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) {
-							return {
-								output: "Error: No MCP servers configured. Add MCP servers via the settings UI or config.json.",
-								terminal: false,
-							};
-						}
-						const selection = selectMcpServers(config.mcpServers, rawMcpServers);
-						if ("error" in selection) {
-							return { output: `Error: ${selection.error}`, terminal: false };
-						}
-						mcpConfigPath = await generateMcpConfigFile(selection.servers, agentName);
-						logger.info("main-agent", `Generated MCP config for ${agentName}: ${mcpConfigPath}`);
-					}
-
-					const paneTarget = await adapter.launch(this.bridge, {
-						workingDir,
-						sessionName: agentName,
-						resumeId,
-						model,
-						preCommands,
-						mcpConfigPath,
-					});
-					const resolvedModel = model ?? adapter.defaultModel;
-					this.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel, adapter: adapterName });
-					await this.changeTracker?.registerAgent(agentName, workingDir);
-					this.agentStore?.saveAgent(agentName, {
-						paneTarget,
-						workingDir,
-						model: resolvedModel,
-						adapter: adapterName,
-					});
-					this.activeAgentId = agentName;
-					this.stateDetector.setCharacteristics(adapter.getCharacteristics());
-					logger.info(
-						"main-agent",
-						`Agent created: ${agentName} (${adapterName}), pane: ${paneTarget}, cwd: ${workingDir}`,
-					);
-					this.onAgentChange?.();
-					const mcpNote = mcpConfigPath ? ` MCP servers: ${rawMcpServers!.join(", ")}.` : "";
-
-					// Surface the target project's MEMORY.md to the main agent (not the sub agent).
-					// The main agent decides whether/how to fold this into the first send_to_agent prompt.
-					const projectMemoryPath = join(workingDir, ".cliclaw", "MEMORY.md");
-					const projectMemory = await readPersistentMemory(projectMemoryPath);
-					const memorySection = projectMemory.trim()
-						? `\n\n--- Project memory at ${projectMemoryPath} ---\n${projectMemory.trim()}\n--- end project memory ---\nThis is for YOUR reference only. The sub agent has not seen it. Decide whether to surface relevant excerpts in your first send_to_agent prompt, or to point the agent at the file path so it can read on demand.`
-						: `\n\nNo project memory found at ${projectMemoryPath}.`;
-
-					// Wait for the agent's TUI to settle, then capture the first 20 visible lines
-					// so the main agent can confirm the launch state without an extra inspect_agent call.
-					if (this.createAgentSettleMs > 0) {
-						await new Promise((resolve) => setTimeout(resolve, this.createAgentSettleMs));
-					}
-					let initialPaneSection: string;
-					try {
-						const capture = await this.bridge.capturePane(paneTarget, { startLine: -20 });
-						initialPaneSection = `\n\n--- Initial pane (${paneTarget}, last 20 lines after 10s) ---\n${capture.content}\n--- end pane ---`;
-					} catch (err: any) {
-						initialPaneSection = `\n\n[Initial pane capture failed: ${err?.message ?? err}]`;
-					}
-
-					return {
-						output: `Agent "${agentName}" (${adapter.displayName}) created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
-						terminal: false,
-					};
-				} catch (err: any) {
-					return { output: `Failed to create agent: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "list_agents": {
-				try {
-					const tmuxSessions = await this.bridge.listCliclawAgents();
-					if (tmuxSessions.length === 0) {
-						return { output: "No active agents found.", terminal: false };
-					}
-					const formatted = tmuxSessions
-						.map((s) => `- ${s.name} (windows: ${s.windows}, attached: ${s.attached})`)
-						.join("\n");
-					return { output: `Found ${tmuxSessions.length} agent(s):\n${formatted}`, terminal: false };
-				} catch (err: any) {
-					return { output: `Error listing agents: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "kill_agent": {
-				const killAgentId = args.agent_id as string | undefined;
-				const killSummary = args.summary as string;
-				this.emitUiEvent("agent_update", killSummary);
-
-				try {
-					// ── Kill all agents ──
-					if (killAgentId === "all") {
-						const tmuxSessions = await this.bridge.listCliclawAgents();
-						if (tmuxSessions.length === 0 && this.agents.size === 0) {
-							return { output: "No agents to kill.", terminal: false };
-						}
-
-						// Gracefully exit each registered agent (best-effort)
-						const resumeIds: string[] = [];
-						for (const [id, entry] of this.agents) {
-							try {
-								const entryAdapter = this.adapterFor(entry);
-								if (entryAdapter.exitAgent) {
-									const result = await entryAdapter.exitAgent(this.bridge, entry.paneTarget);
-									if (result.resumeId) resumeIds.push(`${id}: ${result.resumeId}`);
-								}
-							} catch {
-								/* best-effort */
-							}
-						}
-
-						// Kill all tmux sessions
-						const killed: string[] = [];
-						for (const s of tmuxSessions) {
-							try {
-								await this.bridge.killSession(s.name);
-								killed.push(s.name);
-							} catch {
-								/* best-effort */
-							}
-						}
-
-						// Cleanup all registered agents
-						const registeredIds = [...this.agents.keys()];
-						for (const id of registeredIds) {
-							if (this.learningPipeline && this.changeTracker) {
-								const entry = this.agents.get(id);
-								if (entry) {
-									try {
-										await this.learningPipeline.ingestAgentKill({
-											sessionId: id,
-											sessionName: id,
-											cwd: entry.workingDir,
-											agentPrompts: this.promptTracker?.getFor(id) ?? [],
-										});
-									} catch (err) {
-										logger.warn("main-agent", `learning ingest failed for ${id}: ${(err as Error).message}`);
-									}
-								}
-								this.changeTracker.releaseAgent(id);
-							}
-							// Always release prompt tracker, independent of learning pipeline
-							this.promptTracker?.release(id);
-							// Cleanup MCP config temp file (best-effort)
-							await cleanupMcpConfigFile(id).catch(() => {});
-							this.cleanupAgent(id);
-						}
-						this.activeAgentId = null;
-						this.onAgentChange?.();
-
-						const parts = [`Killed ${killed.length} agent(s): ${killed.join(", ")}`];
-						if (resumeIds.length > 0) {
-							parts.push(`\nResume IDs:\n${resumeIds.join("\n")}`);
-						}
-						return { output: parts.join("\n"), terminal: false };
-					}
-
-					// ── Kill single agent ──
-					const resolved = this.resolveAgent(killAgentId);
-					if ("error" in resolved) {
-						return { output: `Error: ${resolved.error}`, terminal: false };
-					}
-					const { entry: agentEntry, id: agentId } = resolved;
-
-					// Gracefully exit agent to capture resume id (best-effort)
-					let agentContent = "";
-					let resumeId: string | undefined;
-					const killAdapter = this.adapterFor(agentEntry);
-					if (killAdapter.exitAgent) {
-						try {
-							const exitResult = await killAdapter.exitAgent(this.bridge, agentEntry.paneTarget);
-							agentContent = exitResult.content;
-							resumeId = exitResult.resumeId;
-						} catch (err: any) {
-							logger.warn("main-agent", `exitAgent failed (will still kill tmux): ${err.message}`);
-						}
-					}
-
-					// Kill tmux session
-					const exists = await this.bridge.hasSession(agentId);
-					if (exists) {
-						await this.bridge.killSession(agentId);
-					}
-
-					if (this.learningPipeline && this.changeTracker) {
-						try {
-							await this.learningPipeline.ingestAgentKill({
-								sessionId: agentId,
-								sessionName: agentId,
-								cwd: agentEntry.workingDir,
-								agentPrompts: this.promptTracker?.getFor(agentId) ?? [],
-							});
-						} catch (err) {
-							logger.warn("main-agent", `learning ingest failed for ${agentId}: ${(err as Error).message}`);
-						}
-						this.changeTracker.releaseAgent(agentId);
-					}
-					// Always release prompt tracker, independent of learning pipeline
-					this.promptTracker?.release(agentId);
-					// Cleanup MCP config temp file (best-effort)
-					await cleanupMcpConfigFile(agentId).catch(() => {});
-
-					// Cleanup agent registry
-					this.cleanupAgent(agentId);
-					this.onAgentChange?.();
-
-					const parts = [`[Agent killed]\n${agentContent}`];
-					if (resumeId) {
-						parts.push(`\nResume ID: ${resumeId}`);
-						parts.push(`Working directory: ${agentEntry.workingDir}`);
-					}
-					return { output: parts.join("\n"), terminal: false };
-				} catch (err: any) {
-					return { output: `Failed to kill agent: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "exec_command": {
-				const command = args.command as string;
-				const execSummary = args.summary as string;
-				const rawCwd = (args.cwd as string | undefined) ?? this.getAgentWorkingDir();
-				const cwd = rawCwd.startsWith("~/")
-					? join(homedir(), rawCwd.slice(2))
-					: rawCwd.startsWith("~")
-						? homedir()
-						: rawCwd;
-				const timeout = (args.timeout as number | undefined) ?? 30000;
-				const MAX_OUTPUT = 10000;
-				const PREFLIGHT_LINE_LIMIT = 500;
-				const PREFLIGHT_BYTE_LIMIT = 50 * 1024;
-
-				// Throttled broadcast: emit tool_activity on 1st, 4th, 7th, ... call
-				this.execCommandBroadcastCount++;
-				if (this.execCommandBroadcastCount % 3 === 1) {
-					this.emitUiEvent("tool_activity", execSummary);
-				}
-
-				// Preflight: refuse to dump huge files into the LLM context.
-				// Identifies bare `cat/less/more/...` reads with no output limiter and
-				// returns metadata + paging suggestions instead of executing.
-				const preflightTarget = preflightReadTarget(command);
-				if (preflightTarget) {
-					const resolvedTarget = isAbsolute(preflightTarget)
-						? preflightTarget
-						: preflightTarget.startsWith("~/")
-							? join(homedir(), preflightTarget.slice(2))
-							: join(cwd, preflightTarget);
-					try {
-						const st = await stat(resolvedTarget);
-						if (st.isFile() && st.size > 0) {
-							const buf = await readFile(resolvedTarget);
-							const lineCount = countLines(buf);
-							if (lineCount > PREFLIGHT_LINE_LIMIT || st.size > PREFLIGHT_BYTE_LIMIT) {
-								return {
-									output: formatPreflightHint(preflightTarget, lineCount, st.size, {
-										lineLimit: PREFLIGHT_LINE_LIMIT,
-										byteLimit: PREFLIGHT_BYTE_LIMIT,
-									}),
-									terminal: false,
-								};
-							}
-						}
-					} catch {
-						// stat / read failed (file missing, perms, etc.) — fall through
-						// to the normal exec path so the shell reports the real error.
-					}
-				}
-
-				logger.debug("main-agent", `exec_command cwd="${cwd}" cmd=${JSON.stringify(command)}`);
-				try {
-					const execFileAsync = promisify(execFile);
-					const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
-						cwd,
-						timeout,
-						maxBuffer: 1024 * 1024,
-					});
-					let output = stdout + (stderr ? `\n${stderr}` : "");
-					if (output.length > MAX_OUTPUT) {
-						const totalLen = output.length;
-						output = `${output.slice(0, MAX_OUTPUT)}\n\n[Output truncated: ${totalLen} chars total, showing first ${MAX_OUTPUT}]`;
-					}
-					return { output: output || "(no output)", terminal: false };
-				} catch (err: any) {
-					if (err.killed || err.signal === "SIGTERM") {
-						return {
-							output: `[exec_command timeout after ${timeout}ms]\nCommand: ${command}`,
-							terminal: false,
-						};
-					}
-					if (err.code === "ENOENT") {
-						const pathEnv = process.env.PATH ?? "(unset)";
-						logger.error("main-agent", `exec_command ENOENT: bash not found. PATH=${pathEnv}`);
-						return {
-							output: `exec_command error: bash not found (ENOENT). PATH=${pathEnv}`,
-							terminal: false,
-						};
-					}
-					if (err.code !== undefined && typeof err.code === "number") {
-						let output = `[exit code: ${err.code}]\n${err.stderr || ""}${err.stdout || ""}`.trim();
-						if (output.length > MAX_OUTPUT) {
-							const totalLen = output.length;
-							output = `${output.slice(0, MAX_OUTPUT)}\n\n[Output truncated: ${totalLen} chars total, showing first ${MAX_OUTPUT}]`;
-						}
-						return { output, terminal: false };
-					}
-					logger.error("main-agent", `exec_command unexpected error: ${err.message} ${JSON.stringify(err)}`);
-					return { output: `exec_command error: ${err.message}`, terminal: false };
-				}
-			}
-
-			case "wait_for_agents": {
-				const activeTasks = this.agentMonitor?.getAllTasks() ?? [];
-				const pendingEvents = this.workQueue.getAgentEvents();
-				const running = activeTasks.filter((t) => t.status === "running");
-				const waiting = activeTasks.filter((t) => t.status === "waiting_input");
-
-				// A future wake-up is guaranteed only when something will fire a callback:
-				// a running task (settles later → enqueues an event) or an event already in
-				// the queue (drained by dispatchNext the moment we return to idle). A
-				// waiting_input task already fired its callback and will NOT fire again until
-				// respond_to_agent → resumeTask, so it does not, on its own, justify parking.
-				const willWake = running.length > 0 || pendingEvents.length > 0;
-
-				const lines: string[] = [];
-				if (running.length > 0) {
-					lines.push(`## Working (${running.length})`);
-					for (const t of running) {
-						const elapsed = Math.round((Date.now() - t.startedAt) / 1000);
-						lines.push(`- ${t.agentId} (${t.taskId}) elapsed=${elapsed}s — ${t.summary}`);
-					}
-				}
-				if (waiting.length > 0) {
-					if (lines.length > 0) lines.push("");
-					lines.push(`## Waiting for your input (${waiting.length}) — use respond_to_agent`);
-					for (const t of waiting) {
-						lines.push(`- ${t.agentId} (${t.taskId}) — ${t.summary}`);
-					}
-				}
-				if (pendingEvents.length > 0) {
-					if (lines.length > 0) lines.push("");
-					lines.push(`## Already reported, delivered to you next (${pendingEvents.length})`);
-					for (const e of pendingEvents) {
-						lines.push(`- ${e.agentId} (${e.taskId}) status=${e.status} — ${e.summary}`);
-					}
-				}
-
-				if (willWake) {
-					this.broadcaster.broadcast({
-						type: "system",
-						message: `⏸ 已挂起，等待 ${running.length} 个子代理回调`,
-					});
-					const header =
-						`⏸ Parked. ${running.length} agent(s) still working` +
-						(pendingEvents.length > 0 ? `, ${pendingEvents.length} event(s) already queued` : "") +
-						". You will be resumed automatically on the next callback — do NOT poll in the meantime.";
-					return { output: `${header}\n\n${lines.join("\n")}`, terminal: true };
-				}
-
-				// Nothing will wake us — parking would stall the loop. Nudge the model to act.
-				if (waiting.length > 0) {
-					return {
-						output: `No agents are working in the background, but ${waiting.length} agent(s) are waiting for your input — respond with respond_to_agent instead of waiting.\n\n${lines.join("\n")}`,
-						terminal: false,
-					};
-				}
-				return {
-					output:
-						"No sub-agents are working and no events are queued — there is nothing to wait for. Decide based on the overall goal, not on this pause:\n" +
-						"- If the success criteria are NOT yet met (tests not passing, behavior not verified end-to-end, or more work remains), keep driving — dispatch the next round with send_to_agent (or create_agent if no suitable agent exists).\n" +
-						"- If the goal IS fully met, do NOT call another tool: reply with a brief final summary to the user. That returns you to idle and ends the loop.",
-					terminal: false,
-				};
-			}
-
-			default: {
-				if (this.skillRegistry) {
-					const skillForTool = this.skillRegistry.getByToolName(name);
-					if (skillForTool) {
-						return { output: skillForTool.body, terminal: false };
-					}
-				}
-				return { output: `Unknown tool: ${name}`, terminal: false };
-			}
-		}
-	}
-
-	private formatSignal(signal: Signal): string {
-		const parts: string[] = [`[${signal.type}]`];
-
-		if (signal.analysis) {
-			parts.push(`Status: ${signal.analysis.status} (confidence: ${signal.analysis.confidence})`);
-			parts.push(`Detail: ${signal.analysis.detail}`);
+		const handler = this.toolHandlers.get(name);
+		if (handler) {
+			return handler.execute(args, this.toolCtx);
 		}
 
-		if (signal.message) {
-			parts.push(`Message: ${signal.message}`);
+		// Skill-declared tools (merged in via tool-merge) are not in the built-in handler
+		// map — dispatch them exactly as the old switch's default case did: return the
+		// skill body, else an "Unknown tool" error.
+		if (this.skillRegistry) {
+			const skillForTool = this.skillRegistry.getByToolName(name);
+			if (skillForTool) {
+				return { output: skillForTool.body, terminal: false };
+			}
 		}
-
-		parts.push(`--- Pane Content ---\n${signal.paneContent}`);
-
-		return parts.join("\n");
+		return { output: `Unknown tool: ${name}`, terminal: false };
 	}
-}
-
-// ─── exec_command preflight ─────────────────────────────
-//
-// Pick out unguarded "dump-the-whole-file" reads (e.g. `cat src/foo.ts`) so we
-// can stat the target before execution and refuse to spill thousands of lines
-// into the LLM context. Returns the candidate file path, or null when the
-// command is either not a read or already has its own output limiter.
-//
-// Rules — kept deliberately simple, no bash AST:
-//   • Command verb is one of cat/less/more/bat/view/nl.
-//   • Command string does NOT contain any control hint: | > head tail sed awk wc.
-//     (Pipe / redirect / known limiters all imply "agent knows what it's doing".)
-//   • Command string does NOT chain via ; && || — those go straight to fallback.
-// stat()-level failures (file missing, process substitution, stdin, etc.) make
-// the caller fall through to the normal execFile path so the shell can report
-// the real error naturally.
-const READ_VERBS = new Set(["cat", "less", "more", "bat", "view", "nl"]);
-const CONTROL_HINT_RE = /\||>|\bhead\b|\btail\b|\bsed\b|\bawk\b|\bwc\b/;
-const CHAIN_RE = /;|&&|\|\|/;
-
-function preflightReadTarget(command: string): string | null {
-	if (CHAIN_RE.test(command)) return null;
-	if (CONTROL_HINT_RE.test(command)) return null;
-	const trimmed = command.trim();
-	const match = trimmed.match(/^(\S+)\s+(.+)$/);
-	if (!match) return null;
-	const verb = match[1];
-	if (!READ_VERBS.has(verb)) return null;
-	const tokens = match[2].split(/\s+/).filter((t) => t.length > 0 && !t.startsWith("-"));
-	const target = tokens[0];
-	if (!target || target === "-") return null;
-	return target;
-}
-
-function countLines(buf: Buffer): number {
-	let n = 0;
-	for (let i = 0; i < buf.length; i++) {
-		if (buf[i] === 0x0a) n++;
-	}
-	// Match `wc -l` semantics: trailing newline = N lines, missing = N+1 "logical" lines.
-	if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) n++;
-	return n;
-}
-
-function formatPreflightHint(
-	target: string,
-	lines: number,
-	bytes: number,
-	limits: { lineLimit: number; byteLimit: number },
-): string {
-	const kb = (bytes / 1024).toFixed(1);
-	const limitKb = (limits.byteLimit / 1024).toFixed(0);
-	return [
-		`[exec_command pre-flight: file too large]`,
-		`${target}: ${lines} lines, ${bytes} bytes (${kb} KB) — limit ${limits.lineLimit} lines / ${limitKb} KB`,
-		``,
-		`This file would flood your context. Re-issue exec_command with one of:`,
-		`  • head -n 200 ${target}                 # first 200 lines`,
-		`  • tail -n 200 ${target}                 # last 200 lines`,
-		`  • sed -n '1,200p' ${target}             # explicit range`,
-		`  • cat ${target} | head -200             # pipe through head`,
-		``,
-		`If this file lives under memory/, prefer memory_get(path, from, lines) — it pages natively.`,
-	].join("\n");
-}
-
-function generateAgentName(prefix: string): string {
-	const slug = prefix
-		.replace(/[^\w\u4e00-\u9fff]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 30)
-		.replace(/-$/, "");
-	return `cliclaw-${slug || "agent"}`;
 }
