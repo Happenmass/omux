@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 	role TEXT NOT NULL,
 	content TEXT NOT NULL,
 	tool_call_id TEXT,
+	content_kind TEXT,
 	created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -69,17 +70,28 @@ export class ConversationStore {
 			this.db.exec("ALTER TABLE learning_entries ADD COLUMN diff_fingerprint TEXT");
 			logger.info("conversation-store", "Migrated: added diff_fingerprint column");
 		}
+
+		const messageCols = this.db.pragma("table_info(chat_messages)") as Array<{ name: string }>;
+		if (messageCols.length > 0 && !messageCols.some((c) => c.name === "content_kind")) {
+			this.db.exec("ALTER TABLE chat_messages ADD COLUMN content_kind TEXT");
+			logger.info("conversation-store", "Migrated: added content_kind column");
+		}
 	}
 
 	/**
 	 * Save a message to chat_messages.
 	 * Content is JSON-serialized when it's MessageContent[].
+	 * content_kind records how content was serialized ("text" | "json") so loadMessages
+	 * doesn't have to sniff — a plain-text message like "[1, 2, 3]" would otherwise be
+	 * misparsed as structured MessageContent[] on restore.
 	 */
 	saveMessage(msg: LLMMessage): void {
-		const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+		const isJson = typeof msg.content !== "string";
+		const content = isJson ? JSON.stringify(msg.content) : (msg.content as string);
+		const contentKind = isJson ? "json" : "text";
 		this.db
-			.prepare("INSERT INTO chat_messages (role, content, tool_call_id) VALUES (?, ?, ?)")
-			.run(msg.role, content, msg.toolCallId ?? null);
+			.prepare("INSERT INTO chat_messages (role, content, tool_call_id, content_kind) VALUES (?, ?, ?, ?)")
+			.run(msg.role, content, msg.toolCallId ?? null, contentKind);
 	}
 
 	/**
@@ -92,16 +104,30 @@ export class ConversationStore {
 
 	loadMessagesWithCreatedAt(): Array<LLMMessage & { createdAt: number }> {
 		const rows = this.db
-			.prepare("SELECT role, content, tool_call_id, created_at FROM chat_messages ORDER BY id ASC")
-			.all() as Array<{ role: string; content: string; tool_call_id: string | null; created_at: number }>;
+			.prepare("SELECT role, content, tool_call_id, content_kind, created_at FROM chat_messages ORDER BY id ASC")
+			.all() as Array<{
+			role: string;
+			content: string;
+			tool_call_id: string | null;
+			content_kind: string | null;
+			created_at: number;
+		}>;
 
 		return rows.map((row) => {
 			let content: string | any[];
-			try {
-				const parsed = JSON.parse(row.content);
-				content = Array.isArray(parsed) ? parsed : row.content;
-			} catch {
+			if (row.content_kind === "json") {
+				content = JSON.parse(row.content);
+			} else if (row.content_kind === "text") {
 				content = row.content;
+			} else {
+				// Legacy rows (content_kind is NULL, written before this column existed) fall
+				// back to sniffing: a JSON array literal is assumed to be MessageContent[].
+				try {
+					const parsed = JSON.parse(row.content);
+					content = Array.isArray(parsed) ? parsed : row.content;
+				} catch {
+					content = row.content;
+				}
 			}
 
 			const msg: LLMMessage = {
