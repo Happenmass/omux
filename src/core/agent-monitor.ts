@@ -2,7 +2,22 @@ import type { AgentCharacteristics } from "../agents/adapter.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
 import type { StateDetector } from "../tmux/state-detector.js";
 import { logger } from "../utils/logger.js";
-import type { WorkQueue } from "./work-queue.js";
+import type { AgentEvent, WorkQueue } from "./work-queue.js";
+
+type AgentEventStatus = AgentEvent["status"];
+
+const AGENT_EVENT_STATUSES: readonly AgentEventStatus[] = ["waiting_input", "completed", "error", "timeout", "aborted"];
+
+/**
+ * Narrow a StateDetector PaneStatus (or any raw string) to the AgentEvent union.
+ * StateDetector can return "active" / "idle" / "unknown" (the last one is what
+ * Layer-2 emits when the LLM analysis fails); none of those are valid terminal
+ * agent events, so they are mapped to "error" rather than blindly cast — the
+ * callback consumer only understands the five statuses below.
+ */
+function toAgentEventStatus(status: string): AgentEventStatus {
+	return (AGENT_EVENT_STATUSES as readonly string[]).includes(status) ? (status as AgentEventStatus) : "error";
+}
 
 export interface TaskInfo {
 	taskId: string;
@@ -196,9 +211,23 @@ export class AgentMonitor {
 			}
 		};
 
-		// Fire-and-forget
+		// Fire-and-forget. This outer catch is the last line of defence: if the
+		// inner handler itself throws (e.g. the error branch's own capture/callback
+		// throws), the task would otherwise stay in the map forever — isBusy() stuck
+		// true and any wait_for_agents parked on a wake-up that never fires. Emit an
+		// error event and remove the task so the callback fires and the loop unblocks.
 		poll().catch((err) => {
 			logger.error("agent-monitor", `Unexpected polling error for ${agentId}: ${err.message}`);
+			if (this.tasks.has(agentId)) {
+				const duration = Math.round((Date.now() - task.startedAt) / 1000);
+				try {
+					this.fireCallback(task, "error", `Unexpected polling error: ${err.message}`, duration);
+				} catch (cbErr: any) {
+					logger.error("agent-monitor", `Failed to emit error callback for ${agentId}: ${cbErr.message}`);
+				}
+				this.tasks.delete(agentId);
+				this.paneTargets.delete(agentId);
+			}
 		});
 	}
 
@@ -214,7 +243,7 @@ export class AgentMonitor {
 		this.workQueue.enqueueAgentEvent({
 			agentId: task.agentId,
 			taskId: task.taskId,
-			status: status as "waiting_input" | "completed" | "error" | "timeout" | "aborted",
+			status: toAgentEventStatus(status),
 			detail,
 			paneContent: paneContent ?? "",
 			summary: task.summary,
