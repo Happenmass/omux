@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ToolDefinition } from "../../src/llm/types.js";
 import { discoverSkills } from "../../src/skills/discovery.js";
 import { filterSkills } from "../../src/skills/filter.js";
 import { buildCapabilitiesSummary } from "../../src/skills/injector.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { mergeSkillTools } from "../../src/skills/tool-merge.js";
-import type { ToolDefinition } from "../../src/llm/types.js";
 
 let tmpDir: string;
 
@@ -84,6 +84,7 @@ Deployment instructions.`,
 		const discovered = await discoverSkills({
 			adapterSkillsDir: adapterDir,
 			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
 		});
 		expect(discovered).toHaveLength(3);
 
@@ -143,7 +144,11 @@ tool:
 Steps to analyze risk.`,
 		);
 
-		const discovered = await discoverSkills({ adapterSkillsDir: adapterDir, workspaceDir });
+		const discovered = await discoverSkills({
+			adapterSkillsDir: adapterDir,
+			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
+		});
 		const filtered = filterSkills(discovered, {}, workspaceDir);
 		const registry = new SkillRegistry(filtered);
 
