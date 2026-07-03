@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptLoader } from "../../src/llm/prompt-loader.js";
+import { logger } from "../../src/utils/logger.js";
 
 describe("PromptLoader", () => {
 	let tempDir: string;
@@ -91,6 +92,37 @@ describe("PromptLoader", () => {
 		expect(result).toBe("");
 	});
 
+	it("should warn (naming the variable and prompt) but keep replacing unknown vars with empty string", async () => {
+		const loader = new PromptLoader(builtinDir);
+		await loader.load(tempDir);
+
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			const result = loader.resolve("planner");
+			expect(result).not.toContain("{{memory}}");
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			const [module, message] = warnSpy.mock.calls[0];
+			expect(module).toBe("prompt-loader");
+			expect(message).toContain("memory");
+			expect(message).toContain("planner");
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+
+	it("should not warn when the variable is provided via context", async () => {
+		const loader = new PromptLoader(builtinDir);
+		await loader.load(tempDir);
+
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			loader.resolve("planner", { memory: "provided" });
+			expect(warnSpy).not.toHaveBeenCalled();
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+
 	it("should return empty string when builtin dir has no files", async () => {
 		const emptyDir = join(tempDir, "empty");
 		await mkdir(emptyDir, { recursive: true });
@@ -143,6 +175,92 @@ describe("PromptLoader", () => {
 
 			// Should not throw, just return empty
 			expect(loader.loadAdapterCapabilities("claude-code")).toBe("");
+		});
+	});
+
+	describe("locale-aware resolution", () => {
+		beforeEach(async () => {
+			await writeFile(join(builtinDir, "planner.cn.md"), "中文 planner 提示\n\n{{memory}}");
+		});
+
+		it("picks the .cn.md variant when locale is zh-CN and it exists", async () => {
+			const loader = new PromptLoader(builtinDir, "zh-CN");
+			await loader.load(tempDir);
+
+			expect(loader.getRaw("planner")).toBe("中文 planner 提示\n\n{{memory}}");
+		});
+
+		it("falls back to the plain .md when locale is zh-CN but no .cn.md exists", async () => {
+			// state-analyzer.md has no .cn.md sibling in this test fixture set
+			const loader = new PromptLoader(builtinDir, "zh-CN");
+			await loader.load(tempDir);
+
+			expect(loader.getRaw("state-analyzer")).toBe("Default state analyzer prompt\n\n{{memory}}");
+		});
+
+		it("always picks the plain .md under en-US even when a .cn.md sibling exists", async () => {
+			const loader = new PromptLoader(builtinDir, "en-US");
+			await loader.load(tempDir);
+
+			expect(loader.getRaw("planner")).toBe("Default planner prompt\n\n{{memory}}");
+		});
+
+		it("defaults to en-US behavior when no locale is passed", async () => {
+			const loader = new PromptLoader(builtinDir);
+			await loader.load(tempDir);
+
+			expect(loader.getRaw("planner")).toBe("Default planner prompt\n\n{{memory}}");
+		});
+
+		it("interpolates {{variable}}s identically for the .cn.md variant", async () => {
+			const loader = new PromptLoader(builtinDir, "zh-CN");
+			await loader.load(tempDir);
+
+			const result = loader.resolve("planner", { memory: "一些记忆内容" });
+			expect(result).toContain("一些记忆内容");
+			expect(result).not.toContain("{{memory}}");
+		});
+
+		it("prefers project-level .cn.md over builtin .md under zh-CN", async () => {
+			const promptsDir = join(tempDir, ".cliclaw", "prompts");
+			await mkdir(promptsDir, { recursive: true });
+			await writeFile(join(promptsDir, "planner.cn.md"), "项目级中文 planner");
+
+			const loader = new PromptLoader(builtinDir, "zh-CN");
+			await loader.load(tempDir);
+
+			expect(loader.getRaw("planner")).toBe("项目级中文 planner");
+		});
+
+		it("reloadIfChanged() picks up edits to the .cn.md file under zh-CN", async () => {
+			const loader = new PromptLoader(builtinDir, "zh-CN");
+			await loader.load(tempDir);
+			expect(loader.getRaw("planner")).toBe("中文 planner 提示\n\n{{memory}}");
+
+			// Bump the .cn.md mtime forward and change its content.
+			const future = new Date(Date.now() + 5000);
+			await writeFile(join(builtinDir, "planner.cn.md"), "更新后的中文 planner");
+			await utimes(join(builtinDir, "planner.cn.md"), future, future);
+
+			loader.reloadIfChanged("planner");
+			expect(loader.getRaw("planner")).toBe("更新后的中文 planner");
+		});
+
+		it("resolves .cn.md adapter capabilities under zh-CN and falls back to .md when absent", async () => {
+			const adaptersDir = join(builtinDir, "adapters");
+			await mkdir(adaptersDir, { recursive: true });
+			await writeFile(join(adaptersDir, "claude-code.md"), "Claude Code capabilities (en)");
+			await writeFile(join(adaptersDir, "claude-code.cn.md"), "Claude Code 能力说明 (中文)");
+			await writeFile(join(adaptersDir, "codex.md"), "Codex capabilities (en only)");
+
+			const zhLoader = new PromptLoader(builtinDir, "zh-CN");
+			await zhLoader.load(tempDir);
+			expect(zhLoader.loadAdapterCapabilities("claude-code")).toBe("Claude Code 能力说明 (中文)");
+			expect(zhLoader.loadAdapterCapabilities("codex")).toBe("Codex capabilities (en only)");
+
+			const enLoader = new PromptLoader(builtinDir, "en-US");
+			await enLoader.load(tempDir);
+			expect(enLoader.loadAdapterCapabilities("claude-code")).toBe("Claude Code capabilities (en)");
 		});
 	});
 });

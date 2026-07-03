@@ -3,6 +3,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SupportedLocale } from "../utils/locale.js";
+import { logger } from "../utils/logger.js";
 
 export type PromptName =
 	| "planner"
@@ -43,12 +45,29 @@ export class PromptLoader {
 	private globalContext: Record<string, string> = {};
 	private builtinDir: string;
 	private projectDir?: string;
+	private locale: SupportedLocale;
 	// mtime cache for hot-reload (per prompt name): tracks the mtime of the
 	// last-read file across layered dirs, so we skip disk reads when nothing changed.
 	private mtimeCache: Map<string, number> = new Map();
 
-	constructor(builtinDir?: string) {
+	constructor(builtinDir?: string, locale?: SupportedLocale) {
 		this.builtinDir = builtinDir ?? DEFAULT_BUILTIN_DIR;
+		this.locale = locale ?? "en-US";
+	}
+
+	/** Update the active locale (e.g. after a config change). Takes effect on the next load()/reload. */
+	setLocale(locale: SupportedLocale): void {
+		this.locale = locale;
+	}
+
+	/**
+	 * Candidate file names for `fileName`, most-preferred first.
+	 * Under zh-CN, prefer the sibling `<name>.cn.md` and fall back to `<name>.md`.
+	 */
+	private candidateFileNames(fileName: string): string[] {
+		if (this.locale !== "zh-CN") return [fileName];
+		const cnFileName = fileName.replace(/\.md$/, ".cn.md");
+		return [cnFileName, fileName];
 	}
 
 	async load(projectDir?: string): Promise<void> {
@@ -89,12 +108,16 @@ export class PromptLoader {
 		if (this.mtimeCache.get(name) === mtime) return;
 
 		const dirs = this.layeredDirs();
+		const candidates = this.candidateFileNames(fileName);
 		let content: string | undefined;
 		for (const dir of dirs) {
-			try {
-				content = readFileSync(join(dir, fileName), "utf-8");
-			} catch {
-				// File missing in this layer — skip
+			for (const candidate of candidates) {
+				try {
+					content = readFileSync(join(dir, candidate), "utf-8");
+					break;
+				} catch {
+					// File missing in this layer — skip
+				}
 			}
 		}
 		if (content !== undefined) {
@@ -109,17 +132,19 @@ export class PromptLoader {
 		return dirs;
 	}
 
-	/** Max mtime (ms) across layered files for `name`, or undefined if none exist. */
+	/** Max mtime (ms) across layered files (all locale candidates) for `name`, or undefined if none exist. */
 	private latestMtime(name: PromptName): number | undefined {
 		const fileName = PROMPT_FILE_MAP[name];
 		if (!fileName) return undefined;
 		let latest: number | undefined;
 		for (const dir of this.layeredDirs()) {
-			try {
-				const mtime = statSync(join(dir, fileName)).mtimeMs;
-				if (latest === undefined || mtime > latest) latest = mtime;
-			} catch {
-				// Missing in this layer
+			for (const candidate of this.candidateFileNames(fileName)) {
+				try {
+					const mtime = statSync(join(dir, candidate)).mtimeMs;
+					if (latest === undefined || mtime > latest) latest = mtime;
+				} catch {
+					// Missing in this layer
+				}
 			}
 		}
 		return latest;
@@ -128,7 +153,7 @@ export class PromptLoader {
 	resolve(name: PromptName, context?: Record<string, string>): string {
 		const raw = this.prompts.get(name) ?? "";
 		const mergedContext = { ...this.globalContext, ...context };
-		return this.replaceVars(raw, mergedContext);
+		return this.replaceVars(raw, mergedContext, name);
 	}
 
 	setGlobalContext(ctx: Record<string, string>): void {
@@ -145,11 +170,14 @@ export class PromptLoader {
 
 	private async loadFromDir(dir: string): Promise<void> {
 		for (const [name, fileName] of Object.entries(PROMPT_FILE_MAP)) {
-			try {
-				const content = await readFile(join(dir, fileName), "utf-8");
-				this.prompts.set(name, content.trim());
-			} catch {
-				// File doesn't exist — skip silently
+			for (const candidate of this.candidateFileNames(fileName)) {
+				try {
+					const content = await readFile(join(dir, candidate), "utf-8");
+					this.prompts.set(name, content.trim());
+					break;
+				} catch {
+					// File doesn't exist — skip silently, try next candidate
+				}
 			}
 		}
 
@@ -157,9 +185,19 @@ export class PromptLoader {
 		const adaptersDir = join(dir, "adapters");
 		try {
 			const entries = await readdir(adaptersDir);
+			const entrySet = new Set(entries);
 			for (const entry of entries) {
 				if (!entry.endsWith(".md")) continue;
-				const name = basename(entry, ".md");
+				const isCn = entry.endsWith(".cn.md");
+				const name = isCn ? basename(entry, ".cn.md") : basename(entry, ".md");
+				if (this.locale === "zh-CN") {
+					// Skip the plain .md if a .cn.md sibling exists for this name —
+					// the .cn.md entry is preferred regardless of readdir order.
+					if (!isCn && entrySet.has(`${name}.cn.md`)) continue;
+				} else if (isCn) {
+					// en-US never uses .cn.md variants
+					continue;
+				}
 				const content = await readFile(join(adaptersDir, entry), "utf-8");
 				this.adapterCapabilities.set(name, content.trim());
 			}
@@ -168,8 +206,14 @@ export class PromptLoader {
 		}
 	}
 
-	private replaceVars(template: string, context: Record<string, string>): string {
+	private replaceVars(template: string, context: Record<string, string>, promptName?: string): string {
 		return template.replace(/\{\{(\w[\w-]*)\}\}/g, (_match, varName) => {
+			if (!(varName in context)) {
+				logger.warn(
+					"prompt-loader",
+					`Unknown template variable {{${varName}}} in prompt "${promptName ?? "unknown"}" — replaced with empty string`,
+				);
+			}
 			return context[varName] ?? "";
 		});
 	}
