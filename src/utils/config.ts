@@ -149,9 +149,15 @@ export interface CliclawConfig {
 	mcpServers?: Record<string, McpServerDefinition>;
 }
 
-const CONFIG_DIR = join(homedir(), ".cliclaw");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const SERVER_STATE_FILE = join(CONFIG_DIR, "server-state.json");
+/**
+ * Root of Cliclaw's global storage (config, memory, logs, learning, ...).
+ * Defaults to `~/.cliclaw`; the `CLICLAW_HOME` env var overrides it (tests set
+ * it to a temp dir so they never touch the real home directory). Resolved
+ * lazily on every call so an env change made after module load still applies.
+ */
+function cliclawHome(): string {
+	return process.env.CLICLAW_HOME || join(homedir(), ".cliclaw");
+}
 
 export interface ServerRuntimeState {
 	pid: number;
@@ -221,28 +227,29 @@ const DEFAULT_CONFIG: CliclawConfig = {
 };
 
 export function getConfigDir(): string {
-	return CONFIG_DIR;
+	return cliclawHome();
 }
 
 export function getConfigFilePath(): string {
-	return CONFIG_FILE;
+	return join(cliclawHome(), "config.json");
 }
 
 export function getServerStateFilePath(): string {
-	return SERVER_STATE_FILE;
+	return join(cliclawHome(), "server-state.json");
 }
 
 export async function ensureConfigDir(): Promise<void> {
-	await mkdir(CONFIG_DIR, { recursive: true });
+	await mkdir(cliclawHome(), { recursive: true });
 }
 
 export async function loadConfig(): Promise<CliclawConfig> {
-	if (!existsSync(CONFIG_FILE)) {
+	const configFile = getConfigFilePath();
+	if (!existsSync(configFile)) {
 		return { ...DEFAULT_CONFIG };
 	}
 
 	try {
-		const raw = await readFile(CONFIG_FILE, "utf-8");
+		const raw = await readFile(configFile, "utf-8");
 		const userConfig = JSON.parse(raw);
 
 		// Deep merge with defaults
@@ -298,16 +305,17 @@ export function normalizeAgents(config: CliclawConfig, userProvidedEnabled: bool
 
 export async function saveConfig(config: CliclawConfig): Promise<void> {
 	await ensureConfigDir();
-	await writeFile(CONFIG_FILE, JSON.stringify(config, null, "\t"), "utf-8");
+	await writeFile(getConfigFilePath(), JSON.stringify(config, null, "\t"), "utf-8");
 }
 
 export async function loadServerRuntimeState(): Promise<ServerRuntimeState | null> {
-	if (!existsSync(SERVER_STATE_FILE)) {
+	const stateFile = getServerStateFilePath();
+	if (!existsSync(stateFile)) {
 		return null;
 	}
 
 	try {
-		const raw = await readFile(SERVER_STATE_FILE, "utf-8");
+		const raw = await readFile(stateFile, "utf-8");
 		const parsed = JSON.parse(raw) as Partial<ServerRuntimeState>;
 		if (
 			typeof parsed.pid !== "number" ||
@@ -338,12 +346,12 @@ export async function loadServerRuntimeState(): Promise<ServerRuntimeState | nul
 
 export async function saveServerRuntimeState(state: ServerRuntimeState): Promise<void> {
 	await ensureConfigDir();
-	await writeFile(SERVER_STATE_FILE, JSON.stringify(state, null, "\t"), "utf-8");
+	await writeFile(getServerStateFilePath(), JSON.stringify(state, null, "\t"), "utf-8");
 }
 
 export async function clearServerRuntimeState(): Promise<void> {
 	try {
-		await unlink(SERVER_STATE_FILE);
+		await unlink(getServerStateFilePath());
 	} catch (err: any) {
 		if (err?.code !== "ENOENT") {
 			throw err;
@@ -352,13 +360,13 @@ export async function clearServerRuntimeState(): Promise<void> {
 }
 
 export async function getAgentRunsDir(): Promise<string> {
-	const dir = join(CONFIG_DIR, "sessions");
+	const dir = join(cliclawHome(), "sessions");
 	await mkdir(dir, { recursive: true });
 	return dir;
 }
 
 export async function getLogsDir(): Promise<string> {
-	const dir = join(CONFIG_DIR, "logs");
+	const dir = join(cliclawHome(), "logs");
 	await mkdir(dir, { recursive: true });
 	return dir;
 }
@@ -368,14 +376,14 @@ export async function getLogsDir(): Promise<string> {
  * Layout: ~/.cliclaw/ (storageDir) → ~/.cliclaw/memory/*.md
  */
 export function getGlobalStorageDir(): string {
-	return CONFIG_DIR;
+	return cliclawHome();
 }
 
 /**
  * Get the global SQLite database path.
  */
 export function getGlobalDbPath(): string {
-	return join(CONFIG_DIR, "memory.sqlite");
+	return join(cliclawHome(), "memory.sqlite");
 }
 
 /**

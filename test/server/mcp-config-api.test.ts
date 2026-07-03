@@ -1,12 +1,11 @@
-import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rm } from "node:fs/promises";
+import { afterEach, describe, expect, it } from "vitest";
 import { CommandRegistry } from "../../src/server/command-registry.js";
 import { type ServerInstance, startServer } from "../../src/server/index.js";
+import { getConfigFilePath } from "../../src/utils/config.js";
 
-const configFile = join(homedir(), ".cliclaw", "config.json");
+// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+const configFile = getConfigFilePath();
 
 function createMainAgentMock() {
 	return {
@@ -47,25 +46,14 @@ function getCookieHeader(response: Response): string {
 
 describe("MCP Server Config API", () => {
 	let server: ServerInstance | null = null;
-	let originalConfig: string | null = null;
-
-	beforeEach(async () => {
-		if (existsSync(configFile)) {
-			originalConfig = await readFile(configFile, "utf-8");
-		} else {
-			originalConfig = null;
-		}
-	});
 
 	afterEach(async () => {
 		if (server) {
 			await server.close();
 			server = null;
 		}
-		// Restore original config
-		if (originalConfig !== null) {
-			await writeFile(configFile, originalConfig, "utf-8");
-		}
+		// Start each test from a pristine (absent) sandbox config.
+		await rm(configFile, { force: true });
 	});
 
 	async function startAndGetCookie() {
@@ -79,13 +67,7 @@ describe("MCP Server Config API", () => {
 	}
 
 	it("GET /api/config/mcp-servers returns empty object when no servers configured", async () => {
-		// Ensure config has no mcpServers
-		if (existsSync(configFile)) {
-			const raw = JSON.parse(await readFile(configFile, "utf-8"));
-			delete raw.mcpServers;
-			await writeFile(configFile, JSON.stringify(raw), "utf-8");
-		}
-
+		// No sandbox config file exists → loadConfig() falls back to defaults (no mcpServers).
 		const cookie = await startAndGetCookie();
 		const res = await fetch(`http://127.0.0.1:${server!.port}/api/config/mcp-servers`, {
 			headers: { Cookie: cookie },

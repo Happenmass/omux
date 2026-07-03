@@ -3,7 +3,6 @@
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
@@ -716,7 +715,7 @@ async function main(): Promise<void> {
 	let learningChat: LearningChat | undefined;
 
 	if (config.learning.enabled) {
-		const learningDiffDir = join(homedir(), ".cliclaw", "learning", "diffs");
+		const learningDiffDir = join(getConfigDir(), "learning", "diffs");
 		learningStore = new LearningStore(memoryStore.getDb(), learningDiffDir);
 		changeTracker = new ChangeTracker();
 		promptTracker = new PromptTracker();

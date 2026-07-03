@@ -1,12 +1,10 @@
 import { mkdir, rm, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import type { McpServerDefinition } from "./config.js";
+import { getConfigDir, type McpServerDefinition } from "./config.js";
 
-const MCP_CONFIG_DIR = join(homedir(), ".cliclaw", "tmp", "mcp-configs");
-
+// Resolved lazily via getConfigDir() so the CLICLAW_HOME override applies.
 export function getMcpConfigDir(): string {
-	return MCP_CONFIG_DIR;
+	return join(getConfigDir(), "tmp", "mcp-configs");
 }
 
 /**
@@ -21,8 +19,8 @@ export async function generateMcpConfigFile(
 	servers: Record<string, McpServerDefinition>,
 	sessionName: string,
 ): Promise<string> {
-	await mkdir(MCP_CONFIG_DIR, { recursive: true });
-	const filePath = join(MCP_CONFIG_DIR, `${sessionName}.json`);
+	await mkdir(getMcpConfigDir(), { recursive: true });
+	const filePath = join(getMcpConfigDir(), `${sessionName}.json`);
 	const sanitized: Record<string, Omit<McpServerDefinition, "description">> = {};
 	for (const [name, def] of Object.entries(servers)) {
 		const { description: _description, ...runtime } = def;
@@ -38,7 +36,7 @@ export async function generateMcpConfigFile(
  * Does not throw if the file doesn't exist.
  */
 export async function cleanupMcpConfigFile(sessionName: string): Promise<void> {
-	const filePath = join(MCP_CONFIG_DIR, `${sessionName}.json`);
+	const filePath = join(getMcpConfigDir(), `${sessionName}.json`);
 	try {
 		await unlink(filePath);
 	} catch (err: any) {
@@ -54,7 +52,7 @@ export async function cleanupMcpConfigFile(sessionName: string): Promise<void> {
  */
 export async function cleanupAllMcpConfigFiles(): Promise<void> {
 	try {
-		await rm(MCP_CONFIG_DIR, { recursive: true, force: true });
+		await rm(getMcpConfigDir(), { recursive: true, force: true });
 	} catch (err: any) {
 		if (err?.code !== "ENOENT") {
 			throw err;

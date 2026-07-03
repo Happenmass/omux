@@ -1,8 +1,8 @@
 import { readFileSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getConfigDir } from "../utils/config.js";
 import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 
@@ -77,7 +77,7 @@ export class PromptLoader {
 		await this.loadFromDir(this.builtinDir);
 
 		// Layer 2: User-level overrides (~/.cliclaw/prompts/*.md)
-		const userPromptsDir = join(homedir(), ".cliclaw", "prompts");
+		const userPromptsDir = join(getConfigDir(), "prompts");
 		await this.loadFromDir(userPromptsDir);
 
 		// Layer 3: Project-level overrides ({project}/.cliclaw/prompts/*.md)
@@ -127,7 +127,7 @@ export class PromptLoader {
 	}
 
 	private layeredDirs(): string[] {
-		const dirs = [this.builtinDir, join(homedir(), ".cliclaw", "prompts")];
+		const dirs = [this.builtinDir, join(getConfigDir(), "prompts")];
 		if (this.projectDir) dirs.push(join(this.projectDir, ".cliclaw", "prompts"));
 		return dirs;
 	}

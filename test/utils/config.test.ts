@@ -1,10 +1,11 @@
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CliclawConfig,
+	getConfigDir,
+	getConfigFilePath,
 	getGlobalStorageDir,
 	loadConfig,
 	type McpServerDefinition,
@@ -12,32 +13,30 @@ import {
 	saveConfig,
 } from "../../src/utils/config.js";
 
+// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+const configDir = getConfigDir();
+const configFile = getConfigFilePath();
+
 describe("getGlobalStorageDir", () => {
-	it("returns ~/.cliclaw/", () => {
-		const dir = getGlobalStorageDir();
-		expect(dir).toBe(join(homedir(), ".cliclaw"));
+	it("honors the CLICLAW_HOME override (set by test/setup.ts)", () => {
+		expect(getGlobalStorageDir()).toBe(process.env.CLICLAW_HOME);
+	});
+
+	it("falls back to ~/.cliclaw when CLICLAW_HOME is unset", () => {
+		const saved = process.env.CLICLAW_HOME;
+		delete process.env.CLICLAW_HOME;
+		try {
+			// homedir() itself is redirected to the sandbox by test/setup.ts.
+			expect(getGlobalStorageDir()).toBe(join(homedir(), ".cliclaw"));
+		} finally {
+			process.env.CLICLAW_HOME = saved;
+		}
 	});
 });
 
 describe("mcpServers config", () => {
-	const configDir = join(homedir(), ".cliclaw");
-	const configFile = join(configDir, "config.json");
-	let originalContent: string | null = null;
-
-	beforeEach(async () => {
-		if (existsSync(configFile)) {
-			originalContent = await readFile(configFile, "utf-8");
-		} else {
-			originalContent = null;
-		}
-	});
-
 	afterEach(async () => {
-		if (originalContent !== null) {
-			await writeFile(configFile, originalContent, "utf-8");
-		} else if (existsSync(configFile)) {
-			await rm(configFile);
-		}
+		await rm(configFile, { force: true });
 	});
 
 	it("returns undefined mcpServers when config has no mcpServers key", async () => {
@@ -92,16 +91,8 @@ describe("mcpServers config", () => {
 });
 
 describe("autoContinue config", () => {
-	const configDir = join(homedir(), ".cliclaw");
-	const configFile = join(configDir, "config.json");
-	let saved: string | null = null;
-
-	beforeEach(async () => {
-		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
-	});
 	afterEach(async () => {
-		if (saved !== null) await writeFile(configFile, saved, "utf-8");
-		else if (existsSync(configFile)) await rm(configFile);
+		await rm(configFile, { force: true });
 	});
 
 	it("defaults autoContinue to disabled with a maxConsecutive cap", async () => {
@@ -120,16 +111,8 @@ describe("autoContinue config", () => {
 });
 
 describe("autoTidy config", () => {
-	const configDir = join(homedir(), ".cliclaw");
-	const configFile = join(configDir, "config.json");
-	let saved: string | null = null;
-
-	beforeEach(async () => {
-		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
-	});
 	afterEach(async () => {
-		if (saved !== null) await writeFile(configFile, saved, "utf-8");
-		else if (existsSync(configFile)) await rm(configFile);
+		await rm(configFile, { force: true });
 	});
 
 	it("defaults memory.autoTidy to disabled at 23:30", async () => {
@@ -193,16 +176,8 @@ describe("normalizeAgents", () => {
 });
 
 describe("agent activation config (loadConfig)", () => {
-	const configDir = join(homedir(), ".cliclaw");
-	const configFile = join(configDir, "config.json");
-	let saved: string | null = null;
-
-	beforeEach(async () => {
-		saved = existsSync(configFile) ? await readFile(configFile, "utf-8") : null;
-	});
 	afterEach(async () => {
-		if (saved !== null) await writeFile(configFile, saved, "utf-8");
-		else if (existsSync(configFile)) await rm(configFile);
+		await rm(configFile, { force: true });
 	});
 
 	it("defaults to claude-code only", async () => {

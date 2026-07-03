@@ -1,9 +1,8 @@
 import { existsSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { McpServerDefinition } from "../../src/utils/config.js";
+import { getConfigDir, type McpServerDefinition } from "../../src/utils/config.js";
 import {
 	buildMcpServersSummary,
 	cleanupAllMcpConfigFiles,
@@ -13,7 +12,8 @@ import {
 	selectMcpServers,
 } from "../../src/utils/mcp-config.js";
 
-const MCP_DIR = join(homedir(), ".cliclaw", "tmp", "mcp-configs");
+// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+const MCP_DIR = join(getConfigDir(), "tmp", "mcp-configs");
 
 afterEach(async () => {
 	// Clean up any test artifacts
