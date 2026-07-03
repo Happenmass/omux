@@ -15,7 +15,20 @@ export interface LLMUsage {
 export interface ContextManagerConfig {
 	llmClient: LLMClient;
 	promptLoader: PromptLoader;
+	/**
+	 * Explicit context-window override in tokens. When set, it wins over the known-model
+	 * lookup and the built-in default. Wire `config.context.contextWindowLimit` (or the
+	 * `--context-window` CLI flag) in here. Only a positive number is treated as an override —
+	 * `0` / `undefined` means "not explicitly configured" so the model lookup can apply.
+	 */
 	contextWindowLimit?: number;
+	/**
+	 * Model id (e.g. "claude-sonnet-4-6", "gpt-5.4", "deepseek-chat"). Used ONLY to derive a
+	 * sensible context-window default via KNOWN_CONTEXT_WINDOWS when no explicit
+	 * `contextWindowLimit` override is provided. Optional — omitting it falls back to the
+	 * 500k default with a loud startup warning.
+	 */
+	model?: string;
 	compressionThreshold?: number;
 	/** Memory flush threshold (ratio of contextWindowLimit). Must be < compressionThreshold. Default 0.6. */
 	flushThreshold?: number;
@@ -84,7 +97,7 @@ export class ContextManager {
 	constructor(config: ContextManagerConfig) {
 		this.llmClient = config.llmClient;
 		this.promptLoader = config.promptLoader;
-		this.contextWindowLimit = config.contextWindowLimit ?? 500000;
+		this.contextWindowLimit = resolveContextWindowLimit(config.contextWindowLimit, config.model);
 		this.compressionThreshold = config.compressionThreshold ?? 0.7;
 		this.flushThreshold = config.flushThreshold ?? 0.6;
 		this.toolResultRetention = config.toolResultRetention ?? 20;
@@ -99,7 +112,6 @@ export class ContextManager {
 				`flushThreshold (${this.flushThreshold}) must be less than compressionThreshold (${this.compressionThreshold})`,
 			);
 		}
-
 	}
 
 	// ─── System Prompt ────────────────────────────────────
@@ -215,7 +227,14 @@ export class ContextManager {
 
 		// 1. Restore conversation messages
 		const messages = store.loadMessages();
-		this.conversation = messages;
+		// Repair any dangling tool calls (assistant tool_call with no paired role:"tool" result).
+		// A SIGKILL between persisting the assistant function_call message and persisting its
+		// tool result bricks the conversation: the OpenAI Responses API 400s ("No tool output
+		// found for function call …") on EVERY subsequent turn, and the other providers can also
+		// choke on an orphaned function_call. This repair is protocol-agnostic — it synthesizes a
+		// placeholder tool result for every unmatched call so the restored history is always valid.
+		const repaired = repairDanglingToolCalls(messages);
+		this.conversation = repaired;
 
 		// 2. Restore compressed_history module
 		const compressedHistory = store.loadContextState("compressed_history");
@@ -276,7 +295,7 @@ export class ContextManager {
 		//        is whatever it sees in `input` — there's nothing it has to do differently
 		//        because cliclaw's process happened to restart between turns.
 		//    The conversation is restored verbatim; the next user message just continues it.
-		const restoredCount = messages.length;
+		const restoredCount = this.conversation.length;
 		logger.info("context-manager", `Restored ${restoredCount} messages, compactionCount=${this.compactionCount}`);
 		return restoredCount;
 	}
@@ -414,7 +433,7 @@ export class ContextManager {
 
 		for (const msg of messages) {
 			if (msg.role === "tool" && typeof msg.content === "string" && msg.content.length > singleCapChars) {
-				msg.content = msg.content.slice(0, singleCapChars) + "\n...[truncated]";
+				msg.content = `${msg.content.slice(0, singleCapChars)}\n...[truncated]`;
 			}
 		}
 
@@ -472,7 +491,7 @@ export class ContextManager {
 		const isError =
 			firstLine.startsWith("Error:") || firstLine.startsWith("Failed") || firstLine.includes("[exit code:");
 		const status = isError ? "✗" : "✓";
-		const summary = firstLine.length > 150 ? firstLine.slice(0, 150) + "..." : firstLine;
+		const summary = firstLine.length > 150 ? `${firstLine.slice(0, 150)}...` : firstLine;
 		return `[${toolName} → ${status}] ${summary}`;
 	}
 
@@ -482,7 +501,7 @@ export class ContextManager {
 	private truncateToolCallArgs(block: ToolCallContent): void {
 		for (const [key, value] of Object.entries(block.arguments)) {
 			if (typeof value === "string" && value.length > 200) {
-				block.arguments[key] = value.slice(0, 200) + "...";
+				block.arguments[key] = `${value.slice(0, 200)}...`;
 			}
 		}
 	}
@@ -553,7 +572,10 @@ export class ContextManager {
 			summary = await this.compressLegacy(id);
 			logger.info("context-manager", `[compact ${id}] legacy path returned after ${Date.now() - tLegacy}ms`);
 		} else {
-			logger.info("context-manager", `[compact ${id}] in-chain path succeeded after ${inChainElapsed}ms (no fallback needed)`);
+			logger.info(
+				"context-manager",
+				`[compact ${id}] in-chain path succeeded after ${inChainElapsed}ms (no fallback needed)`,
+			);
 		}
 
 		this.modules.set("compressed_history", summary);
@@ -634,10 +656,7 @@ export class ContextManager {
 			return "";
 		}
 
-		const messages: LLMMessage[] = [
-			...this.conversation,
-			{ role: "user", content: COMPACT_DIRECTIVE },
-		];
+		const messages: LLMMessage[] = [...this.conversation, { role: "user", content: COMPACT_DIRECTIVE }];
 
 		// Snapshot the exact non-input fields about to be sent. Compare these against the prior
 		// regular-turn values in MainAgent.streamLLMResponse — if any of them differ, the L2
@@ -855,6 +874,88 @@ export class ContextManager {
 
 // ─── Constants ──────────────────────────────────────────
 
+/**
+ * Default context window when neither an explicit override nor a known-model match applies.
+ * Deliberately large (500k) to match earlier behavior, but it is provider-specific and unsafe
+ * for smaller-window models — hence the loud warning when we fall back to it (see
+ * `resolveContextWindowLimit`). Prefer setting `config.context.contextWindowLimit` for any
+ * model whose window differs.
+ */
+const DEFAULT_CONTEXT_WINDOW = 500000;
+
+/**
+ * Best-effort context-window sizes (in tokens) keyed by a lowercased SUBSTRING of the model id.
+ * Only consulted when no explicit `contextWindowLimit` override is provided. This is intentionally
+ * conservative and non-exhaustive: entries are ordered so the FIRST substring that matches the
+ * model id wins, so put more-specific ids before broader family prefixes. When a model isn't
+ * listed, we fall back to DEFAULT_CONTEXT_WINDOW and log a warning so the operator can pin the
+ * real window via config.
+ *
+ * NOTE: these are the model's TOTAL window; the manager derives its flush/compress/tool-result
+ * thresholds as ratios of this value, so an accurate window keeps compaction firing before the
+ * provider hard-errors.
+ */
+const KNOWN_CONTEXT_WINDOWS: Array<[substring: string, tokens: number]> = [
+	// Claude — 200k standard window. (The 1M-token beta is opt-in and not implied by the id
+	// alone; set config.context.contextWindowLimit=1000000 explicitly for those sessions.)
+	["claude", 200000],
+	// OpenAI GPT / o-series (Responses + Chat Completions) — 200k class.
+	["gpt-5", 400000],
+	["gpt-4.1", 1000000],
+	["gpt-4o", 128000],
+	["gpt-4", 128000],
+	["o4", 200000],
+	["o3", 200000],
+	["o1", 200000],
+	// DeepSeek — 128k (v3 / chat / reasoner).
+	["deepseek", 128000],
+	// Moonshot / Kimi — 128k class (kimi-k2 and friends).
+	["kimi", 128000],
+	["moonshot", 128000],
+	// Google Gemini — 1M+ window.
+	["gemini", 1000000],
+	// xAI Grok — 128k class.
+	["grok", 128000],
+	// Mistral large — 128k class.
+	["mistral", 128000],
+	["ministral", 128000],
+	// Qwen — 128k class (long-context variants exist but aren't implied by the base id).
+	["qwen", 128000],
+];
+
+/**
+ * Resolve the effective context window in tokens.
+ *
+ * Resolution order:
+ *   1. explicit `override` (config.context.contextWindowLimit / --context-window) if positive
+ *   2. KNOWN_CONTEXT_WINDOWS lookup by model-id substring
+ *   3. DEFAULT_CONTEXT_WINDOW (500k) — logged as a loud warning, since it is unsafe for
+ *      smaller-window models (compaction would fire far too late and the provider hard-errors).
+ */
+function resolveContextWindowLimit(override: number | undefined, model: string | undefined): number {
+	if (typeof override === "number" && override > 0) {
+		return override;
+	}
+	if (model) {
+		const id = model.toLowerCase();
+		for (const [substr, tokens] of KNOWN_CONTEXT_WINDOWS) {
+			if (id.includes(substr)) {
+				logger.info(
+					"context-manager",
+					`Context window resolved to ${tokens} tokens for model "${model}" (matched "${substr}")`,
+				);
+				return tokens;
+			}
+		}
+	}
+	logger.warn(
+		"context-manager",
+		`Context window for model "${model ?? "(unknown)"}" is not recognized — falling back to the ${DEFAULT_CONTEXT_WINDOW}-token default. ` +
+			`This is provider-specific and may exceed the model's real limit; set config.context.contextWindowLimit (or --context-window) to the model's actual window.`,
+	);
+	return DEFAULT_CONTEXT_WINDOW;
+}
+
 const COMPACTED_PLACEHOLDER = "[compacted: tool output removed to free context]";
 
 const POST_COMPACTION_CONTEXT = `[CONTEXT_RECOVERY] The conversation history has been compressed. Key context is preserved in the compressed_history section of the system prompt. Continue working toward the goal. Use memory_search if you need to recall prior decisions or context.`;
@@ -878,6 +979,8 @@ Cover at minimum:
   - Tasks completed and tasks still pending
   - Active agents (tmux session ids, current task), in-flight tool calls, working directories
 
+If your system prompt already contains a compressed_history section from an earlier compaction, fold all of its still-relevant content into this new summary so nothing from earlier compactions is lost.
+
 Output the summary INSIDE <compaction_summary>...</compaction_summary> tags. No preamble, no commentary outside the tags. Do NOT call any tools — produce text only.
 </system_compaction_request>`;
 
@@ -890,6 +993,61 @@ function extractCompactionSummary(text: string): string {
 	const match = text.match(/<compaction_summary>([\s\S]*?)<\/compaction_summary>/i);
 	if (match) return match[1].trim();
 	return text.trim();
+}
+
+// ─── Dangling tool-call repair ───────────────────────────
+
+/**
+ * Placeholder tool result synthesized for an assistant `tool_call` that has no paired
+ * `role:"tool"` result in restored history. See `repairDanglingToolCalls`.
+ */
+const INTERRUPTED_TOOL_RESULT = "[interrupted: no result recorded]";
+
+/**
+ * Protocol-agnostic repair for restored conversations: every assistant `tool_call` block must
+ * be followed (somewhere later in the message list) by a `role:"tool"` message whose
+ * `toolCallId` matches. A crash between persisting the assistant function_call message and its
+ * tool result leaves a dangling call that permanently 400s the OpenAI Responses API (and can
+ * break Anthropic / Chat-Completions replay too), with no per-provider repair on those paths.
+ *
+ * This synthesizes a placeholder tool result for each unmatched call and inserts it in the
+ * correct position — immediately after the assistant message that issued the call, so the
+ * pairing is contiguous. Returns a new array; the input is not mutated. If nothing is dangling
+ * the original array is returned unchanged.
+ */
+function repairDanglingToolCalls(messages: LLMMessage[]): LLMMessage[] {
+	// Collect every tool_call_id that already has a matching tool result.
+	const resultIds = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role === "tool" && msg.toolCallId) {
+			resultIds.add(msg.toolCallId);
+		}
+	}
+
+	// Walk the list; whenever an assistant message issues calls that lack a result, splice a
+	// synthetic result in right after that message (before any next message is emitted).
+	const out: LLMMessage[] = [];
+	let repairs = 0;
+	for (const msg of messages) {
+		out.push(msg);
+		if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+		for (const block of msg.content) {
+			if (block.type !== "tool_call") continue;
+			if (resultIds.has(block.id)) continue;
+			// Guard against duplicate tool_call ids in the same assistant block — only synthesize once.
+			resultIds.add(block.id);
+			out.push({ role: "tool", content: INTERRUPTED_TOOL_RESULT, toolCallId: block.id });
+			repairs++;
+			logger.warn(
+				"context-manager",
+				`Repaired dangling tool_call ${block.name} (id=${block.id}): synthesized "${INTERRUPTED_TOOL_RESULT}"`,
+			);
+		}
+	}
+
+	if (repairs === 0) return messages;
+	logger.info("context-manager", `Restore repaired ${repairs} dangling tool_call(s)`);
+	return out;
 }
 
 // ─── UUID generation ─────────────────────────────────────

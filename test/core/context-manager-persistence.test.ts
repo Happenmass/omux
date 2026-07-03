@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextManager } from "../../src/core/context-manager.js";
 import { ConversationStore } from "../../src/persistence/conversation-store.js";
 
@@ -154,6 +154,52 @@ describe("ContextManager Persistence", () => {
 
 			expect(count).toBe(0);
 			expect(cm.getConversationLength()).toBe(0);
+		});
+
+		it("repairs a dangling tool_call (assistant tool_call with no tool result) on restore", () => {
+			// Simulate a SIGKILL between persisting the assistant function_call message and its
+			// tool result: the assistant tool_call is persisted but the paired role:"tool" is not.
+			store.saveMessage({ role: "user", content: "run a tool" });
+			store.saveMessage({
+				role: "assistant",
+				content: [{ type: "tool_call", id: "call_123", name: "exec_command", arguments: { cmd: "ls" } }],
+			});
+			// (no tool result for call_123 — this is the brick)
+
+			const cm = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+			});
+			const count = cm.restore(store);
+
+			// A synthetic tool result was inserted right after the assistant message.
+			expect(count).toBe(3);
+			const msgs = cm.getMessages();
+			expect(msgs[1].role).toBe("assistant");
+			expect(msgs[2].role).toBe("tool");
+			expect(msgs[2].toolCallId).toBe("call_123");
+			expect(msgs[2].content).toBe("[interrupted: no result recorded]");
+		});
+
+		it("does not touch a tool_call that already has its result on restore", () => {
+			store.saveMessage({ role: "user", content: "run a tool" });
+			store.saveMessage({
+				role: "assistant",
+				content: [{ type: "tool_call", id: "call_ok", name: "exec_command", arguments: { cmd: "ls" } }],
+			});
+			store.saveMessage({ role: "tool", content: "file listing", toolCallId: "call_ok" });
+
+			const cm = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+			});
+			const count = cm.restore(store);
+
+			// Nothing synthesized — the conversation is byte-identical to what was stored.
+			expect(count).toBe(3);
+			const msgs = cm.getMessages();
+			expect(msgs[2].content).toBe("file listing");
+			expect(msgs.filter((m) => m.content === "[interrupted: no result recorded]")).toHaveLength(0);
 		});
 
 		it("repeated restarts with no new activity produce no conversation growth", () => {
