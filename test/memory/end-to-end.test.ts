@@ -277,6 +277,51 @@ describe("Memory pipeline — end-to-end", () => {
 		}
 	});
 
+	it("recovers from a transient embedding failure via retry (sync does not abort)", async () => {
+		// A provider whose embedBatch throws a transient error on its first call,
+		// then succeeds. Wired through embedBatchWithRetry, sync must recover.
+		const retryTmp = await mkdtemp(join(tmpdir(), "cliclaw-e2e-retry-"));
+		try {
+			const retryStorage = join(retryTmp, "storage");
+			await mkdir(join(retryStorage, "memory"), { recursive: true });
+			await writeFile(join(retryStorage, "memory/core.md"), MEMORY_FILES["memory/core.md"]);
+
+			const retryStore = new MemoryStore({
+				dbPath: join(retryStorage, "retry.sqlite"),
+				workspaceDir: retryTmp,
+				storageDir: retryStorage,
+				vectorEnabled: false,
+			});
+
+			let calls = 0;
+			const flakyProvider: EmbeddingProvider = {
+				id: "mock",
+				model: "e2e-mock-retry",
+				embedQuery: async () => [0, 0, 0, 0, 0, 0, 0, 0],
+				embedBatch: async (ts) => {
+					calls++;
+					if (calls === 1) {
+						const err: any = new Error("rate limited");
+						err.status = 429;
+						throw err;
+					}
+					return ts.map(() => [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]);
+				},
+			};
+
+			try {
+				const stats = await syncMemoryFiles(retryStore, { embeddingProvider: flakyProvider });
+				expect(calls).toBeGreaterThanOrEqual(2); // retried at least once
+				expect(stats.added).toBe(1);
+				expect(stats.chunksIndexed).toBeGreaterThan(0);
+			} finally {
+				retryStore.close();
+			}
+		} finally {
+			await rm(retryTmp, { recursive: true, force: true });
+		}
+	}, 15000);
+
 	it("survives a restart: closing and re-opening the store preserves search", async () => {
 		const dbPath = join(storageDir, "e2e.sqlite");
 		store.close();

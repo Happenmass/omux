@@ -1,9 +1,9 @@
-import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cosineSimilarity, searchKeyword, searchMemory, searchVector } from "../../src/memory/search.js";
 import { MemoryStore } from "../../src/memory/store.js";
-import { searchMemory, searchKeyword, searchVector, cosineSimilarity } from "../../src/memory/search.js";
 import type { EmbeddingProvider, HybridSearchConfig } from "../../src/memory/types.js";
 import { logger } from "../../src/utils/logger.js";
 
@@ -323,6 +323,23 @@ describe("Memory Hybrid Search Integration", () => {
 				expect(r.score).toBeGreaterThan(0);
 			}
 		});
+
+		it("should rank the strongest keyword match first (bm25 direction, MEM-1)", async () => {
+			// arch-002 ("Memory System") is the densest match for these terms.
+			// Before the bm25RankToScore fix, postProcess re-sorted by an INVERTED
+			// score and surfaced the weakest match first. The strongest match must
+			// come back at the top now.
+			const results = await searchMemory(store, "keyword BM25 search index FTS5", null, defaultConfig, {
+				maxResults: 5,
+				minScore: 0,
+			});
+			expect(results.length).toBeGreaterThan(0);
+			expect(results[0].snippet).toContain("BM25");
+			// Scores must be sorted descending (strongest first).
+			for (let i = 1; i < results.length; i++) {
+				expect(results[i - 1].score).toBeGreaterThanOrEqual(results[i].score);
+			}
+		});
 	});
 
 	// ─── Weight tuning ───────────────────────────────────
@@ -357,7 +374,7 @@ describe("Memory Hybrid Search Integration", () => {
 			// Should find both arch-001 (WebSocket in architecture) and debug-001 (WebSocket handler bug)
 			const ids = results.map((r) => {
 				const match = r.snippet.match(/WebSocket/);
-				return match ? true : false;
+				return !!match;
 			});
 			expect(ids.filter(Boolean).length).toBeGreaterThanOrEqual(1);
 		});
@@ -466,12 +483,7 @@ describe("Memory Hybrid Search Integration", () => {
 			});
 
 			try {
-				const results = searchVector(
-					knnStore,
-					[0.85, 0.15, 0.0, 0.1, 0.0, 0.1, 0.05, 0.0],
-					"mock-embed-v1",
-					5,
-				);
+				const results = searchVector(knnStore, [0.85, 0.15, 0.0, 0.1, 0.0, 0.1, 0.05, 0.0], "mock-embed-v1", 5);
 				expect(results[0].id).toBe("arch-001");
 				expect(knnFailures).toEqual([]);
 			} finally {
@@ -501,8 +513,12 @@ describe("Memory Hybrid Search Integration", () => {
 		});
 
 		it("should handle high-dimensional vectors", () => {
-			const a = Array(768).fill(0).map((_, i) => Math.sin(i));
-			const b = Array(768).fill(0).map((_, i) => Math.sin(i + 0.1));
+			const a = Array(768)
+				.fill(0)
+				.map((_, i) => Math.sin(i));
+			const b = Array(768)
+				.fill(0)
+				.map((_, i) => Math.sin(i + 0.1));
 			const sim = cosineSimilarity(a, b);
 			expect(sim).toBeGreaterThan(0.9); // Very similar
 			expect(sim).toBeLessThan(1.0);

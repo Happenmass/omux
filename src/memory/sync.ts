@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { logger } from "../utils/logger.js";
 import { chunkMarkdown } from "./chunker.js";
+import { embedBatchWithRetry, enforceEmbeddingMaxInputTokens } from "./embedder.js";
 import { buildFileEntry, listMemoryFiles, type MemoryStore } from "./store.js";
 import type { EmbeddingProvider, MemoryChunk } from "./types.js";
 
@@ -60,15 +61,17 @@ export async function syncMemoryFiles(
 
 		const isNew = !existing;
 
-		// Remove old chunks for this file
-		store.removeChunksByPath(entry.path);
-
-		// Read and chunk the file
+		// Read and chunk the file (async — must happen before the sync transaction)
 		const { readFile } = await import("node:fs/promises");
 		const content = await readFile(absPath, "utf-8");
-		const chunks = chunkMarkdown(content, chunking);
+		let chunks = chunkMarkdown(content, chunking);
 
-		// Embed chunks
+		// Split oversized chunks so we never 400 on a single over-limit input.
+		if (opts.embeddingProvider) {
+			chunks = enforceEmbeddingMaxInputTokens(opts.embeddingProvider, chunks);
+		}
+
+		// Embed chunks (async — must happen before the sync transaction)
 		const embeddings = await embedChunks(chunks, store, opts);
 
 		// Initialize vec table with correct dimensions on first embedding
@@ -76,29 +79,36 @@ export async function syncMemoryFiles(
 			store.initVecTable(opts.embeddingProvider.id, embeddings[0].length);
 		}
 
-		// Insert new chunks
 		const model = opts.embeddingProvider?.model ?? "none";
-		for (let i = 0; i < chunks.length; i++) {
-			const chunk = chunks[i];
-			const embedding = embeddings[i] ?? [];
-			const id = randomUUID();
 
-			store.insertChunk({
-				id,
-				path: entry.path,
-				startLine: chunk.startLine,
-				endLine: chunk.endLine,
-				hash: chunk.hash,
-				model,
-				text: chunk.text,
-				embedding,
-			});
+		// Atomically re-index this file: remove old chunks, insert new ones, and
+		// update file tracking as one unit so a crash mid-file can't diverge the
+		// chunks / chunks_fts / vec / files stores.
+		store.runInTransaction(() => {
+			store.removeChunksByPath(entry.path);
 
-			stats.chunksIndexed++;
-		}
+			for (let i = 0; i < chunks.length; i++) {
+				const chunk = chunks[i];
+				const embedding = embeddings[i] ?? [];
+				const id = randomUUID();
 
-		// Update file tracking
-		store.upsertFile(entry);
+				store.insertChunk({
+					id,
+					path: entry.path,
+					startLine: chunk.startLine,
+					endLine: chunk.endLine,
+					hash: chunk.hash,
+					model,
+					text: chunk.text,
+					embedding,
+				});
+
+				stats.chunksIndexed++;
+			}
+
+			// Update file tracking
+			store.upsertFile(entry);
+		});
 
 		if (isNew) {
 			stats.added++;
@@ -150,10 +160,12 @@ async function embedChunks(chunks: MemoryChunk[], store: MemoryStore, opts: Sync
 		}
 	}
 
-	// Batch embed uncached chunks
+	// Batch embed uncached chunks. embedBatchWithRetry backs off on transient
+	// failures (e.g. 429) instead of aborting the whole sync; auth errors still
+	// throw immediately.
 	if (needsEmbedding.length > 0) {
 		const texts = needsEmbedding.map((e) => e.text);
-		const newEmbeddings = await provider.embedBatch(texts);
+		const newEmbeddings = await embedBatchWithRetry(provider, texts);
 
 		for (let i = 0; i < needsEmbedding.length; i++) {
 			const { hash } = needsEmbedding[i];
