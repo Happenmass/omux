@@ -1,4 +1,4 @@
-// ─── Cliclaw Chat UI ──────────────────────────────
+// ─── Omux Chat UI ──────────────────────────────
 // Note: Learning Sessions panel is hidden in this UI (deprecated).
 // Backend learning REST/WS endpoints still exist; they're simply not surfaced.
 import { initI18n } from "./i18n.js";
@@ -85,7 +85,8 @@ const EXECUTION_PANEL_DEFAULT_WIDTH = 480;
 const EXECUTION_PANEL_MIN_WIDTH = 360;
 const EXECUTION_PANEL_HIDE_THRESHOLD = 200;
 
-const THEME_KEY = "cliclaw.theme";
+const THEME_KEY = "omux.theme";
+const LEGACY_THEME_KEY = "cliclaw.theme"; // legacy cliclaw key, read-only fallback
 
 const ANSI_STYLES = {
 	30: "color:#3a2f23",
@@ -320,7 +321,7 @@ function reopenExecutionPanel() {
 
 // ─── Theme ─────────────────────────────────────────
 function getStoredTheme() {
-	try { return localStorage.getItem(THEME_KEY); } catch { return null; }
+	try { return localStorage.getItem(THEME_KEY) || localStorage.getItem(LEGACY_THEME_KEY); } catch { return null; }
 }
 
 function setStoredTheme(value) {
@@ -774,11 +775,11 @@ function notifyTaskComplete() {
 	if (!("Notification" in window)) return;
 
 	if (Notification.permission === "granted") {
-		new Notification("Cliclaw", { body: "任务执行完成", icon: "/favicon.ico" });
+		new Notification("Omux", { body: "任务执行完成", icon: "/favicon.ico" });
 	} else if (Notification.permission !== "denied") {
 		Notification.requestPermission().then(function (perm) {
 			if (perm === "granted") {
-				new Notification("Cliclaw", { body: "任务执行完成", icon: "/favicon.ico" });
+				new Notification("Omux", { body: "任务执行完成", icon: "/favicon.ico" });
 			}
 		});
 	}
@@ -1048,7 +1049,7 @@ function updateMobilePeek() {
 		mobilePeekDotEl.className = "agent-tab-dot status-" + (data.takenOver ? "taken_over" : data.status);
 	}
 	if (mobilePeekNameEl) {
-		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
+		const displayName = data.name.replace(/^(?:omux-|cliclaw-)/, "");
 		mobilePeekNameEl.textContent = displayName;
 	}
 	if (mobilePeekMetaEl) {
@@ -1139,7 +1140,7 @@ function renderAgentTabs() {
 
 		const label = document.createElement("span");
 		label.className = "agent-tab-label";
-		const displayName = data.name.startsWith("cliclaw-") ? data.name.slice(8) : data.name;
+		const displayName = data.name.replace(/^(?:omux-|cliclaw-)/, "");
 		label.textContent = displayName;
 
 		btn.appendChild(dot);
