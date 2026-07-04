@@ -12,5 +12,6 @@ openspec/
 superpowers
 
 .DS_Store
+.omux
 .cliclaw
 eval/
