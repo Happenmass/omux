@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What is Cliclaw
+## What is Omux
 
-Cliclaw is a chat-based meta-orchestrator that commands CLI coding agents (Claude Code, Codex, …) via tmux. It runs as a persistent HTTP + WebSocket server with a web chat UI. The MainAgent can hold natural conversations and autonomously execute complex development tasks by driving sub-agents inside tmux panes.
+Omux is a chat-based meta-orchestrator that commands CLI coding agents (Claude Code, Codex, …) via tmux. It runs as a persistent HTTP + WebSocket server with a web chat UI. The MainAgent can hold natural conversations and autonomously execute complex development tasks by driving sub-agents inside tmux panes.
 
 Core flow: **Chat message → MainAgent (IDLE ↔ EXECUTING state machine) → Streaming LLM → Tool execution in tmux → Response via WebSocket**
 
@@ -22,7 +22,7 @@ npm run format         # biome format --write src/
 npm start              # node --max-old-space-size=8192 dist/main.js (port 3120)
 ```
 
-Subcommands of the `cliclaw` binary (handled before server start): `config`, `doctor`, `init`, `remember`.
+Subcommands of the `omux` binary (handled before server start): `config`, `doctor`, `init`, `remember`.
 
 ## Code Style
 
@@ -74,7 +74,7 @@ Persistence: `addMessage()` auto-persists to SQLite when a `ConversationStore` i
 Uses hybrid token counting: last-known API count + pending character estimation.
 
 ### Persistence — `src/persistence/`
-- `conversation-store.ts` — SQLite at `~/.cliclaw/cliclaw.db`. Tables: `chat_messages` (role, content JSON, tool_call_id, created_at) and `chat_context_state` (compressed_history, compaction_count, …). Methods: `saveMessage`, `loadMessages`, `saveContextState`, `loadContextState`, `clearAll`, `getMessageCount`.
+- `conversation-store.ts` — SQLite at `~/.omux/omux.db`. Tables: `chat_messages` (role, content JSON, tool_call_id, created_at) and `chat_context_state` (compressed_history, compaction_count, …). Methods: `saveMessage`, `loadMessages`, `saveContextState`, `loadContextState`, `clearAll`, `getMessageCount`.
 - `agent-store.ts` — per-session pane bookkeeping: `session_id`, `pane_target`, `working_dir`, `taken_over`.
 
 ### Signal & Monitoring — `src/core/`
@@ -95,14 +95,14 @@ Dual-storage: Markdown files are the source of truth, SQLite is the rebuildable 
 - `chunker.ts` — Markdown chunking (default 400 tokens / 80 overlap).
 - `sync.ts` — `syncMemoryFiles()`: incremental file-to-SQLite sync via content hash; embedding-model change triggers full re-sync.
 - `category.ts` — `categoryFromPath()`: 6 categories (core, preferences, people, todos, daily, topic) inferred from file path.
-- `persistent.ts` — `readPersistentMemory()` / `updatePersistentMemory()` / `validateProjectDir()`: read & update the global `~/.cliclaw/MEMORY.md` and per-project `<dir>/.cliclaw/MEMORY.md` (sections: user_profile, project_conventions, key_decisions, people_and_context, active_notes).
+- `persistent.ts` — `readPersistentMemory()` / `updatePersistentMemory()` / `validateProjectDir()`: read & update the global `~/.omux/MEMORY.md` and per-project `<dir>/.omux/MEMORY.md` (sections: user_profile, project_conventions, key_decisions, people_and_context, active_notes).
 - `types.ts` — `MemoryChunk`, `MemorySearchResult`, `EmbeddingProvider`, `HybridSearchConfig`, `MemoryCategory`.
 
 ### Learning Sessions — `src/core/learning-*.ts` + `change-tracker.ts` + `prompt-tracker.ts`
 Per-sub-agent change tracking with isolated learning chat. Lifecycle driven by MainAgent's `create_agent` / `send_to_agent` / `respond_to_agent` / `kill_agent` hooks — no new agent-facing tools. Gated by `config.memory.learning.enabled` (default `false`).
 
 - `change-tracker.ts` — **`ChangeTracker`**: captures git baseline at agent launch (commit SHA, or `git stash create` tree for dirty worktrees — never `git stash push`, to avoid polluting the stash stack). At kill, computes unified diff including untracked files (synthesized new-file diffs respecting `.gitignore`).
-- `learning-store.ts` — SQLite CRUD over `learning_entries` / `learning_messages` (same DB as ConversationStore). Raw diff lives at `~/.cliclaw/learning/diffs/<id>.diff`; only the path is in SQLite.
+- `learning-store.ts` — SQLite CRUD over `learning_entries` / `learning_messages` (same DB as ConversationStore). Raw diff lives at `~/.omux/learning/diffs/<id>.diff`; only the path is in SQLite.
 - `learning-summarizer.ts` — calls `llmClient.complete()` with `prompts/learning-summary.md`; one retry on JSON parse failure, locale-aware skeleton fallback on second failure.
 - `prompt-tracker.ts` — per-sub-agent prompt accumulator; pipeline retrieves the list at kill time.
 - `learning-pipeline.ts` — **`LearningPipeline`**: `ingestAgentKill` (error-isolated — failures never block the kill path), `merge` (combines active entries, archives originals), `regenerate` (re-runs summarizer on stored diff), `flushToMemory` (writes `memory/learning/<id>.md` via `MemoryStore.edit`).
@@ -114,7 +114,7 @@ Per-sub-agent change tracking with isolated learning chat. Lifecycle driven by M
 ### Skill System — `src/skills/`
 Three skill types from `types.ts`: **`agent-capability`** (injected into sub-agent capabilities file), **`main-agent-tool`** (tool merged into MainAgent's tool set), **`prompt-enrichment`** (text added to MainAgent system prompt).
 
-- `discovery.ts` — discovers skills from adapter `claude-code-skills/` and workspace `.cliclaw/skills/` directories (workspace overrides adapter); limit 50.
+- `discovery.ts` — discovers skills from adapter `claude-code-skills/` and workspace `.omux/skills/` directories (workspace overrides adapter); limit 50.
 - `filter.ts` — conditional activation by `disabled` list, file existence, OS, env vars.
 - `parser.ts` / `reader.ts` — YAML frontmatter parsing for `SKILL.md` files (reader = lazy full-content load).
 - `registry.ts` — **`SkillRegistry`**: lookup by name or tool name.
@@ -151,11 +151,11 @@ HTTP + WebSocket server for the chat interface.
 - `claude-code-skills/` — built-in skills bundled with the Claude Code adapter (e.g. `commit/SKILL.md`); copied into `dist/agents/` by the build step.
 
 ### Tmux — `src/tmux/`
-- `bridge.ts` — **`TmuxBridge`** ([bridge.ts:10](src/tmux/bridge.ts:10)): tmux command wrapper. Create sessions, send keys, capture panes, `listCliclawAgents()` for `cliclaw-`-prefixed sessions.
+- `bridge.ts` — **`TmuxBridge`** ([bridge.ts:10](src/tmux/bridge.ts:10)): tmux command wrapper. Create sessions, send keys, capture panes, `listOmuxAgents()` for `omux-`-prefixed sessions.
 - `types.ts` — `TmuxSession`, `TmuxWindow`, `TmuxPane`, `TmuxError`, `CaptureResult`.
 
 ### Utils — `src/utils/`
-- `config.ts` — `loadConfig()` / `saveConfig()` for `~/.cliclaw/config.json` (provider, model, state-detector, tmux, memory, locale).
+- `config.ts` — `loadConfig()` / `saveConfig()` for `~/.omux/config.json` (provider, model, state-detector, tmux, memory, locale).
 - `locale.ts` — `resolveLocale()`, `getLanguageInstruction(locale)`. Maps `zh*` → `zh-CN`, else `en-US`.
 - `logger.ts` — async file logger.
 - `mcp-config.ts` — builds per-agent MCP server configuration (per-agent MCP scoping).
@@ -200,7 +200,7 @@ Run a single file: `npx vitest test/core/main-agent.test.ts`. Match by name: `np
 
 ## Config
 
-`~/.cliclaw/config.json`, edited via `cliclaw config` (TUI editor). Prerequisites checked by `cliclaw doctor` (tmux, node version, API keys).
+`~/.omux/config.json`, edited via `omux config` (TUI editor). Prerequisites checked by `omux doctor` (tmux, node version, API keys).
 
 `config.memory.*`:
 - `embeddingProvider` — `"auto"` (default) | openai | gemini | voyage | mistral | local | none
@@ -219,8 +219,8 @@ Config is read once at startup. `/autocontinue` re-reads `config.json` on each i
 
 ## i18n / Language
 
-Cliclaw auto-detects system language; supports `zh-CN` and `en-US`. Resolution order:
-1. `config.locale` override in `~/.cliclaw/config.json`
+Omux auto-detects system language; supports `zh-CN` and `en-US`. Resolution order:
+1. `config.locale` override in `~/.omux/config.json`
 2. Node: `LC_ALL` → `LANG` → `LANGUAGE`; Browser: `navigator.language`
 3. Fallback: `en-US`
 
@@ -253,7 +253,7 @@ Server → Client:
 
 ## Operational Notes
 
-- **Prompt-cache stability for `{{memory}}`**: the global `~/.cliclaw/MEMORY.md` snapshot is loaded into the system prompt **once per session** and intentionally NOT hot-reloaded after `persistent_memory` writes. On-disk content is authoritative immediately; the in-prompt snapshot is refreshed only on `/clear`, `/compact`, or `/reset`. Rely on the tool's return value, not on the system prompt changing, to confirm a write took effect.
+- **Prompt-cache stability for `{{memory}}`**: the global `~/.omux/MEMORY.md` snapshot is loaded into the system prompt **once per session** and intentionally NOT hot-reloaded after `persistent_memory` writes. On-disk content is authoritative immediately; the in-prompt snapshot is refreshed only on `/clear`, `/compact`, or `/reset`. Rely on the tool's return value, not on the system prompt changing, to confirm a write took effect.
 - **Project memory is not in the system prompt**: it's surfaced only when MainAgent calls `create_agent` for that project — at that moment the agent can decide what to forward to the sub-agent.
 - **`create_agent` initial pane capture**: after launching the sub-agent, MainAgent sleeps `createAgentSettleMs` (default 10s) and then captures the last 20 visible lines of the pane, embedding them in the tool result so the LLM can confirm the launch state without a separate `inspect_agent` call.
 - **In-chain compaction**: `MainAgent` calls `contextManager.setCompactTuning({ tools, thinking })` at startup so compaction reuses the regular turn's prompt cache. If this is missing, compaction silently falls back to a separate (full-cost) completion — see the warning log in `context-manager.ts` if you ever see compaction surprises in token usage.
