@@ -1,6 +1,6 @@
 {
-	"name": "@happenmass/cliclaw",
-	"version": "3.2.0",
+	"name": "@happenmass/omux",
+	"version": "4.0.0",
 	"description": "Chat-based meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"license": "MIT",
@@ -11,9 +11,11 @@
 		"agent",
 		"orchestrator",
 		"claude",
-		"coding-agent"
+		"coding-agent",
+		"omux"
 	],
 	"bin": {
+		"omux": "./dist/main.js",
 		"cliclaw": "./dist/main.js"
 	},
 	"files": [
