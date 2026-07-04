@@ -79,7 +79,7 @@ Honest about the edges: omux gives you *one general* loop (the MainAgent) rather
 
 ## Demo
 
-[![omux demo — click to play](assets/cliclaw_demo_poster.png)](https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo.mp4)
+[![omux demo — click to play](assets/cliclaw_demo_poster.png)](https://github.com/Happenmass/omux/raw/main/assets/cliclaw_demo.mp4)
 
 > Click the thumbnail to play the demo (~70 MB MP4).
 

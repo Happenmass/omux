@@ -4,6 +4,12 @@
 	"description": "Chat-based meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Happenmass/omux.git"
+	},
+	"homepage": "https://omux.sh",
+	"bugs": "https://github.com/Happenmass/omux/issues",
 	"keywords": [
 		"cli",
 		"tmux",
