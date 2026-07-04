@@ -3,7 +3,7 @@ import { SelectListComponent } from "../../src/tui/components/select-list.js";
 import type { SelectItem } from "../../src/tui/components/select-list.js";
 import { TextInputComponent } from "../../src/tui/components/text-input.js";
 import { ConfigView } from "../../src/tui/config-view.js";
-import type { CliclawConfig } from "../../src/utils/config.js";
+import type { OmuxConfig } from "../../src/utils/config.js";
 
 describe("SelectListComponent", () => {
 	const items: SelectItem[] = [
@@ -204,7 +204,7 @@ describe("TextInputComponent", () => {
 });
 
 describe("ConfigView", () => {
-	const testConfig: CliclawConfig = {
+	const testConfig: OmuxConfig = {
 		defaultAgent: "claude-code",
 		enabledAgents: ["claude-code"],
 		debug: false,
@@ -222,7 +222,7 @@ describe("ConfigView", () => {
 			captureLines: 50,
 		},
 		tmux: {
-			sessionPrefix: "cliclaw",
+			sessionPrefix: "omux",
 		},
 		memory: {
 			embeddingProvider: "auto",
@@ -257,7 +257,7 @@ describe("ConfigView", () => {
 	});
 
 	it("should set proxy via text input", () => {
-		let savedConfig: CliclawConfig | null = null;
+		let savedConfig: OmuxConfig | null = null;
 		const view = new ConfigView(testConfig, {
 			onSave: (cfg) => { savedConfig = cfg; },
 		});
@@ -333,7 +333,7 @@ describe("ConfigView", () => {
 	});
 
 	it("should cycle Learning Sessions ON/OFF", () => {
-		let savedConfig: CliclawConfig | null = null;
+		let savedConfig: OmuxConfig | null = null;
 		const view = new ConfigView(testConfig, {
 			onSave: (cfg) => { savedConfig = cfg; },
 		});
@@ -351,7 +351,7 @@ describe("ConfigView", () => {
 	});
 
 	it("should open the Active Agents checkbox submenu and toggle adapters", () => {
-		let savedConfig: CliclawConfig | null = null;
+		let savedConfig: OmuxConfig | null = null;
 		const view = new ConfigView(testConfig, {
 			onSave: (cfg) => {
 				savedConfig = cfg;
@@ -390,7 +390,7 @@ describe("ConfigView", () => {
 	});
 
 	it("keeps at least one adapter active (cannot uncheck the last one)", () => {
-		let savedConfig: CliclawConfig | null = null;
+		let savedConfig: OmuxConfig | null = null;
 		const view = new ConfigView(testConfig, {
 			onSave: (cfg) => {
 				savedConfig = cfg;

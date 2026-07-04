@@ -41,11 +41,11 @@ describe("ClaudeCodeAdapter.launch", () => {
 	it("launches with the default opus model and no mcp flags by default", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 		});
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			"claude --permission-mode auto --model opus",
 		);
 	});
@@ -53,12 +53,12 @@ describe("ClaudeCodeAdapter.launch", () => {
 	it("uses the provided model in place of the default", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 			model: "sonnet",
 		});
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			"claude --permission-mode auto --model sonnet",
 		);
 	});
@@ -66,26 +66,26 @@ describe("ClaudeCodeAdapter.launch", () => {
 	it("appends --mcp-config and --strict-mcp-config when mcpConfigPath is provided", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
-			mcpConfigPath: "/home/user/.cliclaw/tmp/mcp-configs/cliclaw-test.json",
+			sessionName: "omux-test",
+			mcpConfigPath: "/home/user/.omux/tmp/mcp-configs/omux-test.json",
 		});
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
-			"claude --permission-mode auto --model opus --mcp-config /home/user/.cliclaw/tmp/mcp-configs/cliclaw-test.json --strict-mcp-config",
+			"omux-test:0.0",
+			"claude --permission-mode auto --model opus --mcp-config /home/user/.omux/tmp/mcp-configs/omux-test.json --strict-mcp-config",
 		);
 	});
 
 	it("includes both --resume and --mcp-config flags", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 			resumeId: "abc-123",
 			mcpConfigPath: "/path/to/config.json",
 		});
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			"claude --permission-mode auto --model opus --mcp-config /path/to/config.json --strict-mcp-config --resume abc-123",
 		);
 	});
@@ -93,7 +93,7 @@ describe("ClaudeCodeAdapter.launch", () => {
 	it("does not include mcp flags when mcpConfigPath is undefined", async () => {
 		await launchWithTimers({
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 			mcpConfigPath: undefined,
 		});
 

@@ -168,7 +168,7 @@ function formatSkillEntry(skill: SkillEntry): string {
 	// Workspace skills come from the (possibly untrusted) project checkout. Wrap their
 	// summary/enrichment in an explicit untrusted-origin delimiter so the model treats the
 	// content as informational, not as instructions from the operator. Adapter skills are
-	// bundled with Cliclaw and stay unwrapped.
+	// bundled with Omux and stay unwrapped.
 	if (skill.source === "workspace") {
 		return [
 			`<untrusted-workspace-skill name="${skill.name}" source="workspace">`,

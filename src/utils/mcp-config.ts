@@ -2,7 +2,7 @@ import { mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getConfigDir, type McpServerDefinition } from "./config.js";
 
-// Resolved lazily via getConfigDir() so the CLICLAW_HOME override applies.
+// Resolved lazily via getConfigDir() so the OMUX_HOME override applies.
 export function getMcpConfigDir(): string {
 	return join(getConfigDir(), "tmp", "mcp-configs");
 }
@@ -12,7 +12,7 @@ export function getMcpConfigDir(): string {
  * Creates the temp directory if it doesn't exist.
  * Returns the absolute path to the generated file.
  *
- * Strips Cliclaw-only metadata fields (e.g. `description`) before writing,
+ * Strips Omux-only metadata fields (e.g. `description`) before writing,
  * since the consuming agent's `--mcp-config` schema doesn't recognize them.
  */
 export async function generateMcpConfigFile(
@@ -74,7 +74,7 @@ export function buildMcpServersSummary(servers: Record<string, McpServerDefiniti
 		return desc ? `- **${name}** — ${desc}` : `- **${name}** _(no description)_`;
 	});
 	return [
-		"The following MCP servers are configured in Cliclaw and may be passed by name to `create_agent({ mcp_servers: [...] })`. Pick only the servers the SubAgent actually needs:",
+		"The following MCP servers are configured in Omux and may be passed by name to `create_agent({ mcp_servers: [...] })`. Pick only the servers the SubAgent actually needs:",
 		"",
 		...lines,
 		"",

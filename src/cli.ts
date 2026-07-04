@@ -76,14 +76,14 @@ export function parseCliArgs(): CLIArgs {
 
 export function printHelp(): void {
 	console.log(`
-Cliclaw - Chat-based meta-orchestrator for coding agents
+Omux - Chat-based meta-orchestrator for coding agents
 
 Usage:
-  cliclaw [options]              Start the chat server in foreground (default)
-  cliclaw serve [options]        Start the chat server in foreground explicitly
-  cliclaw start [options]        Start the chat server in background
-  cliclaw stop                   Stop the background server
-  cliclaw restart [options]      Restart the background server
+  omux [options]              Start the chat server in foreground (default)
+  omux serve [options]        Start the chat server in foreground explicitly
+  omux start [options]        Start the chat server in background
+  omux stop                   Stop the background server
+  omux restart [options]      Restart the background server
 
 Subcommands:
   serve                   Start the chat server in foreground (default behavior)
@@ -108,7 +108,7 @@ Options:
                           Match this to the model's actual context limit
   --host <host>           Bind address for the HTTP/WebSocket server (default: 0.0.0.0)
   --port <number>         Server port (default: 3120)
-  --mdns-name <name>      mDNS hostname (default: cliclaw → cliclaw.local)
+  --mdns-name <name>      mDNS hostname (default: omux → omux.local)
   --no-mdns               Disable mDNS / Bonjour advertising
   --list-providers        List all available LLM providers
   --cwd <path>            Working directory (default: current)
@@ -116,14 +116,14 @@ Options:
   -v, --version           Show version
 
 Examples:
-  cliclaw                                            # Start foreground server on default port
-  cliclaw start                                      # Start background server
-  cliclaw stop                                       # Stop background server
-  cliclaw --host 127.0.0.1 --no-mdns                 # Localhost only, no mDNS broadcast
-  cliclaw --mdns-name happen                         # Reachable as http://happen.local:3120
-  cliclaw --port 8080                                # Start server on port 8080
-  cliclaw -p openai -m gpt-5.4                        # Start with specific LLM
-  cliclaw remember "This project uses PostgreSQL"    # Save a memory note
+  omux                                            # Start foreground server on default port
+  omux start                                      # Start background server
+  omux stop                                       # Stop background server
+  omux --host 127.0.0.1 --no-mdns                 # Localhost only, no mDNS broadcast
+  omux --mdns-name happen                         # Reachable as http://happen.local:3120
+  omux --port 8080                                # Start server on port 8080
+  omux -p openai -m gpt-5.4                        # Start with specific LLM
+  omux remember "This project uses PostgreSQL"    # Save a memory note
 
 Environment variables:
   ANTHROPIC_API_KEY       Anthropic API key
@@ -140,5 +140,5 @@ Environment variables:
 }
 
 export function printVersion(): void {
-	console.log(`cliclaw v${VERSION}`);
+	console.log(`omux v${VERSION}`);
 }

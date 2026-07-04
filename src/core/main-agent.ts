@@ -219,7 +219,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			this.searchConfig = { ...this.searchConfig, ...opts.searchConfig };
 		}
 		logger.info("main-agent", `Thinking level: ${this.thinking}`);
-		console.log(`[cliclaw] Thinking level: ${this.thinking}`);
+		console.log(`[omux] Thinking level: ${this.thinking}`);
 
 		// Hand the effective LLM tuning to ContextManager so `compress()` can ride the same
 		// chain (and thus the same prompt-cache prefix + L2 incremental window) as the main

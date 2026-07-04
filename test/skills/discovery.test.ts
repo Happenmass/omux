@@ -11,7 +11,7 @@ const SKILL_CONTENT = (name: string, type = "agent-capability") =>
 
 describe("discoverSkills", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-discovery-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-discovery-"));
 	});
 
 	afterEach(async () => {
@@ -32,8 +32,8 @@ describe("discoverSkills", () => {
 
 	it("should discover skills from trusted workspace directory", async () => {
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		const skills = await discoverSkills({ workspaceDir, trustedWorkspaceDirs: [workspaceDir] });
 
@@ -44,8 +44,8 @@ describe("discoverSkills", () => {
 
 	it("should SKIP workspace skills when the workspace is not trusted", async () => {
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		// No trustedWorkspaceDirs → untrusted checkout, skills must not load.
 		const skills = await discoverSkills({ workspaceDir });
@@ -55,8 +55,8 @@ describe("discoverSkills", () => {
 
 	it("should NOT trust a different workspace path", async () => {
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		const skills = await discoverSkills({
 			workspaceDir,
@@ -73,8 +73,8 @@ describe("discoverSkills", () => {
 		await mkdir(join(adapterDir, "openspec"), { recursive: true });
 		await writeFile(join(adapterDir, "openspec", "SKILL.md"), SKILL_CONTENT("openspec"));
 
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
 		const skills = await discoverSkills({
 			adapterSkillsDir: adapterDir,
@@ -97,9 +97,9 @@ describe("discoverSkills", () => {
 			`---\nname: commit\ntype: agent-capability\ndescription: "adapter commit"\n---\nAdapter body`,
 		);
 
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "commit"), { recursive: true });
+		await mkdir(join(workspaceDir, ".omux", "skills", "commit"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".cliclaw", "skills", "commit", "SKILL.md"),
+			join(workspaceDir, ".omux", "skills", "commit", "SKILL.md"),
 			`---\nname: commit\ntype: agent-capability\ndescription: "workspace commit"\n---\nWorkspace body`,
 		);
 

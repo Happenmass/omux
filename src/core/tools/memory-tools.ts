@@ -4,6 +4,7 @@ import { buildCategoryPathFilter } from "../../memory/category.js";
 import { readPersistentMemory, updatePersistentMemory, validateProjectDir } from "../../memory/persistent.js";
 import { searchMemory } from "../../memory/search.js";
 import type { MemoryCategory } from "../../memory/types.js";
+import { projectDotDir } from "../../utils/config.js";
 import { logger } from "../../utils/logger.js";
 import type { ToolContext, ToolHandler } from "./types.js";
 
@@ -208,7 +209,7 @@ export const persistentMemory: ToolHandler = {
 	definition: {
 		name: "persistent_memory",
 		description:
-			"Read or update a persistent MEMORY.md file. (This is the ALWAYS-in-system-prompt memory; for the separate searchable memory/*.md store use memory_edit / memory_search.) Global scope (`~/.cliclaw/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.cliclaw/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — cliclaw runs as a global service, so the agent owns the choice of which project receives the write.",
+			"Read or update a persistent MEMORY.md file. (This is the ALWAYS-in-system-prompt memory; for the separate searchable memory/*.md store use memory_edit / memory_search.) Global scope (`~/.omux/MEMORY.md`) is loaded into your system prompt under {{memory}} ONCE per session and is intentionally NOT hot-reloaded after writes — this keeps the system prompt byte-stable for prompt-cache hits. The {{memory}} snapshot is refreshed only at /clear, /compact, or /reset. So a successful `update` writes to disk immediately (authoritative), but your in-prompt view stays as it was at session start; rely on this tool's return value (and on `read` calls) to confirm effects, not on the system prompt changing. Project scope (`<project_dir>/.omux/MEMORY.md`) is NEVER in your system prompt — it's surfaced to you only when you `create_agent` against that project, so you can decide what to forward to the sub-agent. Use this when the user asks you to remember/forget something, or when you need to review current memories. When scope is 'project', you MUST pass project_dir (absolute path to the project root) — omux runs as a global service, so the agent owns the choice of which project receives the write.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -220,12 +221,12 @@ export const persistentMemory: ToolHandler = {
 				scope: {
 					type: "string",
 					enum: ["project", "global"],
-					description: "project: workspace-level (requires project_dir). global: ~/.cliclaw/. Default: project.",
+					description: "project: workspace-level (requires project_dir). global: ~/.omux/. Default: project.",
 				},
 				project_dir: {
 					type: "string",
 					description:
-						"Absolute path to the project root. REQUIRED when scope='project'. Must be an existing directory containing a project marker (.git, package.json, pyproject.toml, .cliclaw, etc.). Use exec_command to verify the path first if unsure. Ignored when scope='global'.",
+						"Absolute path to the project root. REQUIRED when scope='project'. Must be an existing directory containing a project marker (.git, package.json, pyproject.toml, .omux, etc.). Use exec_command to verify the path first if unsure. Ignored when scope='global'.",
 				},
 				section: {
 					type: "string",
@@ -273,14 +274,14 @@ export const persistentMemory: ToolHandler = {
 							? `directory does not exist: ${validation.detail}`
 							: validation.reason === "not_directory"
 								? `path exists but is not a directory: ${validation.detail}`
-								: `no project marker (.git, package.json, pyproject.toml, .cliclaw, etc.) found in ${validation.detail}`;
+								: `no project marker (.git, package.json, pyproject.toml, .omux, etc.) found in ${validation.detail}`;
 				return {
 					output: `Error: invalid project_dir — ${reason}. Verify the path with exec_command first.`,
 					terminal: false,
 				};
 			}
 			resolvedProjectDir = projectDir;
-			filePath = join(projectDir, ".cliclaw", "MEMORY.md");
+			filePath = join(projectDotDir(projectDir), "MEMORY.md");
 		}
 
 		try {
@@ -317,9 +318,9 @@ export const persistentMemory: ToolHandler = {
 			let suffix: string;
 			if (scope === "global") {
 				suffix =
-					"Wrote to ~/.cliclaw/MEMORY.md. The system prompt's {{memory}} snapshot is intentionally NOT refreshed this turn (prompt-cache stability); on-disk content is now authoritative and the snapshot will be reloaded on the next /clear, /compact, or /reset.";
+					"Wrote to ~/.omux/MEMORY.md. The system prompt's {{memory}} snapshot is intentionally NOT refreshed this turn (prompt-cache stability); on-disk content is now authoritative and the snapshot will be reloaded on the next /clear, /compact, or /reset.";
 			} else {
-				suffix = `Wrote to ${resolvedProjectDir}/.cliclaw/MEMORY.md; current session memory not modified (project memory is loaded by create_agent, not the system prompt).`;
+				suffix = `Wrote to ${filePath}; current session memory not modified (project memory is loaded by create_agent, not the system prompt).`;
 			}
 
 			const target = scope === "global" ? "global" : (resolvedProjectDir ?? "project");

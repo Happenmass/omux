@@ -12,7 +12,7 @@
  */
 
 /**
- * Marker on errors that represent a cliclaw-side timeout (connect timeout or SSE idle timeout),
+ * Marker on errors that represent a omux-side timeout (connect timeout or SSE idle timeout),
  * as opposed to a caller-initiated abort. Timeouts are transient and retryable; caller aborts
  * are not. `retryable = true` matches the flag `openai-responses.ts` `isRetryableStreamError`
  * gates on, so idle-timeout errors ride the existing stream-level retry loop.

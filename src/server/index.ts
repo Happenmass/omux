@@ -68,7 +68,7 @@ export interface ServerOptions {
 	autoTidy?: AutoTidyConfig;
 	/** LAN IPv4 addresses the server is reachable at — used for the Host/Origin allowlist and pairing URLs. */
 	lanIps?: string[];
-	/** Advertised mDNS bare name (e.g. "cliclaw" → cliclaw.local) — added to the Host/Origin allowlist. */
+	/** Advertised mDNS bare name (e.g. "omux" → omux.local) — added to the Host/Origin allowlist. */
 	mdnsName?: string;
 }
 
@@ -78,7 +78,7 @@ export interface ServerInstance {
 }
 
 /**
- * Create and start the Cliclaw HTTP + WebSocket server.
+ * Create and start the Omux HTTP + WebSocket server.
  */
 export async function startServer(opts: ServerOptions): Promise<ServerInstance> {
 	const {
@@ -169,10 +169,10 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			res.status(401)
 				.type("text/html")
 				.send(
-					"<!doctype html><meta charset=utf-8><title>Cliclaw — pairing required</title>" +
+					"<!doctype html><meta charset=utf-8><title>Omux — pairing required</title>" +
 						'<body style="font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5">' +
 						"<h1>Pairing required</h1>" +
-						"<p>Open the access link printed in the <code>cliclaw</code> terminal on the host machine " +
+						"<p>Open the access link printed in the <code>omux</code> terminal on the host machine " +
 						"(it contains a one-time <code>?token=</code>). That pairs this browser; afterwards you can " +
 						"drop the token from the URL.</p></body>",
 				);
@@ -586,8 +586,8 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			const actualPort = typeof address === "object" && address ? address.port : port;
 			// Rebuild the Host/Origin allowlist with the actually-bound port (port may have been 0).
 			hostAllowlist = buildHostAllowlist({ port: actualPort, lanIps, mdnsName });
-			logger.info("server", `Cliclaw server running at http://${host}:${actualPort}`);
-			console.log(`Cliclaw server running at http://${host}:${actualPort}`);
+			logger.info("server", `Omux server running at http://${host}:${actualPort}`);
+			console.log(`Omux server running at http://${host}:${actualPort}`);
 
 			// Pairing (SRV-1): print tokened access URLs once so a remote user pairs by opening
 			// one. Loopback stays token-free, so only print for remotely-reachable hosts. Prefer

@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 
-export const AUTH_COOKIE_NAME = "cliclaw_auth";
+export const AUTH_COOKIE_NAME = "omux_auth";
 
 /** Query-string parameter carrying the pairing token in the printed access URL. */
 export const AUTH_QUERY_PARAM = "token";

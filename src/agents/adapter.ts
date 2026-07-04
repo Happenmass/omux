@@ -45,7 +45,7 @@ export interface AgentAdapter {
 
 	/**
 	 * Launch the agent in a tmux pane.
-	 * Returns the tmux pane target string (e.g., "cliclaw:0.0").
+	 * Returns the tmux pane target string (e.g., "omux:0.0").
 	 */
 	launch(bridge: TmuxBridge, opts: LaunchOptions): Promise<string>;
 

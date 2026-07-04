@@ -3,7 +3,7 @@ import { networkInterfaces, platform } from "node:os";
 import { Bonjour } from "bonjour-service";
 
 export interface MdnsHandle {
-	/** Hostname being advertised, e.g. "cliclaw.local". */
+	/** Hostname being advertised, e.g. "omux.local". */
 	hostname: string;
 	/** LAN IPv4 addresses we found locally — used for the startup banner. */
 	ips: string[];
@@ -23,7 +23,7 @@ const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/i;
 /**
  * Interface names whose IPv4 addresses we never advertise: Docker bridges,
  * VPN tunnels, AWDL, virtual machine bridges, etc. Picking one of these as
- * the LAN address is the most common reason "cliclaw.local" resolves locally
+ * the LAN address is the most common reason "omux.local" resolves locally
  * but is unreachable from other LAN devices.
  */
 const VIRTUAL_IFACE_RE = /^(bridge|docker|utun|awdl|llw|anpi|gif|stf|vmnet|vboxnet|tun|tap|veth|virbr|p2p|kube)/i;
@@ -57,7 +57,7 @@ function startWithDnsSd(opts: StartMdnsOptions, ips: string[]): MdnsHandle | nul
 		try {
 			const proc = spawn(
 				"/usr/bin/dns-sd",
-				["-P", opts.name, "_http._tcp", "local", String(opts.port), hostname, ip, "app=cliclaw"],
+				["-P", opts.name, "_http._tcp", "local", String(opts.port), hostname, ip, "app=omux"],
 				{ stdio: "ignore", detached: false },
 			);
 			proc.on("error", () => {
@@ -94,7 +94,7 @@ function startWithBonjour(opts: StartMdnsOptions, ips: string[]): MdnsHandle {
 		port: opts.port,
 		protocol: "tcp",
 		host: hostname,
-		txt: { app: "cliclaw" },
+		txt: { app: "omux" },
 	});
 	return {
 		hostname,

@@ -19,7 +19,7 @@ export class CodexAdapter extends BaseTuiAdapter {
 		const model = opts.model?.trim() || this.defaultModel;
 		// Codex 0.142 removed `--full-auto`. The equivalent autonomous, non-interactive posture is a
 		// workspace-write sandbox with no approval prompts (Codex docs recommend `never` for automation,
-		// `on-failure` is deprecated). This lets cliclaw drive Codex without it stalling on approval prompts.
+		// `on-failure` is deprecated). This lets omux drive Codex without it stalling on approval prompts.
 		//
 		// Pre-empt the interactive *startup* prompts too, so an unattended launch never blocks on them.
 		// These `-c` keys were verified against `codex debug models` (they validate into the real config schema):

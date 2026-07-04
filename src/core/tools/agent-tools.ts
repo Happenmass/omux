@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readPersistentMemory } from "../../memory/persistent.js";
 import { t } from "../../server/messages.js";
-import { loadConfig } from "../../utils/config.js";
+import { loadConfig, projectDotDir } from "../../utils/config.js";
 import { logger } from "../../utils/logger.js";
 import { cleanupMcpConfigFile, generateMcpConfigFile, selectMcpServers } from "../../utils/mcp-config.js";
 import type { ToolContext, ToolHandler } from "./types.js";
@@ -13,7 +13,7 @@ function generateAgentName(prefix: string): string {
 		.replace(/^-+|-+$/g, "")
 		.slice(0, 30)
 		.replace(/-$/, "");
-	return `cliclaw-${slug || "agent"}`;
+	return `omux-${slug || "agent"}`;
 }
 
 export const sendToAgent: ToolHandler = {
@@ -285,13 +285,13 @@ export const createAgent: ToolHandler = {
 	definition: {
 		name: "create_agent",
 		description:
-			'Create a tmux session with the "cliclaw-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/inspect_agent. On naming conflict, returns an error so you can retry with a different name.\n\nIMPORTANT: If the user provides a resume id (or one was found in memory), you MUST pass it as resume_id. Omitting it will lose the agent\'s prior conversation context.',
+			'Create a tmux session with the "omux-" prefix and launch the coding agent in it. Must be called before send_to_agent/respond_to_agent/inspect_agent. On naming conflict, returns an error so you can retry with a different name.\n\nIMPORTANT: If the user provides a resume id (or one was found in memory), you MUST pass it as resume_id. Omitting it will lose the agent\'s prior conversation context.',
 		parameters: {
 			type: "object",
 			properties: {
 				agent_name: {
 					type: "string",
-					description: 'Agent name (will be prefixed with "cliclaw-" if not already). If omitted, auto-generated.',
+					description: 'Agent name (will be prefixed with "omux-" if not already). If omitted, auto-generated.',
 				},
 				adapter: {
 					type: "string",
@@ -322,7 +322,7 @@ export const createAgent: ToolHandler = {
 					type: "array",
 					items: { type: "string" },
 					description:
-						"Names of MCP servers to make available to this SubAgent. Uses server names from Cliclaw's MCP configuration. When provided, only these servers are available via --strict-mcp-config. When omitted, the SubAgent uses its default MCP behavior. Pass an empty array to launch with no MCP servers.",
+						"Names of MCP servers to make available to this SubAgent. Uses server names from Omux's MCP configuration. When provided, only these servers are available via --strict-mcp-config. When omitted, the SubAgent uses its default MCP behavior. Pass an empty array to launch with no MCP servers.",
 				},
 			},
 		},
@@ -333,8 +333,10 @@ export const createAgent: ToolHandler = {
 		let agentName: string;
 		if (!rawName) {
 			agentName = generateAgentName("chat");
-		} else if (!rawName.startsWith("cliclaw-")) {
-			agentName = `cliclaw-${rawName}`;
+		} else if (!rawName.startsWith("omux-") && !rawName.startsWith("cliclaw-")) {
+			// Legacy cliclaw-prefixed names are kept as-is so pre-rename sessions
+			// can be recreated/resumed under their original names.
+			agentName = `omux-${rawName}`;
 		} else {
 			agentName = rawName;
 		}
@@ -452,7 +454,8 @@ export const createAgent: ToolHandler = {
 
 			// Surface the target project's MEMORY.md to the main agent (not the sub agent).
 			// The main agent decides whether/how to fold this into the first send_to_agent prompt.
-			const projectMemoryPath = join(workingDir, ".cliclaw", "MEMORY.md");
+			// projectDotDir prefers .omux/ and falls back to a legacy cliclaw .cliclaw/ dir.
+			const projectMemoryPath = join(projectDotDir(workingDir), "MEMORY.md");
 			const projectMemory = await readPersistentMemory(projectMemoryPath);
 			const memorySection = projectMemory.trim()
 				? `\n\n--- Project memory at ${projectMemoryPath} ---\n${projectMemory.trim()}\n--- end project memory ---\nThis is for YOUR reference only. The sub agent has not seen it. Decide whether to surface relevant excerpts in your first send_to_agent prompt, or to point the agent at the file path so it can read on demand.`
@@ -485,7 +488,7 @@ export const listAgents: ToolHandler = {
 	definition: {
 		name: "list_agents",
 		description:
-			"List coding agents in two groups: (1) MANAGED agents this process owns — with adapter, model, working dir, status, and taken-over flag — these are the ones you can drive with send_to_agent; (2) UNMANAGED cliclaw-* tmux sessions outside this process's registry (another cliclaw instance or a stale session) that you must NOT send_to_agent. Useful for checking existing agents before creating a new one.",
+			"List coding agents in two groups: (1) MANAGED agents this process owns — with adapter, model, working dir, status, and taken-over flag — these are the ones you can drive with send_to_agent; (2) UNMANAGED omux-* (or legacy cliclaw-*) tmux sessions outside this process's registry (another omux instance or a stale session) that you must NOT send_to_agent. Useful for checking existing agents before creating a new one.",
 		parameters: {
 			type: "object",
 			properties: {},
@@ -496,16 +499,16 @@ export const listAgents: ToolHandler = {
 			// Merge two views so the LLM never tries to drive a session this process can't:
 			//  1. Registry — agents THIS process owns (send_to_agent works). Adapter/model/
 			//     cwd/status/takenOver come from the in-memory map + monitor.
-			//  2. Unmanaged tmux — cliclaw-* sessions NOT in our registry (e.g. another
-			//     cliclaw instance or a stale session). Listed separately as not controllable.
+			//  2. Unmanaged tmux — omux-* (or legacy cliclaw-*) sessions NOT in our registry
+			//     (e.g. another omux instance or a stale session). Listed separately as not controllable.
 			const managed = ctx.getActiveAgents();
 			const managedNames = new Set(managed.map((a) => a.agentName));
 			let tmuxSessions: Array<{ name: string; windows?: number; attached?: boolean }> = [];
 			try {
-				tmuxSessions = await ctx.bridge.listCliclawAgents();
+				tmuxSessions = await ctx.bridge.listOmuxAgents();
 			} catch (err: any) {
 				// tmux query failed — still report the registry view (source of truth for control).
-				logger.warn("main-agent", `list_agents: listCliclawAgents failed: ${err?.message ?? err}`);
+				logger.warn("main-agent", `list_agents: listOmuxAgents failed: ${err?.message ?? err}`);
 			}
 			const unmanaged = tmuxSessions.filter((s) => !managedNames.has(s.name));
 
@@ -526,7 +529,7 @@ export const listAgents: ToolHandler = {
 			if (unmanaged.length > 0) {
 				const rows = unmanaged.map((s) => `- ${s.name}`).join("\n");
 				sections.push(
-					`Unmanaged tmux sessions (${unmanaged.length}) — NOT controllable by this process (another cliclaw instance or stale session); do NOT send_to_agent these:\n${rows}`,
+					`Unmanaged tmux sessions (${unmanaged.length}) — NOT controllable by this process (another omux instance or stale session); do NOT send_to_agent these:\n${rows}`,
 				);
 			}
 			return { output: sections.join("\n\n"), terminal: false };
@@ -547,7 +550,7 @@ export const killAgent: ToolHandler = {
 				agent_id: {
 					type: "string",
 					description:
-						'Target agent name (e.g. "cliclaw-chat-1"). Omit to target the active agent. Set to "all" to kill all agents.',
+						'Target agent name (e.g. "omux-chat-1"). Omit to target the active agent. Set to "all" to kill all agents.',
 				},
 				summary: {
 					type: "string",
@@ -569,14 +572,14 @@ export const killAgent: ToolHandler = {
 				// exitAgent (so resume IDs are captured). Two classes are deliberately spared:
 				//   • human-taken-over agents — killing them would yank a session out from
 				//     under a human; report them as skipped.
-				//   • unmanaged cliclaw-* tmux sessions not in our registry (e.g. another
-				//     cliclaw instance) — we never had control, so killing them ungracefully
+				//   • unmanaged omux-* (or legacy cliclaw-*) tmux sessions not in our registry (e.g.
+				//     another omux instance) — we never had control, so killing them ungracefully
 				//     would lose someone else's resume IDs. List them as left untouched.
 				let tmuxSessions: Array<{ name: string }> = [];
 				try {
-					tmuxSessions = await ctx.bridge.listCliclawAgents();
+					tmuxSessions = await ctx.bridge.listOmuxAgents();
 				} catch (err: any) {
-					logger.warn("main-agent", `kill_agent all: listCliclawAgents failed: ${err?.message ?? err}`);
+					logger.warn("main-agent", `kill_agent all: listOmuxAgents failed: ${err?.message ?? err}`);
 				}
 
 				const killableIds = [...ctx.agents.keys()].filter((id) => !ctx.takenOverAgents.has(id));
@@ -646,7 +649,7 @@ export const killAgent: ToolHandler = {
 				}
 				if (untouchedUnmanaged.length > 0) {
 					parts.push(
-						`\nLeft untouched (unmanaged cliclaw-* sessions not owned by this process): ${untouchedUnmanaged.join(", ")}`,
+						`\nLeft untouched (unmanaged omux-*/cliclaw-* sessions not owned by this process): ${untouchedUnmanaged.join(", ")}`,
 					);
 				}
 				return { output: parts.join("\n"), terminal: false };

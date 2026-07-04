@@ -18,7 +18,7 @@ describe("UiEventStore", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-ui-events-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-ui-events-"));
 	});
 
 	afterEach(async () => {

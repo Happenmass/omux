@@ -623,7 +623,7 @@ describe("ContextManager", () => {
 
 			// Add 4 tool rounds (retention = 2, so first 2 get summarized)
 			const rounds = [
-				buildToolRound("tc_0", "create_agent", { agent_name: "test" }, 'Agent "cliclaw-test" created in /tmp'),
+				buildToolRound("tc_0", "create_agent", { agent_name: "test" }, 'Agent "omux-test" created in /tmp'),
 				buildToolRound(
 					"tc_1",
 					"send_to_agent",
@@ -642,7 +642,7 @@ describe("ContextManager", () => {
 			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
 
 			// First 2 should be summarized
-			expect(toolMsgs[0].content).toBe('[create_agent → ✓] Agent "cliclaw-test" created in /tmp');
+			expect(toolMsgs[0].content).toBe('[create_agent → ✓] Agent "omux-test" created in /tmp');
 			expect(toolMsgs[1].content).toBe("[send_to_agent → ✓] [Agent completed] (Task done)");
 
 			// Last 2 should be intact

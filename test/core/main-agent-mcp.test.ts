@@ -94,7 +94,7 @@ function createMockBridge() {
 	return {
 		capturePane: vi.fn().mockResolvedValue({ content: "pane content\n", lines: 50, timestamp: Date.now() }),
 		hasSession: vi.fn().mockResolvedValue(false),
-		listCliclawAgents: vi.fn().mockResolvedValue([]),
+		listOmuxAgents: vi.fn().mockResolvedValue([]),
 		createSession: vi.fn().mockResolvedValue(undefined),
 		sendEscape: vi.fn().mockResolvedValue(undefined),
 		killSession: vi.fn().mockResolvedValue(undefined),
@@ -209,7 +209,7 @@ describe("MainAgent MCP server integration", () => {
 			(selectMcpServers as any).mockReturnValue({
 				servers: { "code-review": { command: "uvx", args: ["crg", "serve"], type: "stdio" } },
 			});
-			(generateMcpConfigFile as any).mockResolvedValue("/tmp/mcp-configs/cliclaw-test.json");
+			(generateMcpConfigFile as any).mockResolvedValue("/tmp/mcp-configs/omux-test.json");
 
 			const agent = setupAgent([
 				toolCallResponse("create_agent", {
@@ -230,12 +230,12 @@ describe("MainAgent MCP server integration", () => {
 			);
 			expect(generateMcpConfigFile).toHaveBeenCalledWith(
 				{ "code-review": { command: "uvx", args: ["crg", "serve"], type: "stdio" } },
-				"cliclaw-test",
+				"omux-test",
 			);
 			expect(mockAdapter.launch).toHaveBeenCalledWith(
 				expect.anything(),
 				expect.objectContaining({
-					mcpConfigPath: "/tmp/mcp-configs/cliclaw-test.json",
+					mcpConfigPath: "/tmp/mcp-configs/omux-test.json",
 				}),
 			);
 		});
@@ -303,12 +303,12 @@ describe("MainAgent MCP server integration", () => {
 			const agent = setupAgent([
 				toolCallResponse("create_agent", { agent_name: "test", mcp_servers: ["s"] }, "tc1"),
 				// After create_agent result, LLM returns kill_agent
-				toolCallResponse("kill_agent", { agent_id: "cliclaw-test", summary: "done" }, "tc2"),
+				toolCallResponse("kill_agent", { agent_id: "omux-test", summary: "done" }, "tc2"),
 				textResponse("Cleaned up."),
 			]);
 			await agent.handleMessage("create and kill");
 
-			expect(cleanupMcpConfigFile).toHaveBeenCalledWith("cliclaw-test");
+			expect(cleanupMcpConfigFile).toHaveBeenCalledWith("omux-test");
 		});
 	});
 });

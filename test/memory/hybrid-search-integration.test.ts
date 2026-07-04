@@ -43,7 +43,7 @@ const MEMORY_CHUNKS = [
 	{
 		id: "tmux-001",
 		path: "memory/architecture.md",
-		text: "## Tmux Integration\nTmuxBridge wraps tmux commands for session management. Sessions are prefixed with 'cliclaw-' for isolation. StateDetector polls pane content and classifies agent state using pattern matching.",
+		text: "## Tmux Integration\nTmuxBridge wraps tmux commands for session management. Sessions are prefixed with 'omux-' for isolation. StateDetector polls pane content and classifies agent state using pattern matching.",
 		embedding: [0.7, 0.0, 0.0, 0.1, 0.0, 0.0, 0.2, 0.0],
 	},
 	{
@@ -101,7 +101,7 @@ describe("Memory Hybrid Search Integration", () => {
 	};
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-search-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-search-"));
 		storageDir = join(tmpDir, "storage");
 		await mkdir(storageDir, { recursive: true });
 
@@ -396,7 +396,7 @@ describe("Memory Hybrid Search Integration", () => {
 		let knnStore: MemoryStore;
 
 		beforeEach(async () => {
-			knnDir = await mkdtemp(join(tmpdir(), "cliclaw-knn-"));
+			knnDir = await mkdtemp(join(tmpdir(), "omux-knn-"));
 			const knnStorage = join(knnDir, "storage");
 			await mkdir(knnStorage, { recursive: true });
 

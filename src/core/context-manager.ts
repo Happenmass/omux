@@ -293,7 +293,7 @@ export class ContextManager {
 		//        side cache hits could shift if the notice text varied across releases.
 		//      - The model didn't actually need it: from the model's POV, conversation history
 		//        is whatever it sees in `input` — there's nothing it has to do differently
-		//        because cliclaw's process happened to restart between turns.
+		//        because omux's process happened to restart between turns.
 		//    The conversation is restored verbatim; the next user message just continues it.
 		const restoredCount = this.conversation.length;
 		logger.info("context-manager", `Restored ${restoredCount} messages, compactionCount=${this.compactionCount}`);

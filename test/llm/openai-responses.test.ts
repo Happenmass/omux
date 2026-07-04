@@ -159,7 +159,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 
 	it('reasoning enabled with no explicit summary ⇒ defaults to summary="auto" (matches Codex ReasoningSummaryConfig::Auto)', () => {
 		// Codex (`codex-rs/core/src/client.rs:847`) treats summary as a separate dial that's
-		// non-None by default for reasoning-capable models. cliclaw mirrors that: when the
+		// non-None by default for reasoning-capable models. omux mirrors that: when the
 		// caller enables thinking but doesn't pick a summary level, we send "auto".
 		// Without this default, the wire body diverges from Codex's by exactly one field
 		// and the two clients can't share the same prompt-cache entry.
@@ -841,7 +841,7 @@ describe("tryBuildIncremental — pure decision function", () => {
 				call_id: "call_X",
 			},
 		];
-		// Turn 2: cliclaw appended the tool result → conversation now has the original user
+		// Turn 2: omux appended the tool result → conversation now has the original user
 		// msg + the function_call (assistant) + the function_call_output (tool).
 		const turn2Full = buildRequestBody({
 			model: "gpt-5.4",
@@ -1185,7 +1185,7 @@ describe("OpenAIResponsesProvider — Layer-2 chain integration", () => {
 	});
 
 	it("DEFAULT (no opts.enableIncremental): L2 is OFF → every turn full, no previous_response_id, no state retained, store=false (matches Codex HTTP path)", async () => {
-		// This is the steady-state behavior used by all real cliclaw sessions. The test
+		// This is the steady-state behavior used by all real omux sessions. The test
 		// pins the default-off so a regression that flips it back to default-on (which
 		// triggers 400 'No tool call found' on tool turns) gets caught.
 		const provider = makeProvider();

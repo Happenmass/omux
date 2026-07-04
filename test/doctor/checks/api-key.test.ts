@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { CliclawConfig } from "../../../src/utils/config.js";
+import type { OmuxConfig } from "../../../src/utils/config.js";
 
-const DEFAULT_CONFIG: CliclawConfig = {
+const DEFAULT_CONFIG: OmuxConfig = {
 	defaultAgent: "claude-code",
 	llm: {
 		provider: "anthropic",
@@ -13,11 +13,11 @@ const DEFAULT_CONFIG: CliclawConfig = {
 		captureLines: 50,
 	},
 	tmux: {
-		sessionPrefix: "cliclaw",
+		sessionPrefix: "omux",
 	},
 };
 
-const loadConfigMock = vi.fn<() => Promise<CliclawConfig>>();
+const loadConfigMock = vi.fn<() => Promise<OmuxConfig>>();
 
 vi.mock("../../../src/utils/config.js", () => ({
 	loadConfig: (...args: unknown[]) => loadConfigMock(...(args as [])),

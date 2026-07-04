@@ -14,7 +14,7 @@ describe("ChangeTracker", () => {
 	let tracker: ChangeTracker;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-ct-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-ct-"));
 		git(tmpDir, "init -b main");
 		git(tmpDir, "config user.email a@b.c");
 		git(tmpDir, "config user.name t");
@@ -29,7 +29,7 @@ describe("ChangeTracker", () => {
 	});
 
 	it("returns null diff when cwd is not a git repo", async () => {
-		const nonRepo = await mkdtemp(join(tmpdir(), "cliclaw-nongit-"));
+		const nonRepo = await mkdtemp(join(tmpdir(), "omux-nongit-"));
 		await tracker.registerAgent("s-nongit", nonRepo);
 		expect(await tracker.computeDiff("s-nongit")).toBeNull();
 		await rm(nonRepo, { recursive: true, force: true });

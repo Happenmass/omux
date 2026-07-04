@@ -90,9 +90,11 @@ export class TmuxBridge {
 		}
 	}
 
-	async listCliclawAgents(): Promise<TmuxSession[]> {
+	async listOmuxAgents(): Promise<TmuxSession[]> {
 		const all = await this.listSessions();
-		return all.filter((s) => s.name.startsWith("cliclaw-"));
+		// Legacy cliclaw sessions are still recognized so agents created before
+		// the omux rename can be adopted and managed.
+		return all.filter((s) => s.name.startsWith("omux-") || s.name.startsWith("cliclaw-"));
 	}
 
 	// Window management
@@ -210,7 +212,7 @@ export class TmuxBridge {
 			const { join } = await import("node:path");
 			const { tmpdir } = await import("node:os");
 
-			const tmpFile = join(tmpdir(), `cliclaw-${randomUUID()}.txt`);
+			const tmpFile = join(tmpdir(), `omux-${randomUUID()}.txt`);
 			try {
 				await writeFile(tmpFile, text);
 				await this.exec(["load-buffer", tmpFile]);

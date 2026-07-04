@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getConfigDir } from "../utils/config.js";
+import { getConfigDir, projectDotDir } from "../utils/config.js";
 import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 
@@ -72,13 +72,14 @@ export class PromptLoader {
 		// Layer 1: Built-in defaults from package's prompts/ directory
 		await this.loadFromDir(this.builtinDir);
 
-		// Layer 2: User-level overrides (~/.cliclaw/prompts/*.md)
+		// Layer 2: User-level overrides (~/.omux/prompts/*.md)
 		const userPromptsDir = join(getConfigDir(), "prompts");
 		await this.loadFromDir(userPromptsDir);
 
-		// Layer 3: Project-level overrides ({project}/.cliclaw/prompts/*.md)
+		// Layer 3: Project-level overrides ({project}/.omux/prompts/*.md, or a
+		// legacy cliclaw {project}/.cliclaw/prompts/*.md dir)
 		if (projectDir) {
-			const projectPromptsDir = join(projectDir, ".cliclaw", "prompts");
+			const projectPromptsDir = join(projectDotDir(projectDir), "prompts");
 			await this.loadFromDir(projectPromptsDir);
 		}
 
@@ -124,7 +125,7 @@ export class PromptLoader {
 
 	private layeredDirs(): string[] {
 		const dirs = [this.builtinDir, join(getConfigDir(), "prompts")];
-		if (this.projectDir) dirs.push(join(this.projectDir, ".cliclaw", "prompts"));
+		if (this.projectDir) dirs.push(join(projectDotDir(this.projectDir), "prompts"));
 		return dirs;
 	}
 

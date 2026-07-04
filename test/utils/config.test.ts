@@ -3,33 +3,36 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	type CliclawConfig,
+	type OmuxConfig,
 	getConfigDir,
 	getConfigFilePath,
+	getGlobalDbPath,
 	getGlobalStorageDir,
 	loadConfig,
 	type McpServerDefinition,
 	normalizeAgents,
+	omuxHome,
+	projectDotDir,
 	saveConfig,
 } from "../../src/utils/config.js";
 
-// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+// Sandboxed under OMUX_HOME by test/setup.ts — never the real ~/.omux.
 const configDir = getConfigDir();
 const configFile = getConfigFilePath();
 
 describe("getGlobalStorageDir", () => {
-	it("honors the CLICLAW_HOME override (set by test/setup.ts)", () => {
-		expect(getGlobalStorageDir()).toBe(process.env.CLICLAW_HOME);
+	it("honors the OMUX_HOME override (set by test/setup.ts)", () => {
+		expect(getGlobalStorageDir()).toBe(process.env.OMUX_HOME);
 	});
 
-	it("falls back to ~/.cliclaw when CLICLAW_HOME is unset", () => {
-		const saved = process.env.CLICLAW_HOME;
-		delete process.env.CLICLAW_HOME;
+	it("falls back to ~/.omux when OMUX_HOME is unset", () => {
+		const saved = process.env.OMUX_HOME;
+		delete process.env.OMUX_HOME;
 		try {
 			// homedir() itself is redirected to the sandbox by test/setup.ts.
-			expect(getGlobalStorageDir()).toBe(join(homedir(), ".cliclaw"));
+			expect(getGlobalStorageDir()).toBe(join(homedir(), ".omux"));
 		} finally {
-			process.env.CLICLAW_HOME = saved;
+			process.env.OMUX_HOME = saved;
 		}
 	});
 });
@@ -138,8 +141,8 @@ describe("autoTidy config", () => {
 });
 
 describe("normalizeAgents", () => {
-	function base(overrides: Partial<CliclawConfig>): CliclawConfig {
-		return { defaultAgent: "claude-code", enabledAgents: ["claude-code"], ...overrides } as CliclawConfig;
+	function base(overrides: Partial<OmuxConfig>): OmuxConfig {
+		return { defaultAgent: "claude-code", enabledAgents: ["claude-code"], ...overrides } as OmuxConfig;
 	}
 
 	it("derives enabledAgents from defaultAgent for legacy configs (no enabledAgents)", () => {
@@ -206,5 +209,120 @@ describe("agent activation config (loadConfig)", () => {
 		const config = await loadConfig();
 		expect(config.enabledAgents).toEqual(["claude-code", "codex"]);
 		expect(config.defaultAgent).toBe("claude-code");
+	});
+});
+
+describe("legacy cliclaw compatibility", () => {
+	describe("omuxHome", () => {
+		it("honors the legacy CLICLAW_HOME env var when OMUX_HOME is unset", () => {
+			const savedOmux = process.env.OMUX_HOME;
+			const savedLegacy = process.env.CLICLAW_HOME;
+			delete process.env.OMUX_HOME;
+			process.env.CLICLAW_HOME = join(homedir(), ".legacy-cliclaw-env");
+			try {
+				expect(omuxHome()).toBe(join(homedir(), ".legacy-cliclaw-env"));
+			} finally {
+				process.env.OMUX_HOME = savedOmux;
+				if (savedLegacy === undefined) delete process.env.CLICLAW_HOME;
+				else process.env.CLICLAW_HOME = savedLegacy;
+			}
+		});
+
+		it("prefers OMUX_HOME over CLICLAW_HOME when both are set", () => {
+			const savedLegacy = process.env.CLICLAW_HOME;
+			process.env.CLICLAW_HOME = join(homedir(), ".legacy-cliclaw-env");
+			try {
+				expect(omuxHome()).toBe(process.env.OMUX_HOME);
+			} finally {
+				if (savedLegacy === undefined) delete process.env.CLICLAW_HOME;
+				else process.env.CLICLAW_HOME = savedLegacy;
+			}
+		});
+
+		it("uses an existing legacy ~/.cliclaw dir when no env override and no ~/.omux exist", async () => {
+			const savedOmux = process.env.OMUX_HOME;
+			delete process.env.OMUX_HOME;
+			const omuxDir = join(homedir(), ".omux");
+			const legacyDir = join(homedir(), ".cliclaw");
+			await rm(omuxDir, { recursive: true, force: true });
+			await mkdir(legacyDir, { recursive: true });
+			try {
+				expect(omuxHome()).toBe(legacyDir);
+			} finally {
+				process.env.OMUX_HOME = savedOmux;
+				await rm(legacyDir, { recursive: true, force: true });
+			}
+		});
+
+		it("prefers an existing ~/.omux dir over a legacy ~/.cliclaw dir", async () => {
+			const savedOmux = process.env.OMUX_HOME;
+			delete process.env.OMUX_HOME;
+			const omuxDir = join(homedir(), ".omux");
+			const legacyDir = join(homedir(), ".cliclaw");
+			await mkdir(omuxDir, { recursive: true });
+			await mkdir(legacyDir, { recursive: true });
+			try {
+				expect(omuxHome()).toBe(omuxDir);
+			} finally {
+				process.env.OMUX_HOME = savedOmux;
+				await rm(omuxDir, { recursive: true, force: true });
+				await rm(legacyDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	describe("projectDotDir", () => {
+		const projectRoot = join(homedir(), "compat-project");
+
+		afterEach(async () => {
+			await rm(projectRoot, { recursive: true, force: true });
+		});
+
+		it("defaults to .omux when neither dot dir exists", async () => {
+			await mkdir(projectRoot, { recursive: true });
+			expect(projectDotDir(projectRoot)).toBe(join(projectRoot, ".omux"));
+		});
+
+		it("falls back to a legacy .cliclaw dir when only it exists", async () => {
+			await mkdir(join(projectRoot, ".cliclaw"), { recursive: true });
+			expect(projectDotDir(projectRoot)).toBe(join(projectRoot, ".cliclaw"));
+		});
+
+		it("prefers .omux when both dot dirs exist", async () => {
+			await mkdir(join(projectRoot, ".omux"), { recursive: true });
+			await mkdir(join(projectRoot, ".cliclaw"), { recursive: true });
+			expect(projectDotDir(projectRoot)).toBe(join(projectRoot, ".omux"));
+		});
+	});
+
+	describe("getGlobalDbPath", () => {
+		afterEach(async () => {
+			for (const name of ["omux.db", "memory.sqlite", "cliclaw.db"]) {
+				await rm(join(configDir, name), { force: true });
+			}
+		});
+
+		it("defaults to omux.db when no database exists yet", () => {
+			expect(getGlobalDbPath()).toBe(join(configDir, "omux.db"));
+		});
+
+		it("reuses a legacy memory.sqlite database", async () => {
+			await mkdir(configDir, { recursive: true });
+			await writeFile(join(configDir, "memory.sqlite"), "", "utf-8");
+			expect(getGlobalDbPath()).toBe(join(configDir, "memory.sqlite"));
+		});
+
+		it("reuses a legacy cliclaw.db database", async () => {
+			await mkdir(configDir, { recursive: true });
+			await writeFile(join(configDir, "cliclaw.db"), "", "utf-8");
+			expect(getGlobalDbPath()).toBe(join(configDir, "cliclaw.db"));
+		});
+
+		it("prefers omux.db over legacy databases when both exist", async () => {
+			await mkdir(configDir, { recursive: true });
+			await writeFile(join(configDir, "omux.db"), "", "utf-8");
+			await writeFile(join(configDir, "memory.sqlite"), "", "utf-8");
+			expect(getGlobalDbPath()).toBe(join(configDir, "omux.db"));
+		});
 	});
 });

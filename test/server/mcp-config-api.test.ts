@@ -4,7 +4,7 @@ import { CommandRegistry } from "../../src/server/command-registry.js";
 import { type ServerInstance, startServer } from "../../src/server/index.js";
 import { getConfigFilePath } from "../../src/utils/config.js";
 
-// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+// Sandboxed under OMUX_HOME by test/setup.ts — never the real ~/.omux.
 const configFile = getConfigFilePath();
 
 function createMainAgentMock() {

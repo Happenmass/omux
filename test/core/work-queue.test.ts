@@ -3,7 +3,7 @@ import { WorkQueue, type AgentEvent } from "../../src/core/work-queue.js";
 
 function makeAgentEvent(overrides: Partial<AgentEvent> = {}): AgentEvent {
 	return {
-		agentId: "cliclaw-test-1",
+		agentId: "omux-test-1",
 		taskId: "task_1",
 		status: "completed",
 		detail: "Agent finished",

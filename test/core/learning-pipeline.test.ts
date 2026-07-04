@@ -25,7 +25,7 @@ describe("LearningPipeline", () => {
 	let repoDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-lp-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-lp-"));
 		db = new Database(join(tmpDir, "x.sqlite"));
 		db.pragma("journal_mode = WAL");
 		db.pragma("foreign_keys = ON");
@@ -74,7 +74,7 @@ describe("LearningPipeline", () => {
 		g(repoDir, "add .");
 		const entry = await pipeline.ingestAgentKill({
 			sessionId: "s1",
-			sessionName: "cliclaw-a",
+			sessionName: "omux-a",
 			cwd: repoDir,
 			agentPrompts: ["make b"],
 		});

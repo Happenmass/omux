@@ -109,11 +109,11 @@ export class AnthropicProvider implements LLMProvider {
 		if (thinkingChars > 0) {
 			const msg = `[anthropic] thinking received: ${thinkingChars} chars`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		} else if (opts?.thinking && opts.thinking !== "off") {
 			const msg = `[anthropic] thinking requested but NO thinking content returned (model may not support extended thinking)`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		}
 
 		const finalMessage = await stream.finalMessage();
@@ -179,7 +179,7 @@ export class AnthropicProvider implements LLMProvider {
 			}
 			const msg = `[anthropic] thinking enabled: level=${opts.thinking} budget_tokens=${budget} max_tokens=${params.max_tokens}`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		} else {
 			logger.debug("llm", `[anthropic] thinking off (level=${opts?.thinking ?? "undefined"})`);
 		}

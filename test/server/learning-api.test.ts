@@ -27,7 +27,7 @@ describe("learning REST API", () => {
 	let cookie: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-api-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-api-"));
 		db = new Database(join(tmpDir, "x.sqlite"));
 		db.pragma("journal_mode = WAL");
 		new ConversationStore(db);

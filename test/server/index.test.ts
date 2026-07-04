@@ -221,7 +221,7 @@ describe("startServer", () => {
 	it("should return agent terminals from the API", async () => {
 		const mainAgent = createMainAgentMock();
 		mainAgent.getActiveAgents = () => [
-			{ agentName: "cliclaw-auth", agentId: "cliclaw-auth", paneTarget: "auth:0.0", status: "active" },
+			{ agentName: "omux-auth", agentId: "omux-auth", paneTarget: "auth:0.0", status: "active" },
 		];
 
 		const bridge = createBridgeMock();
@@ -248,8 +248,8 @@ describe("startServer", () => {
 		const sessions = await response.json();
 		expect(sessions).toHaveLength(1);
 		expect(sessions[0]).toEqual({
-			agentName: "cliclaw-auth",
-			agentId: "cliclaw-auth",
+			agentName: "omux-auth",
+			agentId: "omux-auth",
 			status: "active",
 			paneContent: "$ claude\n> Working...\n",
 		});
@@ -280,8 +280,8 @@ describe("startServer", () => {
 	it("should handle capturePane failure gracefully in agent terminals", async () => {
 		const mainAgent = createMainAgentMock();
 		mainAgent.getActiveAgents = () => [
-			{ agentName: "cliclaw-broken", agentId: "cliclaw-broken", paneTarget: "broken:0.0", status: "active" },
-			{ agentName: "cliclaw-ok", agentId: "cliclaw-ok", paneTarget: "ok:0.0", status: "idle" },
+			{ agentName: "omux-broken", agentId: "omux-broken", paneTarget: "broken:0.0", status: "active" },
+			{ agentName: "omux-ok", agentId: "omux-ok", paneTarget: "ok:0.0", status: "idle" },
 		];
 
 		const bridge = createBridgeMock();
@@ -312,7 +312,7 @@ describe("startServer", () => {
 		expect(sessions).toHaveLength(2);
 		// Failed agent should have empty paneContent
 		expect(sessions[0].paneContent).toBe("");
-		expect(sessions[0].agentName).toBe("cliclaw-broken");
+		expect(sessions[0].agentName).toBe("omux-broken");
 		// Working agent should have content
 		expect(sessions[1].paneContent).toBe("ok content");
 	});
@@ -325,8 +325,8 @@ describe("startServer", () => {
 		};
 		mainAgent.getActiveAgents = () => [
 			{
-				agentName: "cliclaw-test",
-				agentId: "cliclaw-test",
+				agentName: "omux-test",
+				agentId: "omux-test",
 				paneTarget: "test:0.0",
 				status: "active",
 				takenOver: false,
@@ -366,8 +366,8 @@ describe("startServer", () => {
 		expect(terminalMsg.agents).toBeDefined();
 		expect(terminalMsg.sessions).toBeUndefined();
 		expect(terminalMsg.agents).toHaveLength(1);
-		expect(terminalMsg.agents[0].agentId).toBe("cliclaw-test");
-		expect(terminalMsg.agents[0].agentName).toBe("cliclaw-test");
+		expect(terminalMsg.agents[0].agentId).toBe("omux-test");
+		expect(terminalMsg.agents[0].agentName).toBe("omux-test");
 	});
 
 	it("should broadcast empty agents array after all agents killed", async () => {

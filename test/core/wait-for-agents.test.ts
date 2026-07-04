@@ -67,14 +67,14 @@ describe("wait_for_agents", () => {
 
 	it("parks (terminal) when at least one agent is still running", async () => {
 		(agent as any).agentMonitor = {
-			getAllTasks: () => [task("cliclaw-a", "running", "build core")],
+			getAllTasks: () => [task("omux-a", "running", "build core")],
 		};
 
 		const result = await call(agent);
 
 		expect(result.terminal).toBe(true);
 		expect(result.output).toContain("Parked");
-		expect(result.output).toContain("cliclaw-a");
+		expect(result.output).toContain("omux-a");
 		expect(broadcaster.broadcast).toHaveBeenCalledWith(
 			expect.objectContaining({ type: "system", message: expect.stringContaining("Parked, waiting for") }),
 		);
@@ -83,7 +83,7 @@ describe("wait_for_agents", () => {
 	it("parks when an agent event is already queued even with no running task", async () => {
 		(agent as any).agentMonitor = { getAllTasks: () => [] };
 		(agent as any).workQueue.enqueueAgentEvent({
-			agentId: "cliclaw-b",
+			agentId: "omux-b",
 			taskId: "task_1",
 			status: "completed",
 			detail: "done",
@@ -97,7 +97,7 @@ describe("wait_for_agents", () => {
 
 		expect(result.terminal).toBe(true);
 		expect(result.output).toContain("event(s) already queued");
-		expect(result.output).toContain("cliclaw-b");
+		expect(result.output).toContain("omux-b");
 	});
 
 	it("does NOT park when there is nothing to wait for, and surfaces the drive-or-finish decision", async () => {
@@ -115,29 +115,29 @@ describe("wait_for_agents", () => {
 
 	it("does NOT park when agents are only waiting_input — nudges respond_to_agent", async () => {
 		(agent as any).agentMonitor = {
-			getAllTasks: () => [task("cliclaw-c", "waiting_input", "confirm overwrite?")],
+			getAllTasks: () => [task("omux-c", "waiting_input", "confirm overwrite?")],
 		};
 
 		const result = await call(agent);
 
 		expect(result.terminal).toBe(false);
 		expect(result.output).toContain("respond_to_agent");
-		expect(result.output).toContain("cliclaw-c");
+		expect(result.output).toContain("omux-c");
 	});
 
 	it("parks but still surfaces waiting_input agents when others are running", async () => {
 		(agent as any).agentMonitor = {
 			getAllTasks: () => [
-				task("cliclaw-run", "running", "implement"),
-				task("cliclaw-ask", "waiting_input", "which port?"),
+				task("omux-run", "running", "implement"),
+				task("omux-ask", "waiting_input", "which port?"),
 			],
 		};
 
 		const result = await call(agent);
 
 		expect(result.terminal).toBe(true);
-		expect(result.output).toContain("cliclaw-run");
-		expect(result.output).toContain("cliclaw-ask");
+		expect(result.output).toContain("omux-run");
+		expect(result.output).toContain("omux-ask");
 		expect(result.output).toContain("respond_to_agent");
 	});
 });

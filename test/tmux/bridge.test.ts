@@ -5,7 +5,7 @@ const bridge = new TmuxBridge();
 let sessionCounter = 0;
 
 function makeSessionName() {
-	return `cliclaw-test-${Date.now()}-${sessionCounter++}`;
+	return `omux-test-${Date.now()}-${sessionCounter++}`;
 }
 
 describe("TmuxBridge", () => {
@@ -66,7 +66,7 @@ describe("TmuxBridge", () => {
 		const target = `${name}:0.0`;
 
 		// Send a command
-		await bridge.sendKeys(target, "echo hello-cliclaw-test", { literal: true });
+		await bridge.sendKeys(target, "echo hello-omux-test", { literal: true });
 		await bridge.sendEnter(target);
 
 		// Wait for command to execute
@@ -74,7 +74,7 @@ describe("TmuxBridge", () => {
 
 		// Capture output
 		const capture = await bridge.capturePane(target);
-		expect(capture.content).toContain("hello-cliclaw-test");
+		expect(capture.content).toContain("hello-omux-test");
 		expect(capture.lines.length).toBeGreaterThan(0);
 		expect(capture.timestamp).toBeGreaterThan(0);
 	});
@@ -110,19 +110,33 @@ describe("TmuxBridge", () => {
 		expect(panes[0].height).toBeGreaterThan(0);
 	});
 
-	it("should list only cliclaw sessions", async () => {
+	it("should list only omux sessions", async () => {
 		if (!tmuxAvailable) return;
 
-		const CliclawName = makeSessionName(); // starts with "cliclaw-test-"
+		const OmuxName = makeSessionName(); // starts with "omux-test-"
 		const otherName = `other-session-${Date.now()}-${sessionCounter++}`;
-		activeSessions.push(CliclawName, otherName);
+		activeSessions.push(OmuxName, otherName);
 
-		await bridge.createSession(CliclawName);
+		await bridge.createSession(OmuxName);
 		await bridge.createSession(otherName);
 
-		const CliclawAgents = await bridge.listCliclawAgents();
-		expect(CliclawAgents.some((s) => s.name === CliclawName)).toBe(true);
-		expect(CliclawAgents.every((s) => s.name.startsWith("cliclaw-"))).toBe(true);
-		expect(CliclawAgents.some((s) => s.name === otherName)).toBe(false);
+		const OmuxAgents = await bridge.listOmuxAgents();
+		expect(OmuxAgents.some((s) => s.name === OmuxName)).toBe(true);
+		// The host may have unrelated live agents, but every listed session must
+		// carry the omux- prefix or the legacy cliclaw- prefix.
+		expect(OmuxAgents.every((s) => s.name.startsWith("omux-") || s.name.startsWith("cliclaw-"))).toBe(true);
+		expect(OmuxAgents.some((s) => s.name === otherName)).toBe(false);
+	});
+
+	it("should also list legacy cliclaw-prefixed sessions", async () => {
+		if (!tmuxAvailable) return;
+
+		const legacyName = `cliclaw-test-${Date.now()}-${sessionCounter++}`;
+		activeSessions.push(legacyName);
+
+		await bridge.createSession(legacyName);
+
+		const OmuxAgents = await bridge.listOmuxAgents();
+		expect(OmuxAgents.some((s) => s.name === legacyName)).toBe(true);
 	});
 });

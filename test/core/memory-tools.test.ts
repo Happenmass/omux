@@ -100,7 +100,7 @@ function createAgent(opts: { memoryStore?: any; embeddingProvider?: any } = {}) 
 
 describe("MainAgent memory tools", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-memtest-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-memtest-"));
 		await mkdir(join(tmpDir, "memory"), { recursive: true });
 	});
 

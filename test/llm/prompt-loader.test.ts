@@ -10,7 +10,7 @@ describe("PromptLoader", () => {
 	let builtinDir: string;
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(join(tmpdir(), "cliclaw-test-"));
+		tempDir = await mkdtemp(join(tmpdir(), "omux-test-"));
 		builtinDir = join(tempDir, "builtin-prompts");
 		await mkdir(builtinDir, { recursive: true });
 
@@ -34,7 +34,7 @@ describe("PromptLoader", () => {
 	});
 
 	it("should override with project-level .md files", async () => {
-		const promptsDir = join(tempDir, ".cliclaw", "prompts");
+		const promptsDir = join(tempDir, ".omux", "prompts");
 		await mkdir(promptsDir, { recursive: true });
 		await writeFile(join(promptsDir, "memory-flush.md"), "Custom memory-flush prompt");
 
@@ -157,7 +157,7 @@ describe("PromptLoader", () => {
 			await writeFile(join(builtinAdaptersDir, "claude-code.md"), "Builtin capabilities");
 
 			// Project-level override
-			const projectAdaptersDir = join(tempDir, ".cliclaw", "prompts", "adapters");
+			const projectAdaptersDir = join(tempDir, ".omux", "prompts", "adapters");
 			await mkdir(projectAdaptersDir, { recursive: true });
 			await writeFile(join(projectAdaptersDir, "claude-code.md"), "Project capabilities");
 
@@ -220,7 +220,7 @@ describe("PromptLoader", () => {
 		});
 
 		it("prefers project-level .cn.md over builtin .md under zh-CN", async () => {
-			const promptsDir = join(tempDir, ".cliclaw", "prompts");
+			const promptsDir = join(tempDir, ".omux", "prompts");
 			await mkdir(promptsDir, { recursive: true });
 			await writeFile(join(promptsDir, "memory-flush.cn.md"), "项目级中文 memory-flush");
 

@@ -192,7 +192,7 @@ describe("CommandRouter", () => {
 			const { tmpdir } = await import("node:os");
 			const { join } = await import("node:path");
 
-			const tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-tidy-"));
+			const tmpDir = await mkdtemp(join(tmpdir(), "omux-tidy-"));
 			await mkdir(join(tmpDir, "memory"), { recursive: true });
 			await writeFile(join(tmpDir, "memory/core.md"), "# Core\n- old decision\n- current decision");
 
@@ -269,7 +269,7 @@ describe("CommandRouter", () => {
 			const { tmpdir } = await import("node:os");
 			const { join } = await import("node:path");
 
-			const tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-tidy-guard-"));
+			const tmpDir = await mkdtemp(join(tmpdir(), "omux-tidy-guard-"));
 			await mkdir(join(tmpDir, "memory"), { recursive: true });
 			await writeFile(join(tmpDir, "memory/core.md"), "# Core\n- important decision");
 

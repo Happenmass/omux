@@ -35,7 +35,7 @@ describe("ContextManager Persistence", () => {
 	const template = "Goal: {{goal}}\nHistory: {{compressed_history}}\nCaps: {{agent_capabilities}}";
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-ctx-test-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-ctx-test-"));
 		db = new Database(join(tmpDir, "test.sqlite"));
 		db.pragma("journal_mode = WAL");
 		store = new ConversationStore(db);

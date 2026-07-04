@@ -63,7 +63,7 @@ export class Dashboard implements Component {
 	render(width: number): string[] {
 		// Update header with elapsed time
 		const elapsed = formatDuration(Date.now() - this.startTime);
-		const header = `  ${chalk.bold("Cliclaw")} ${chalk.dim("|")} ${this.goal} ${chalk.dim("|")} ${chalk.dim("⏱")} ${elapsed}`;
+		const header = `  ${chalk.bold("Omux")} ${chalk.dim("|")} ${this.goal} ${chalk.dim("|")} ${chalk.dim("⏱")} ${elapsed}`;
 		this.headerText.setText(header);
 
 		const lines: string[] = [];

@@ -2,8 +2,9 @@
 # Direct curl test to verify whether the configured OpenAI-compatible endpoint
 # actually returns reasoning content when `reasoning_effort` is set.
 #
-# Reads provider / model / baseUrl / apiKey from ~/.cliclaw/config.json.
-# Bypasses cliclaw entirely — useful when you suspect a proxy is dropping or
+# Reads provider / model / baseUrl / apiKey from ~/.omux/config.json
+# (falls back to a legacy ~/.cliclaw/config.json).
+# Bypasses omux entirely — useful when you suspect a proxy is dropping or
 # inconsistently forwarding the reasoning field.
 #
 # Usage:
@@ -17,7 +18,12 @@
 
 set -euo pipefail
 
-CONFIG_FILE="${CONFIG_FILE:-$HOME/.cliclaw/config.json}"
+DEFAULT_CONFIG="$HOME/.omux/config.json"
+if [[ ! -f "$DEFAULT_CONFIG" && -f "$HOME/.cliclaw/config.json" ]]; then
+	# legacy cliclaw home
+	DEFAULT_CONFIG="$HOME/.cliclaw/config.json"
+fi
+CONFIG_FILE="${CONFIG_FILE:-$DEFAULT_CONFIG}"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
 	echo "config not found: $CONFIG_FILE" >&2
@@ -175,9 +181,9 @@ if [[ "$WITH_TOOLS" == "1" ]]; then
 	call_once "with reasoning_effort=$EFFORT + tools" "$(build_body 1 1)"
 fi
 
-# ─── Streaming probe (mirrors how cliclaw actually calls the API) ────────
+# ─── Streaming probe (mirrors how omux actually calls the API) ────────
 echo "═══════════════════════════════════════════════════════════════"
-echo "STREAMING probe — replicates cliclaw's real call shape (stream: true)"
+echo "STREAMING probe — replicates omux's real call shape (stream: true)"
 echo "Looks at the LAST usage chunk to see whether the proxy keeps"
 echo "completion_tokens_details.reasoning_tokens when streaming."
 echo "═══════════════════════════════════════════════════════════════"
@@ -211,7 +217,7 @@ call_stream_once() {
 			echo ">>> streaming reasoning_tokens = $last_rt  ✅ proxy keeps reasoning details when streaming"
 		else
 			echo ">>> streaming reasoning_tokens = 0  ❌ proxy drops reasoning_tokens in streaming mode"
-			echo "    (this is exactly the cliclaw symptom — not a cliclaw bug, the proxy is the culprit)"
+			echo "    (this is exactly the omux symptom — not an omux bug, the proxy is the culprit)"
 		fi
 	fi
 

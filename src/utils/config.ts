@@ -73,7 +73,7 @@ export interface SkillsConfig {
 	/** Skill names to disable (won't be loaded even if discovered) */
 	disabled: string[];
 	/**
-	 * Absolute workspace directories whose `.cliclaw/skills/` are trusted to be loaded.
+	 * Absolute workspace directories whose `.omux/skills/` (or legacy cliclaw `.cliclaw/skills/`) are trusted to be loaded.
 	 * Workspace skills execute with orchestrator authority (prompt-enrichment lands in the
 	 * MainAgent SYSTEM PROMPT, main-agent-tool bodies carry tool-result authority), so a
 	 * cloned repo's skills are NOT loaded unless its absolute path is listed here. Default [].
@@ -108,14 +108,14 @@ export interface McpServerDefinition {
 export interface MdnsConfig {
 	/** Whether to advertise the server over mDNS so it's reachable as `<name>.local`. Default true. */
 	enabled: boolean;
-	/** Bare hostname without ".local" suffix (e.g. "cliclaw" → "cliclaw.local"). */
+	/** Bare hostname without ".local" suffix (e.g. "omux" → "omux.local"). */
 	name: string;
 }
 
 export interface ContextConfig {
 	/**
 	 * Explicit context window size in tokens. When set, it overrides the automatic per-model
-	 * lookup ContextManager performs from the model id. Leave unset (omit / 0) to let Cliclaw
+	 * lookup ContextManager performs from the model id. Leave unset (omit / 0) to let Omux
 	 * pick a sensible window for known model families (claude → 200k, gemini/gpt-4.1 → 1M, …),
 	 * falling back to 500000 with a startup warning for unrecognized models.
 	 */
@@ -124,11 +124,11 @@ export interface ContextConfig {
 	compressionThreshold: number;
 }
 
-/** Coding-agent adapters Cliclaw knows how to launch. */
+/** Coding-agent adapters Omux knows how to launch. */
 export const KNOWN_AGENTS = ["claude-code", "codex"] as const;
 export type KnownAgent = (typeof KNOWN_AGENTS)[number];
 
-export interface CliclawConfig {
+export interface OmuxConfig {
 	/** Adapter used by `create_agent` when no `adapter` is specified. Must be one of `enabledAgents`. */
 	defaultAgent: string;
 	/** Adapters that are active: their capabilities are injected into the Main Agent prompt and selectable via `create_agent`. */
@@ -149,14 +149,69 @@ export interface CliclawConfig {
 	mcpServers?: Record<string, McpServerDefinition>;
 }
 
+let warnedLegacyHomeEnv = false;
+let warnedLegacyHomeDir = false;
+
 /**
- * Root of Cliclaw's global storage (config, memory, logs, learning, ...).
- * Defaults to `~/.cliclaw`; the `CLICLAW_HOME` env var overrides it (tests set
- * it to a temp dir so they never touch the real home directory). Resolved
- * lazily on every call so an env change made after module load still applies.
+ * Root of Omux's global storage (config, memory, logs, learning, ...).
+ *
+ * Resolution order:
+ *   1. `OMUX_HOME` env var (tests set it to a temp dir so they never touch
+ *      the real home directory)
+ *   2. `CLICLAW_HOME` env var — legacy cliclaw override, honored with a
+ *      one-time deprecation notice
+ *   3. `~/.omux` if it exists
+ *   4. `~/.cliclaw` if it exists — legacy cliclaw home, used as-is (no
+ *      automatic migration), with a one-time notice
+ *   5. `~/.omux` (created lazily by the ensure* helpers)
+ *
+ * Resolved lazily on every call so an env change made after module load
+ * still applies.
  */
-function cliclawHome(): string {
-	return process.env.CLICLAW_HOME || join(homedir(), ".cliclaw");
+export function omuxHome(): string {
+	if (process.env.OMUX_HOME) {
+		return process.env.OMUX_HOME;
+	}
+	if (process.env.CLICLAW_HOME) {
+		if (!warnedLegacyHomeEnv) {
+			warnedLegacyHomeEnv = true;
+			console.error("[omux] CLICLAW_HOME is deprecated; use OMUX_HOME instead.");
+		}
+		return process.env.CLICLAW_HOME;
+	}
+	const omuxDir = join(homedir(), ".omux");
+	if (existsSync(omuxDir)) {
+		return omuxDir;
+	}
+	const legacyDir = join(homedir(), ".cliclaw");
+	if (existsSync(legacyDir)) {
+		if (!warnedLegacyHomeDir) {
+			warnedLegacyHomeDir = true;
+			console.error("[omux] using legacy ~/.cliclaw home");
+		}
+		return legacyDir;
+	}
+	return omuxDir;
+}
+
+/**
+ * Resolve the per-project dot directory (project MEMORY.md, workspace skills,
+ * prompt overrides live under it).
+ *
+ * Prefers `<projectDir>/.omux` when it exists; falls back to the legacy
+ * `<projectDir>/.cliclaw` when only that exists; defaults to `.omux` when
+ * neither exists (writers create it on demand).
+ */
+export function projectDotDir(projectDir: string): string {
+	const omuxDir = join(projectDir, ".omux");
+	if (existsSync(omuxDir)) {
+		return omuxDir;
+	}
+	const legacyDir = join(projectDir, ".cliclaw");
+	if (existsSync(legacyDir)) {
+		return legacyDir;
+	}
+	return omuxDir;
 }
 
 export interface ServerRuntimeState {
@@ -166,13 +221,13 @@ export interface ServerRuntimeState {
 	url: string;
 	cwd: string;
 	startedAt: string;
-	/** URL via mDNS (e.g. http://cliclaw.local:3120) when advertising is enabled. */
+	/** URL via mDNS (e.g. http://omux.local:3120) when advertising is enabled. */
 	mdnsUrl?: string;
 	/** LAN IPv4 URLs the server is reachable at. */
 	lanUrls?: string[];
 }
 
-const DEFAULT_CONFIG: CliclawConfig = {
+const DEFAULT_CONFIG: OmuxConfig = {
 	defaultAgent: "claude-code",
 	enabledAgents: ["claude-code"],
 	debug: false,
@@ -192,7 +247,7 @@ const DEFAULT_CONFIG: CliclawConfig = {
 		captureLines: 50,
 	},
 	tmux: {
-		sessionPrefix: "cliclaw",
+		sessionPrefix: "omux",
 	},
 	memory: {
 		embeddingProvider: "auto",
@@ -222,27 +277,27 @@ const DEFAULT_CONFIG: CliclawConfig = {
 	},
 	mdns: {
 		enabled: true,
-		name: "cliclaw",
+		name: "omux",
 	},
 };
 
 export function getConfigDir(): string {
-	return cliclawHome();
+	return omuxHome();
 }
 
 export function getConfigFilePath(): string {
-	return join(cliclawHome(), "config.json");
+	return join(omuxHome(), "config.json");
 }
 
 export function getServerStateFilePath(): string {
-	return join(cliclawHome(), "server-state.json");
+	return join(omuxHome(), "server-state.json");
 }
 
 export async function ensureConfigDir(): Promise<void> {
-	await mkdir(cliclawHome(), { recursive: true });
+	await mkdir(omuxHome(), { recursive: true });
 }
 
-export async function loadConfig(): Promise<CliclawConfig> {
+export async function loadConfig(): Promise<OmuxConfig> {
 	const configFile = getConfigFilePath();
 	if (!existsSync(configFile)) {
 		return { ...DEFAULT_CONFIG };
@@ -253,7 +308,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
 		const userConfig = JSON.parse(raw);
 
 		// Deep merge with defaults
-		const merged: CliclawConfig = {
+		const merged: OmuxConfig = {
 			...DEFAULT_CONFIG,
 			...userConfig,
 			llm: { ...DEFAULT_CONFIG.llm, ...userConfig.llm },
@@ -283,7 +338,7 @@ export async function loadConfig(): Promise<CliclawConfig> {
  * Backward-compat: a config that predates `enabledAgents` derives it from `defaultAgent`.
  * Mutates `config` in place.
  */
-export function normalizeAgents(config: CliclawConfig, userProvidedEnabled: boolean): void {
+export function normalizeAgents(config: OmuxConfig, userProvidedEnabled: boolean): void {
 	const known = new Set<string>(KNOWN_AGENTS);
 
 	// Legacy configs (only `defaultAgent`) → the active set is just that one adapter.
@@ -303,7 +358,7 @@ export function normalizeAgents(config: CliclawConfig, userProvidedEnabled: bool
 	}
 }
 
-export async function saveConfig(config: CliclawConfig): Promise<void> {
+export async function saveConfig(config: OmuxConfig): Promise<void> {
 	await ensureConfigDir();
 	await writeFile(getConfigFilePath(), JSON.stringify(config, null, "\t"), "utf-8");
 }
@@ -360,30 +415,46 @@ export async function clearServerRuntimeState(): Promise<void> {
 }
 
 export async function getAgentRunsDir(): Promise<string> {
-	const dir = join(cliclawHome(), "sessions");
+	const dir = join(omuxHome(), "sessions");
 	await mkdir(dir, { recursive: true });
 	return dir;
 }
 
 export async function getLogsDir(): Promise<string> {
-	const dir = join(cliclawHome(), "logs");
+	const dir = join(omuxHome(), "logs");
 	await mkdir(dir, { recursive: true });
 	return dir;
 }
 
 /**
  * Get the global storage directory (memory files live here).
- * Layout: ~/.cliclaw/ (storageDir) → ~/.cliclaw/memory/*.md
+ * Layout: ~/.omux/ (storageDir) → ~/.omux/memory/*.md
  */
 export function getGlobalStorageDir(): string {
-	return cliclawHome();
+	return omuxHome();
 }
 
 /**
  * Get the global SQLite database path.
+ *
+ * Resolution: `<home>/omux.db` if it exists; otherwise an existing legacy
+ * cliclaw database (`memory.sqlite`, the filename all cliclaw releases used,
+ * or `cliclaw.db`) is reused so upgraded installs keep their data; otherwise
+ * `<home>/omux.db` (created on first open).
  */
 export function getGlobalDbPath(): string {
-	return join(cliclawHome(), "memory.sqlite");
+	const home = omuxHome();
+	const dbPath = join(home, "omux.db");
+	if (existsSync(dbPath)) {
+		return dbPath;
+	}
+	for (const legacyName of ["memory.sqlite", "cliclaw.db"]) {
+		const legacyPath = join(home, legacyName);
+		if (existsSync(legacyPath)) {
+			return legacyPath;
+		}
+	}
+	return dbPath;
 }
 
 /**

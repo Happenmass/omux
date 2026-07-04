@@ -27,7 +27,7 @@ describe("timingSafeEqualStr", () => {
 describe("isAuthorized", () => {
 	it("accepts only the exact token via cookie", () => {
 		const token = createServerAuthToken();
-		const cookie = buildAuthCookie(token).split(";")[0]; // "cliclaw_auth=<token>"
+		const cookie = buildAuthCookie(token).split(";")[0]; // "omux_auth=<token>"
 		expect(isAuthorized({ cookie }, token)).toBe(true);
 		expect(isAuthorized({ cookie }, `${token}x`)).toBe(false);
 		expect(isAuthorized({}, token)).toBe(false);
@@ -57,15 +57,15 @@ describe("isLoopbackAddress", () => {
 });
 
 describe("buildHostAllowlist / isHostAllowed", () => {
-	const allow = buildHostAllowlist({ port: 3120, lanIps: ["192.168.1.42"], mdnsName: "cliclaw" });
+	const allow = buildHostAllowlist({ port: 3120, lanIps: ["192.168.1.42"], mdnsName: "omux" });
 
 	it("allows loopback names, the LAN IP, and <mdnsName>.local with and without port", () => {
 		expect(isHostAllowed("localhost", allow)).toBe(true);
 		expect(isHostAllowed("localhost:3120", allow)).toBe(true);
 		expect(isHostAllowed("127.0.0.1:3120", allow)).toBe(true);
 		expect(isHostAllowed("192.168.1.42:3120", allow)).toBe(true);
-		expect(isHostAllowed("cliclaw.local:3120", allow)).toBe(true);
-		expect(isHostAllowed("cliclaw.local", allow)).toBe(true);
+		expect(isHostAllowed("omux.local:3120", allow)).toBe(true);
+		expect(isHostAllowed("omux.local", allow)).toBe(true);
 	});
 
 	it("rejects unknown hosts, wrong ports, and a missing Host header (DNS rebinding)", () => {
@@ -77,7 +77,7 @@ describe("buildHostAllowlist / isHostAllowed", () => {
 });
 
 describe("isOriginAllowed", () => {
-	const allow = buildHostAllowlist({ port: 3120, lanIps: ["192.168.1.42"], mdnsName: "cliclaw" });
+	const allow = buildHostAllowlist({ port: 3120, lanIps: ["192.168.1.42"], mdnsName: "omux" });
 
 	it("allows a missing / null Origin (non-browser clients)", () => {
 		expect(isOriginAllowed(undefined, allow)).toBe(true);
@@ -86,7 +86,7 @@ describe("isOriginAllowed", () => {
 	});
 
 	it("allows origins whose host is in the allowlist and rejects others", () => {
-		expect(isOriginAllowed("http://cliclaw.local:3120", allow)).toBe(true);
+		expect(isOriginAllowed("http://omux.local:3120", allow)).toBe(true);
 		expect(isOriginAllowed("http://192.168.1.42:3120", allow)).toBe(true);
 		expect(isOriginAllowed("http://evil.example.com", allow)).toBe(false);
 		expect(isOriginAllowed("http://192.168.1.42:9999", allow)).toBe(false);

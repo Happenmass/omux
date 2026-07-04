@@ -12,7 +12,7 @@ import {
 	selectMcpServers,
 } from "../../src/utils/mcp-config.js";
 
-// Sandboxed under CLICLAW_HOME by test/setup.ts — never the real ~/.cliclaw.
+// Sandboxed under OMUX_HOME by test/setup.ts — never the real ~/.omux.
 const MCP_DIR = join(getConfigDir(), "tmp", "mcp-configs");
 
 afterEach(async () => {
@@ -32,8 +32,8 @@ describe("generateMcpConfigFile", () => {
 			"server-a": { command: "node", args: ["a.js"], type: "stdio" },
 			"server-b": { command: "uvx", args: ["b"], type: "stdio" },
 		};
-		const path = await generateMcpConfigFile(servers, "cliclaw-chat-1");
-		expect(path).toBe(join(MCP_DIR, "cliclaw-chat-1.json"));
+		const path = await generateMcpConfigFile(servers, "omux-chat-1");
+		expect(path).toBe(join(MCP_DIR, "omux-chat-1.json"));
 		expect(existsSync(path)).toBe(true);
 
 		const content = JSON.parse(await readFile(path, "utf-8"));
@@ -50,7 +50,7 @@ describe("generateMcpConfigFile", () => {
 			},
 			"server-b": { command: "uvx", args: ["b"], type: "stdio" },
 		};
-		const path = await generateMcpConfigFile(servers, "cliclaw-strip");
+		const path = await generateMcpConfigFile(servers, "omux-strip");
 		const content = JSON.parse(await readFile(path, "utf-8"));
 		expect(content.mcpServers["server-a"]).toEqual({
 			command: "node",
@@ -70,7 +70,7 @@ describe("generateMcpConfigFile", () => {
 				description: "Alibaba observability MCP",
 			},
 		};
-		const path = await generateMcpConfigFile(servers, "cliclaw-http");
+		const path = await generateMcpConfigFile(servers, "omux-http");
 		const content = JSON.parse(await readFile(path, "utf-8"));
 		expect(content.mcpServers["alibaba-obs"]).toEqual({
 			command: "curl",
@@ -81,7 +81,7 @@ describe("generateMcpConfigFile", () => {
 	});
 
 	it("creates file with empty servers", async () => {
-		const path = await generateMcpConfigFile({}, "cliclaw-empty");
+		const path = await generateMcpConfigFile({}, "omux-empty");
 		const content = JSON.parse(await readFile(path, "utf-8"));
 		expect(content).toEqual({ mcpServers: {} });
 	});

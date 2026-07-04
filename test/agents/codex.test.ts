@@ -32,31 +32,31 @@ describe("CodexAdapter.launch", () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 		});
 		await vi.advanceTimersByTimeAsync(11000);
 		await launchPromise;
 
-		expect(bridge.createSession).toHaveBeenCalledWith("cliclaw-test", { cwd: "/tmp/test" });
+		expect(bridge.createSession).toHaveBeenCalledWith("omux-test", { cwd: "/tmp/test" });
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			`codex --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.5`,
 		);
-		expect(bridge.sendEnter).toHaveBeenCalledWith("cliclaw-test:0.0");
+		expect(bridge.sendEnter).toHaveBeenCalledWith("omux-test:0.0");
 	});
 
 	it("should use the provided model in place of the default", async () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 			model: "gpt-5-codex",
 		});
 		await vi.advanceTimersByTimeAsync(11000);
 		await launchPromise;
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			`codex --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5-codex`,
 		);
 	});
@@ -65,14 +65,14 @@ describe("CodexAdapter.launch", () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
-			sessionName: "cliclaw-test",
+			sessionName: "omux-test",
 			resumeId: "019d41a7-3a10-7b73-90a6-62ee8fa056f6",
 		});
 		await vi.advanceTimersByTimeAsync(11000);
 		await launchPromise;
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
-			"cliclaw-test:0.0",
+			"omux-test:0.0",
 			`codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.5`,
 		);
 	});

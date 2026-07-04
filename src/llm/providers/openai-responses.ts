@@ -128,7 +128,7 @@ interface ResponsesApiRequestIncrementalWire {
  *   - Cleared on `response.failed` / `response.incomplete` / non-200 HTTP / unexpected stream errors
  *   - Cleared (effectively) when the next-turn double-check fails — that turn sends full and
  *     re-seeds the state with the new full request as baseline
- *   - NOT persisted to disk: cliclaw restart re-starts the chain (first request after restart
+ *   - NOT persisted to disk: omux restart re-starts the chain (first request after restart
  *     is full, but `prompt_cache_key` keeps the server-side cache hit). This matches Codex's
  *     in-memory WS session behavior.
  */
@@ -233,8 +233,12 @@ export class OpenAIResponsesProvider implements LLMProvider {
 		// `store` only matters for Layer-2 (server retains prior response so prev_id chain
 		// can reconstruct baseline). With L2 off, `store=false` matches what Codex's HTTP
 		// path sends to OpenAI direct (`is_azure_responses_endpoint() == false`). A provider
-		// config can still explicitly opt-in via `headers["x-cliclaw-store"]: "true"`.
-		this.store = this.incrementalEnabled || config.headers?.["x-cliclaw-store"] === "true";
+		// config can still explicitly opt-in via `headers["x-omux-store"]: "true"`
+		// (the legacy cliclaw header `x-cliclaw-store` is still honored).
+		this.store =
+			this.incrementalEnabled ||
+			config.headers?.["x-omux-store"] === "true" ||
+			config.headers?.["x-cliclaw-store"] === "true";
 	}
 
 	/**
@@ -256,7 +260,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 	}
 
 	async complete(messages: LLMMessage[], opts?: CompletionOptions): Promise<LLMResponse> {
-		// Non-streaming Responses API is supported (stream=false) but cliclaw's flow always
+		// Non-streaming Responses API is supported (stream=false) but omux's flow always
 		// streams; we still expose `complete` for parity with other providers. Implement by
 		// running the stream and returning its final `done` event.
 		let final: LLMResponse | null = null;
@@ -430,7 +434,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 				if (attempt > 0) {
 					// Surface retries explicitly — every retry is a SEPARATE billable call. If the
 					// dashboard shows N entries for what was logically one /compact, attempt counter
-					// here will tell us if cliclaw retried internally.
+					// here will tell us if omux retried internally.
 					logger.info(
 						"llm",
 						`[${this.name}] fetch attempt ${attempt + 1}/${this.maxRetries + 1} — this is a RETRY of the previous failed request`,
@@ -644,7 +648,7 @@ export function tryBuildIncremental(
 	// `build_responses_request`, which does NOT splice in previous_response_id at all.
 	//
 	// Defensive workaround: any delta carrying a function_call_output forces a full request.
-	// We lose L2 wire-byte savings on tool-result turns (which is most cliclaw turns since
+	// We lose L2 wire-byte savings on tool-result turns (which is most omux turns since
 	// the orchestrator is tool-heavy), but every other turn type (text-only, new user input)
 	// still rides the L2 fast path. Server-side L1 prompt-cache (prompt_cache_key) still
 	// helps on the full path — that's untouched by this fallback.
@@ -1227,11 +1231,11 @@ async function* parseResponsesSse(
 	if (reasoningChars > 0) {
 		const m = `[${providerName}] reasoning chars=${reasoningChars}`;
 		logger.info("llm", m);
-		console.log(`[cliclaw] ${m}`);
+		console.log(`[omux] ${m}`);
 	} else if (thinking && thinking !== "off") {
 		const m = `[${providerName}] reasoning effort=${thinking} requested but no reasoning text returned`;
 		logger.info("llm", m);
-		console.log(`[cliclaw] ${m}`);
+		console.log(`[omux] ${m}`);
 	}
 
 	yield {

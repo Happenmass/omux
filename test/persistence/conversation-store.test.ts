@@ -12,7 +12,7 @@ describe("ConversationStore", () => {
 	let store: ConversationStore;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-conv-test-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-conv-test-"));
 		db = new Database(join(tmpDir, "test.sqlite"));
 		db.pragma("journal_mode = WAL");
 		store = new ConversationStore(db);

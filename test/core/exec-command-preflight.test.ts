@@ -76,7 +76,7 @@ function callExec(agent: MainAgent, command: string, cwd: string) {
 
 describe("exec_command pre-flight", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-preflight-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-preflight-"));
 	});
 
 	afterEach(async () => {
@@ -211,7 +211,7 @@ describe("exec_command pre-flight", () => {
 
 describe("exec_command mutation guard", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-mutguard-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-mutguard-"));
 	});
 
 	afterEach(async () => {
@@ -268,7 +268,7 @@ describe("exec_command mutation guard", () => {
 		["uv add", "uv add numpy"],
 		["curl POST", "curl -X POST https://example.com"],
 		["curl --data", "curl --data 'x=1' https://example.com"],
-		["tmux", "tmux kill-session -t cliclaw-foo"],
+		["tmux", "tmux kill-session -t omux-foo"],
 		["mkdir without -p", "mkdir newdir"],
 	];
 

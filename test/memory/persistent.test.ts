@@ -98,10 +98,10 @@ describe("persistent memory", () => {
 			const globalDir = join(tempDir, "global");
 			const workspaceDir = join(tempDir, "workspace");
 			await mkdir(globalDir, { recursive: true });
-			await mkdir(join(workspaceDir, ".cliclaw"), { recursive: true });
+			await mkdir(join(workspaceDir, ".omux"), { recursive: true });
 			await writeFile(join(globalDir, "MEMORY.md"), "# Memory\n\n## User Profile\n- Global content\n");
 			await writeFile(
-				join(workspaceDir, ".cliclaw", "MEMORY.md"),
+				join(workspaceDir, ".omux", "MEMORY.md"),
 				"# Memory\n\n## Project Conventions\n- Project content\n",
 			);
 
