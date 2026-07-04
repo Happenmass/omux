@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { logger } from "../utils/logger.js";
 
@@ -12,8 +12,10 @@ import type { FileEntry } from "./types.js";
 
 // ─── Schema SQL ─────────────────────────────────────────
 
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = "3";
 
+// Non-FTS schema. The chunks_fts virtual table is created separately by
+// ftsTableSql() so its tokenizer can be chosen based on runtime SQLite support.
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
@@ -44,16 +46,6 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
 
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-	text,
-	id UNINDEXED,
-	path UNINDEXED,
-	source UNINDEXED,
-	model UNINDEXED,
-	start_line UNINDEXED,
-	end_line UNINDEXED
-);
-
 CREATE TABLE IF NOT EXISTS embedding_cache (
 	provider     TEXT NOT NULL,
 	model        TEXT NOT NULL,
@@ -68,6 +60,28 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at
 	ON embedding_cache(updated_at);
 `;
+
+/**
+ * DDL for the chunks_fts FTS5 virtual table.
+ *
+ * The trigram tokenizer (SQLite >= 3.34) is preferred so BM25 works on CJK
+ * content — the default unicode61 tokenizer does no CJK segmentation, making
+ * keyword search nearly useless on Chinese text. Trigram matches any substring
+ * of >= 3 characters, covering both CJK and Latin scripts. On older SQLite
+ * builds without trigram support we fall back to the default tokenizer.
+ */
+function ftsTableSql(tokenizer: "trigram" | "default"): string {
+	const tokenizeClause = tokenizer === "trigram" ? ",\n\ttokenize = 'trigram'" : "";
+	return `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+	text,
+	id UNINDEXED,
+	path UNINDEXED,
+	source UNINDEXED,
+	model UNINDEXED,
+	start_line UNINDEXED,
+	end_line UNINDEXED${tokenizeClause}
+);`;
+}
 
 /**
  * Sanitize a provider name for use in a SQL table name.
@@ -333,6 +347,17 @@ export class MemoryStore {
 
 	// ─── Chunk Operations ─────────────────────────────────
 
+	/**
+	 * Run a set of writes atomically. Used to wrap a single file re-index
+	 * (removeChunksByPath + insertChunk × N + upsertFile) so that a crash
+	 * mid-file can never leave chunks / chunks_fts / vec / files divergent —
+	 * either the whole file's rows are updated or none are. Nested calls reuse
+	 * the outer transaction (better-sqlite3 semantics via SAVEPOINT).
+	 */
+	runInTransaction<T>(fn: () => T): T {
+		return this.db.transaction(fn)();
+	}
+
 	removeChunksByPath(path: string): void {
 		// Get chunk IDs for vec cleanup
 		const chunkIds = this.db.prepare("SELECT id FROM chunks WHERE path = ?").all(path) as { id: string }[];
@@ -382,8 +407,12 @@ export class MemoryStore {
 				now,
 			);
 
-		// FTS insert
+		// FTS insert. chunks_fts is an FTS5 virtual table whose `id` column is
+		// UNINDEXED, so there is no PRIMARY KEY to REPLACE against — a plain
+		// re-INSERT of an existing id would duplicate the row. Delete first to
+		// keep this idempotent for the same chunk id.
 		if (this.ftsAvailable) {
+			this.db.prepare("DELETE FROM chunks_fts WHERE id = ?").run(params.id);
 			this.db
 				.prepare(
 					`INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line)
@@ -474,8 +503,12 @@ export class MemoryStore {
 	 *
 	 * - **append** (default): Append content to the file (create if missing)
 	 * - **overwrite**: Replace entire file content
-	 * - **replace**: Find `match` text and replace with `content`
-	 * - **delete**: Find `match` text and remove it
+	 * - **replace**: Find the FIRST occurrence of `match` text and replace with `content`
+	 * - **delete**: Find the FIRST occurrence of `match` text and remove it
+	 *
+	 * `replace`/`delete` only affect the first occurrence. Both use a function
+	 * replacer so `$`-sequences in `content` (`$&`, `$'`, `` $` ``, `$1`) are
+	 * inserted literally and never expanded as replacement patterns.
 	 */
 	async edit(params: {
 		path: string;
@@ -496,6 +529,16 @@ export class MemoryStore {
 
 		const absPath = join(this.storageDir, relPath);
 
+		// Defense-in-depth: resolve the absolute path and assert it stays inside
+		// <storageDir>/memory. isMemoryPath already rejects `..` segments, but this
+		// guards against symlinks / normalization surprises before any FS write.
+		const memoryRoot = resolve(this.storageDir, "memory");
+		const resolvedPath = resolve(absPath);
+		const rel = relative(memoryRoot, resolvedPath);
+		if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+			throw new Error("Only .md files under memory/ directory are allowed");
+		}
+
 		// Ensure directory exists
 		await mkdir(dirname(absPath), { recursive: true });
 
@@ -512,7 +555,10 @@ export class MemoryStore {
 				if (!existing.includes(params.match)) {
 					throw new Error(`match text not found in ${relPath}`);
 				}
-				const updated = existing.replace(params.match, params.content);
+				// Function replacer: `content` is inserted verbatim, so `$&`/`$'`/`` $` ``/`$1`
+				// sequences are never expanded as replacement patterns.
+				const replacement = params.content;
+				const updated = existing.replace(params.match, () => replacement);
 				await writeFile(absPath, updated, "utf-8");
 				break;
 			}
@@ -522,7 +568,7 @@ export class MemoryStore {
 				if (!existing.includes(params.match)) {
 					throw new Error(`match text not found in ${relPath}`);
 				}
-				const updated = existing.replace(params.match, "");
+				const updated = existing.replace(params.match, () => "");
 				await writeFile(absPath, updated, "utf-8");
 				break;
 			}
@@ -567,7 +613,10 @@ export class MemoryStore {
 	/**
 	 * Check stored schema version and rebuild tables if outdated.
 	 * This handles migration from the old per-project schema (v1) to the
-	 * simplified global schema (v2) which removed the `project` column.
+	 * simplified global schema (v2, dropped the `project` column) and v3
+	 * (switched chunks_fts to the trigram tokenizer for CJK keyword search).
+	 * Because the markdown files are the source of truth, dropping + rebuilding
+	 * and forcing a full re-sync is always safe.
 	 */
 	private migrateSchemaIfNeeded(): void {
 		try {
@@ -590,8 +639,28 @@ export class MemoryStore {
 			DROP TABLE IF EXISTS meta;
 		`);
 		this.db.exec(SCHEMA_SQL);
+		this.createFtsTable();
 		this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
 		this.dirty = true;
+	}
+
+	/**
+	 * Create the chunks_fts virtual table, preferring the trigram tokenizer
+	 * (SQLite >= 3.34) for CJK keyword search. If the bundled SQLite is too old
+	 * to support trigram, fall back to the default unicode61 tokenizer so FTS
+	 * still works (just without CJK segmentation).
+	 */
+	private createFtsTable(): void {
+		try {
+			this.db.exec(ftsTableSql("trigram"));
+		} catch (err: any) {
+			logger.warn(
+				"memory-store",
+				`trigram tokenizer unavailable (${err.message}); falling back to default FTS tokenizer`,
+			);
+			this.db.exec("DROP TABLE IF EXISTS chunks_fts");
+			this.db.exec(ftsTableSql("default"));
+		}
 	}
 
 	private loadVecExtension(extensionPath?: string): boolean {
@@ -614,8 +683,7 @@ export class MemoryStore {
 	private checkFtsAvailable(): boolean {
 		try {
 			// Check if FTS5 is available by querying the compile options
-			const rows = this.db.prepare("PRAGMA compile_options").all() as { compile_options: string }[];
-			const options = rows.map((r) => r.compile_options);
+			this.db.prepare("PRAGMA compile_options").all();
 			// FTS5 is usually available unless explicitly disabled
 			// Our schema already creates the table, so if it succeeded we're good
 			return true;
@@ -629,7 +697,11 @@ export class MemoryStore {
 
 export function isMemoryPath(relPath: string): boolean {
 	const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
-	return normalized.startsWith("memory/") && normalized.endsWith(".md");
+	if (!normalized.startsWith("memory/") || !normalized.endsWith(".md")) return false;
+	// Reject traversal segments (e.g. "memory/../../../x.md") that would escape
+	// the storage dir once join()'d into an absolute path.
+	if (normalized.split("/").includes("..")) return false;
+	return true;
 }
 
 export function sha256(text: string): string {
@@ -670,18 +742,28 @@ export async function listMemoryFiles(storageDir: string): Promise<string[]> {
 
 	const files: string[] = [];
 
-	// Scan memory/ directory under centralized storage
-	const memoryDir = joinPath(storageDir, "memory");
-	try {
-		const entries = await readdir(memoryDir, { withFileTypes: true });
+	// Recursively scan memory/ (and subdirectories like memory/learning/) under
+	// centralized storage. Subdir files (e.g. learning-pipeline output at
+	// memory/learning/<id>.md) must be indexed so memory_search can find them.
+	async function walk(dir: string): Promise<void> {
+		let entries: import("node:fs").Dirent[];
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			// directory doesn't exist yet
+			return;
+		}
 		for (const entry of entries) {
-			if (entry.isFile() && entry.name.endsWith(".md")) {
-				files.push(joinPath(memoryDir, entry.name));
+			const full = joinPath(dir, entry.name);
+			if (entry.isDirectory()) {
+				await walk(full);
+			} else if (entry.isFile() && entry.name.endsWith(".md")) {
+				files.push(full);
 			}
 		}
-	} catch {
-		// memory/ directory doesn't exist yet
 	}
+
+	await walk(joinPath(storageDir, "memory"));
 
 	return files;
 }

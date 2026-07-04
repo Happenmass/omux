@@ -5,9 +5,9 @@ import type { CheckResult } from "../types.js";
 const CHECK_NAME = "config-valid";
 
 /**
- * Validates the Cliclaw configuration file.
+ * Validates the Omux configuration file.
  *
- * Checks that `~/.cliclaw/config.json` exists, contains valid JSON,
+ * Checks that `~/.omux/config.json` exists, contains valid JSON,
  * and includes the required `llm.provider` and `llm.model` fields.
  * A missing config file is treated as a warning (defaults will be used).
  */
@@ -24,7 +24,7 @@ export async function checkConfig(): Promise<CheckResult> {
 				name: CHECK_NAME,
 				status: "warning",
 				message: `Config file not found at ${configPath}`,
-				details: "Default configuration will be used. Run 'cliclaw config' to create one.",
+				details: "Default configuration will be used. Run 'omux config' to create one.",
 			};
 		}
 		if (code === "EACCES") {

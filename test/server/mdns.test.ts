@@ -9,7 +9,7 @@ import {
 
 function fakeHandle(ips: string[]): MdnsHandle {
 	return {
-		hostname: "cliclaw.local",
+		hostname: "omux.local",
 		ips,
 		backend: "dns-sd",
 		stop: vi.fn(async () => {}),
@@ -61,7 +61,7 @@ function makeHarness(initialIps: string[]) {
 
 describe("isValidMdnsName", () => {
 	it("accepts simple names and rejects bad ones", () => {
-		expect(isValidMdnsName("cliclaw")).toBe(true);
+		expect(isValidMdnsName("omux")).toBe(true);
 		expect(isValidMdnsName("my-box1")).toBe(true);
 		expect(isValidMdnsName("-bad")).toBe(false);
 		expect(isValidMdnsName("has space")).toBe(false);
@@ -83,7 +83,7 @@ describe("startMdnsSupervisor", () => {
 	it("publishes once on start and reports the handle", () => {
 		const h = makeHarness(["192.168.1.10"]);
 		const onRebind = vi.fn();
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, onRebind, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, onRebind, deps: h.deps });
 
 		expect(h.startMdns).toHaveBeenCalledTimes(1);
 		expect(onRebind).toHaveBeenCalledTimes(1);
@@ -92,7 +92,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("defers publishing when no LAN IPv4 is available yet, then publishes when one appears", () => {
 		const h = makeHarness([]);
-		startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		expect(h.startMdns).not.toHaveBeenCalled();
 
 		h.setIps(["10.0.0.4"]);
@@ -102,7 +102,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("re-publishes when the LAN IP changes (the reconnect case)", async () => {
 		const h = makeHarness(["192.168.101.93"]);
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		const firstHandle = h.handles[0];
 
 		// Network reconnect hands out a new subnet.
@@ -118,7 +118,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("re-publishes after a network outage even when the IP is unchanged", async () => {
 		const h = makeHarness(["192.168.1.10"]);
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		const firstHandle = h.handles[0];
 		expect(h.startMdns).toHaveBeenCalledTimes(1);
 
@@ -142,7 +142,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("does not re-publish when the IP set is unchanged", () => {
 		const h = makeHarness(["192.168.1.10"]);
-		startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		h.tick();
 		h.tick();
 		expect(h.startMdns).toHaveBeenCalledTimes(1);
@@ -150,7 +150,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("manual rebind re-publishes against fresh IPs", async () => {
 		const h = makeHarness(["192.168.1.10"]);
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 
 		h.setIps(["192.168.1.50"]);
 		await sup.rebind("SIGHUP");
@@ -161,7 +161,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("manual rebind is a no-op tear-down when no IP is available", async () => {
 		const h = makeHarness(["192.168.1.10"]);
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		const handle = sup.getHandle();
 
 		h.setIps([]);
@@ -174,7 +174,7 @@ describe("startMdnsSupervisor", () => {
 
 	it("stop() clears the poll loop and tears down the advertisement", async () => {
 		const h = makeHarness(["192.168.1.10"]);
-		const sup = startMdnsSupervisor({ name: "cliclaw", port: 3120, deps: h.deps });
+		const sup = startMdnsSupervisor({ name: "omux", port: 3120, deps: h.deps });
 		const handle = sup.getHandle();
 
 		await sup.stop();

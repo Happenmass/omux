@@ -10,6 +10,13 @@ const pexec = promisify(execFile);
 export interface Baseline {
 	baseRef: string;
 	cwd: string;
+	/**
+	 * Untracked files present at registration time. `git stash create` baselines never
+	 * include untracked files, so anything already untracked at launch must be excluded
+	 * from the synthesized untracked-file diff at kill time — otherwise pre-existing
+	 * scratch files get attributed to the agent.
+	 */
+	preexistingUntracked: Set<string>;
 }
 
 export class ChangeTracker {
@@ -18,7 +25,8 @@ export class ChangeTracker {
 	async registerAgent(sessionId: string, cwd: string): Promise<void> {
 		const baseRef = await this.captureBaseline(cwd);
 		if (!baseRef) return; // non-git cwd — silently skip
-		this.baselines.set(sessionId, { baseRef, cwd });
+		const preexistingUntracked = await this.listUntrackedFiles(cwd);
+		this.baselines.set(sessionId, { baseRef, cwd, preexistingUntracked });
 	}
 
 	async computeDiff(sessionId: string): Promise<DiffResult | null> {
@@ -84,13 +92,18 @@ export class ChangeTracker {
 		// `git diff` does not list untracked files. Coding agents (Claude Code, Codex)
 		// typically create new files without staging, so we synthesize new-file diff
 		// fragments for each untracked file respecting .gitignore.
-		const untrackedDiff = await this.buildUntrackedDiff(b.cwd);
+		const untrackedDiff = await this.buildUntrackedDiff(b.cwd, b.preexistingUntracked);
 		return stdout + untrackedDiff;
 	}
 
-	private async buildUntrackedDiff(cwd: string): Promise<string> {
+	private async listUntrackedFiles(cwd: string): Promise<Set<string>> {
 		const { stdout } = await pexec("git", ["ls-files", "--others", "--exclude-standard"], { cwd });
-		const files = stdout.split("\n").filter((f) => f.length > 0);
+		return new Set(stdout.split("\n").filter((f) => f.length > 0));
+	}
+
+	private async buildUntrackedDiff(cwd: string, preexistingUntracked: Set<string>): Promise<string> {
+		const { stdout } = await pexec("git", ["ls-files", "--others", "--exclude-standard"], { cwd });
+		const files = stdout.split("\n").filter((f) => f.length > 0 && !preexistingUntracked.has(f));
 		const parts: string[] = [];
 		for (const file of files) {
 			try {
@@ -101,7 +114,7 @@ export class ChangeTracker {
 					content.length > 0 && content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
 				const header = `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n@@ -0,0 +1,${lines.length} @@\n`;
 				const body = lines.map((l) => `+${l}`).join("\n");
-				parts.push(header + body + "\n");
+				parts.push(`${header + body}\n`);
 			} catch {
 				// Unreadable file — skip silently.
 			}

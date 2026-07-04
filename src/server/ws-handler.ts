@@ -2,9 +2,11 @@ import type { WebSocket } from "ws";
 import type { LearningChat } from "../core/learning-chat.js";
 import type { MainAgent } from "../core/main-agent.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
+import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRouter } from "./command-router.js";
+import { t } from "./messages.js";
 
 /**
  * Handles a single WebSocket connection:
@@ -22,9 +24,11 @@ export function handleWebSocket(
 		bridge: TmuxBridge;
 		onTerminalMore?: (agentId: string) => void;
 		learningChat?: LearningChat;
+		locale?: SupportedLocale;
 	},
 ): void {
 	const { mainAgent, broadcaster, commandRouter, bridge } = opts;
+	const locale: SupportedLocale = opts.locale ?? "en-US";
 
 	// Register client
 	broadcaster.addClient(ws);
@@ -65,7 +69,7 @@ export function handleWebSocket(
 					logger.error("ws-handler", `handleMessage error: ${err.message}`);
 					broadcaster.broadcast({
 						type: "system",
-						message: `处理消息时出错: ${err.message}`,
+						message: t("msg_handle_error", locale, { error: err.message }),
 					});
 				});
 				break;
@@ -81,7 +85,7 @@ export function handleWebSocket(
 					logger.error("ws-handler", `Command error: ${err.message}`);
 					broadcaster.broadcast({
 						type: "system",
-						message: `指令执行出错: ${err.message}`,
+						message: t("command_error", locale, { error: err.message }),
 					});
 				});
 				break;
@@ -94,7 +98,7 @@ export function handleWebSocket(
 					return;
 				}
 				mainAgent.setTakenOver(agentId, true);
-				broadcaster.broadcast({ type: "system", message: `会话 ${agentId} 已被人工接管` });
+				broadcaster.broadcast({ type: "system", message: t("agent_taken_over", locale, { agentId }) });
 				break;
 			}
 
@@ -105,7 +109,7 @@ export function handleWebSocket(
 					return;
 				}
 				mainAgent.setTakenOver(agentId, false);
-				broadcaster.broadcast({ type: "system", message: `会话 ${agentId} 已恢复 MainAgent 控制` });
+				broadcaster.broadcast({ type: "system", message: t("agent_released", locale, { agentId }) });
 				break;
 			}
 

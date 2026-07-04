@@ -28,7 +28,8 @@ const TEMPLATE = `# Memory
 
 const PROJECT_MARKERS = [
 	".git",
-	".cliclaw",
+	".omux",
+	".cliclaw", // legacy cliclaw project dir
 	"package.json",
 	"pyproject.toml",
 	"Cargo.toml",
@@ -48,7 +49,7 @@ export type ProjectRootValidation =
 
 /**
  * Validate that a path is an absolute, existing directory containing a
- * recognizable project marker (`.git`, `package.json`, `.cliclaw`, ...).
+ * recognizable project marker (`.git`, `package.json`, `.omux`, ...).
  * Used by `persistent_memory` to prevent the agent from writing to the
  * wrong directory when it supplies an explicit `project_dir`.
  */
@@ -100,10 +101,10 @@ export async function readPersistentMemory(filePath: string): Promise<string> {
  * Project-level MEMORY.md is intentionally NOT included here — it's surfaced
  * to the MainAgent on demand by `create_agent` against the target project,
  * not via the system prompt. This keeps `{{memory}}` workspace-agnostic so
- * the same cliclaw process can drive sub-agents across multiple projects
+ * the same omux process can drive sub-agents across multiple projects
  * without conflating their conventions.
  *
- * @param globalDir  ~/.cliclaw/
+ * @param globalDir  ~/.omux/
  */
 export async function loadPersistentMemory(globalDir: string): Promise<string> {
 	const globalPath = join(globalDir, "MEMORY.md");
@@ -153,7 +154,7 @@ export async function updatePersistentMemory(params: {
 }
 
 /**
- * Simplified append function for CLI `cliclaw remember`.
+ * Simplified append function for CLI `omux remember`.
  */
 export async function appendToPersistentMemory(filePath: string, section: string, content: string): Promise<void> {
 	await updatePersistentMemory({ filePath, section, operation: "append", content });

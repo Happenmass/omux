@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentMonitor } from "../../src/core/agent-monitor.js";
-import { WorkQueue, type AgentEvent } from "../../src/core/work-queue.js";
-import type { SettledResult, PaneAnalysis } from "../../src/tmux/state-detector.js";
+import { type AgentEvent, WorkQueue } from "../../src/core/work-queue.js";
+import type { PaneAnalysis, SettledResult } from "../../src/tmux/state-detector.js";
 
 function createMockStateDetector() {
 	let settledResolve: ((result: SettledResult) => void) | null = null;
@@ -24,7 +24,9 @@ function createMockStateDetector() {
 
 function createMockBridge() {
 	return {
-		capturePane: vi.fn().mockResolvedValue({ content: "pane content", lines: ["pane content"], timestamp: Date.now() }),
+		capturePane: vi
+			.fn()
+			.mockResolvedValue({ content: "pane content", lines: ["pane content"], timestamp: Date.now() }),
 	} as any;
 }
 
@@ -484,4 +486,75 @@ describe("AgentMonitor", () => {
 		});
 	});
 
+	describe("status narrowing (type hole)", () => {
+		// Layer-2 returns "unknown" when its LLM analysis fails; StateDetector can also
+		// surface "active"/"idle". None are valid terminal AgentEvent statuses, so the
+		// monitor must map them to "error" rather than leaking them into the queue.
+		it("maps a settled 'unknown' status to 'error' in the enqueued event", async () => {
+			monitor.dispatch("session-u", "session-u:0.0", { preHash: "h", summary: "task" });
+
+			mockDetector._resolve(settledResult("unknown", "LLM analysis failed"));
+			await vi.waitFor(() => {
+				expect(workQueue.size()).toBe(1);
+			});
+
+			const item = workQueue.dequeue()!;
+			const event = item.kind === "agent_event" ? item.event : null!;
+			expect(event.status).toBe("error");
+			expect(event.detail).toBe("LLM analysis failed");
+			expect(monitor.isBusy("session-u")).toBe(false);
+		});
+
+		it("maps a settled 'active' status (non-terminal) to 'error'", async () => {
+			monitor.dispatch("session-a", "session-a:0.0", { preHash: "h", summary: "task" });
+
+			// timedOut=false so it reaches the terminal fireCallback with a raw "active".
+			mockDetector._resolve(settledResult("active", "still active but settled"));
+			await vi.waitFor(() => {
+				expect(workQueue.size()).toBe(1);
+			});
+
+			const item = workQueue.dequeue()!;
+			const event = item.kind === "agent_event" ? item.event : null!;
+			expect(event.status).toBe("error");
+			expect(monitor.isBusy("session-a")).toBe(false);
+		});
+	});
+
+	describe("outer polling catch hardening", () => {
+		// If the inner error handler itself throws (e.g. the callback throws while
+		// enqueuing), the outer catch must still emit an error event and remove the
+		// task — otherwise isBusy() stays true forever and wait_for_agents parks.
+		it("removes the task and emits error when the inner handler throws", async () => {
+			// Make enqueueAgentEvent throw the FIRST time (inner error path), then
+			// succeed so the outer catch's own fireCallback can enqueue.
+			const original = workQueue.enqueueAgentEvent.bind(workQueue);
+			let calls = 0;
+			const spy = vi.spyOn(workQueue, "enqueueAgentEvent").mockImplementation((event) => {
+				calls++;
+				if (calls === 1) {
+					throw new Error("enqueue exploded");
+				}
+				original(event);
+			});
+
+			monitor.dispatch("session-x", "session-x:0.0", { preHash: "h", summary: "task" });
+
+			// Reject so the inner catch runs, whose fireCallback → enqueue throws,
+			// escaping to the outer catch.
+			mockDetector._reject(new Error("waitForSettled blew up"));
+
+			await vi.waitFor(() => {
+				expect(monitor.isBusy("session-x")).toBe(false);
+			});
+
+			const events: AgentEvent[] = workQueue.getAgentEvents();
+			expect(events).toHaveLength(1);
+			expect(events[0].status).toBe("error");
+			expect(events[0].detail).toContain("Unexpected polling error");
+			expect(monitor.getTask("session-x")).toBeNull();
+
+			spy.mockRestore();
+		});
+	});
 });

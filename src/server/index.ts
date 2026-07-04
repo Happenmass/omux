@@ -8,16 +8,27 @@ import type { LearningChat } from "../core/learning-chat.js";
 import type { LearningPipeline } from "../core/learning-pipeline.js";
 import type { LearningStore } from "../core/learning-store.js";
 import type { MainAgent } from "../core/main-agent.js";
-import type { SignalRouter } from "../core/signal-router.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { ConversationStore } from "../persistence/conversation-store.js";
 import type { TmuxBridge } from "../tmux/bridge.js";
+import type { AutoTidyConfig } from "../utils/config.js";
 import { loadConfig, saveConfig } from "../utils/config.js";
+import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 import { buildMcpServersSummary } from "../utils/mcp-config.js";
-import { buildAuthCookie, createServerAuthToken, isAuthorized } from "./auth.js";
+import {
+	AUTH_QUERY_PARAM,
+	buildAuthCookie,
+	buildHostAllowlist,
+	createServerAuthToken,
+	isAuthorized,
+	isHostAllowed,
+	isLoopbackAddress,
+	isOriginAllowed,
+	timingSafeEqualStr,
+} from "./auth.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandRegistry } from "./command-registry.js";
 import { CommandRouter } from "./command-router.js";
@@ -36,7 +47,6 @@ export interface ServerOptions {
 	host?: string;
 	port: number;
 	mainAgent: MainAgent;
-	signalRouter: SignalRouter;
 	contextManager: ContextManager;
 	conversationStore: ConversationStore;
 	broadcaster: ChatBroadcaster;
@@ -54,6 +64,12 @@ export interface ServerOptions {
 	learningChat?: LearningChat;
 	learningEnabled?: boolean;
 	locale?: string;
+	/** Scheduled nightly memory tidy. Disabled by default (never interrupts overnight runs). */
+	autoTidy?: AutoTidyConfig;
+	/** LAN IPv4 addresses the server is reachable at — used for the Host/Origin allowlist and pairing URLs. */
+	lanIps?: string[];
+	/** Advertised mDNS bare name (e.g. "omux" → omux.local) — added to the Host/Origin allowlist. */
+	mdnsName?: string;
 }
 
 export interface ServerInstance {
@@ -62,14 +78,13 @@ export interface ServerInstance {
 }
 
 /**
- * Create and start the Cliclaw HTTP + WebSocket server.
+ * Create and start the Omux HTTP + WebSocket server.
  */
 export async function startServer(opts: ServerOptions): Promise<ServerInstance> {
 	const {
 		host = "127.0.0.1",
 		port,
 		mainAgent,
-		signalRouter,
 		contextManager,
 		conversationStore,
 		broadcaster,
@@ -86,22 +101,84 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		learningChat,
 		learningEnabled = false,
 		locale = "en-US",
+		autoTidy,
+		lanIps = [],
+		mdnsName,
 	} = opts;
+
+	const resolvedLocale: SupportedLocale = locale === "zh-CN" ? "zh-CN" : "en-US";
 
 	const app = express();
 	app.use(express.json());
 	const authToken = createServerAuthToken();
 
+	// DNS-rebinding defense (SRV-2): only accept Host/Origin values we actually serve on. A
+	// malicious page that rebinds its hostname to our LAN IP would otherwise pull the auth
+	// cookie and open an authorized WebSocket. Rebuilt with the real port after listen() since
+	// callers may pass port 0 (ephemeral) — requests only arrive once we're listening.
+	let hostAllowlist = buildHostAllowlist({ port, lanIps, mdnsName });
+
+	// Validate the Host header on every HTTP request before anything else touches it.
 	app.use((req, res, next) => {
-		if (req.path.startsWith("/api/")) {
-			if (!isAuthorized(req.headers, authToken)) {
-				res.status(401).json({ error: "Unauthorized" });
-				return;
-			}
-		} else if (req.method === "GET" && req.path !== "/favicon.ico") {
-			res.append("Set-Cookie", buildAuthCookie(authToken));
+		if (!isHostAllowed(req.headers.host, hostAllowlist)) {
+			logger.warn("server", `Rejected request with disallowed Host: ${req.headers.host}`);
+			res.status(403).type("text/plain").send("Forbidden: Host not allowed");
+			return;
 		}
 		next();
+	});
+
+	/**
+	 * Pairing model (SRV-1): the token is never handed to unauthenticated visitors. A user pairs
+	 * by opening the tokened URL printed in the terminal once; loopback callers are trusted
+	 * implicitly so localhost UX is unchanged. Everyone else gets a hint page, not the app.
+	 */
+	app.use((req, res, next) => {
+		// Already paired via a valid cookie.
+		if (isAuthorized(req.headers, authToken)) {
+			next();
+			return;
+		}
+
+		const isApi = req.path.startsWith("/api/");
+		const isGet = req.method === "GET";
+
+		// GET with the correct ?token= pairs this client, then redirects to strip the token.
+		const queryToken = typeof req.query[AUTH_QUERY_PARAM] === "string" ? (req.query[AUTH_QUERY_PARAM] as string) : "";
+		if (isGet && queryToken && timingSafeEqualStr(queryToken, authToken)) {
+			res.append("Set-Cookie", buildAuthCookie(authToken));
+			// Redirect to the same path without the token so it never lingers in the URL/history.
+			res.redirect(302, req.path);
+			return;
+		}
+
+		// Loopback callers are trusted implicitly (single-machine UX): set the cookie and serve.
+		if (isLoopbackAddress(req.socket.remoteAddress ?? undefined)) {
+			if (isGet) res.append("Set-Cookie", buildAuthCookie(authToken));
+			next();
+			return;
+		}
+
+		// Unpaired remote caller.
+		if (isApi) {
+			res.status(401).json({ error: "Unauthorized" });
+			return;
+		}
+		if (isGet) {
+			// Serve a minimal hint page instead of the app — do NOT leak the token here.
+			res.status(401)
+				.type("text/html")
+				.send(
+					"<!doctype html><meta charset=utf-8><title>Omux — pairing required</title>" +
+						'<body style="font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5">' +
+						"<h1>Pairing required</h1>" +
+						"<p>Open the access link printed in the <code>omux</code> terminal on the host machine " +
+						"(it contains a one-time <code>?token=</code>). That pairs this browser; afterwards you can " +
+						"drop the token from the URL.</p></body>",
+				);
+			return;
+		}
+		res.status(401).json({ error: "Unauthorized" });
 	});
 
 	// ─── Static files (Chat UI) ─────────────────────────
@@ -407,7 +484,6 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 
 	const commandRouter = new CommandRouter({
 		mainAgent,
-		signalRouter,
 		contextManager,
 		broadcaster,
 		commandRegistry,
@@ -417,9 +493,17 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		promptLoader,
 		memoryStore,
 		syncMemory,
+		locale: resolvedLocale,
 	});
 
 	wss.on("connection", (ws: WebSocket, req) => {
+		// Reject cross-origin upgrades (SRV-2 / DNS rebinding): a rebound page could hold a
+		// valid cookie but its Origin won't be in the allowlist.
+		if (!isOriginAllowed(req.headers.origin, hostAllowlist)) {
+			logger.warn("server", `Rejected WS upgrade with disallowed Origin: ${req.headers.origin}`);
+			ws.close(1008, "Forbidden origin");
+			return;
+		}
 		if (!isAuthorized(req.headers, authToken)) {
 			ws.close(1008, "Unauthorized");
 			return;
@@ -431,36 +515,60 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 			bridge,
 			onTerminalMore: expandTerminalLines,
 			learningChat,
+			locale: resolvedLocale,
 		});
 	});
 
-	// ─── Scheduled nightly tidy (23:30) ────────────────
+	// ─── Scheduled nightly tidy (config-gated, disabled by default) ────────────────
+	// Only runs when config.memory.autoTidy.enabled is true. When it fires while the MainAgent
+	// is executing, it is SKIPPED (not stopped) so overnight autonomous runs are never
+	// silently interrupted — it simply tries again the next day.
 	let tidyTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/** Parse "HH:MM" into [hours, minutes]; falls back to 23:30 on malformed input. */
+	function parseTidyTime(raw: string | undefined): [number, number] {
+		const m = /^(\d{1,2}):(\d{2})$/.exec(raw ?? "");
+		if (!m) return [23, 30];
+		const h = Number(m[1]);
+		const min = Number(m[2]);
+		if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return [23, 30];
+		return [h, min];
+	}
+
 	function scheduleTidy() {
+		const [hours, minutes] = parseTidyTime(autoTidy?.time);
 		const now = new Date();
 		const target = new Date(now);
-		target.setHours(23, 30, 0, 0);
+		target.setHours(hours, minutes, 0, 0);
 		if (target.getTime() <= now.getTime()) {
-			// Already past 23:30 today — schedule for tomorrow
+			// Already past the target time today — schedule for tomorrow
 			target.setDate(target.getDate() + 1);
 		}
 		const delay = target.getTime() - now.getTime();
 		logger.info("server", `Next scheduled tidy at ${target.toLocaleString()} (in ${Math.round(delay / 60000)}min)`);
 
 		tidyTimer = setTimeout(async () => {
-			logger.info("server", "Running scheduled nightly tidy");
-			try {
-				await commandRouter.handle("tidy");
-			} catch (err: any) {
-				logger.warn("server", `Scheduled tidy failed: ${err.message}`);
+			// Never interrupt an in-flight autonomous run — skip this cycle and retry tomorrow.
+			if (mainAgent.state === "executing") {
+				logger.info("server", "Scheduled tidy skipped: MainAgent is executing");
+			} else {
+				logger.info("server", "Running scheduled nightly tidy");
+				try {
+					await commandRouter.handle("tidy");
+				} catch (err: any) {
+					logger.warn("server", `Scheduled tidy failed: ${err.message}`);
+				}
 			}
-			// Re-schedule for next night
+			// Re-schedule for next night regardless of skip/run outcome.
 			scheduleTidy();
 		}, delay);
 	}
 
-	scheduleTidy();
+	if (autoTidy?.enabled) {
+		scheduleTidy();
+	} else {
+		logger.info("server", "Scheduled nightly tidy disabled (config.memory.autoTidy.enabled=false)");
+	}
 
 	// ─── Start listening ────────────────────────────────
 	return new Promise<ServerInstance>((resolve, reject) => {
@@ -476,8 +584,27 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 		server.listen(port, host, () => {
 			const address = server.address();
 			const actualPort = typeof address === "object" && address ? address.port : port;
-			logger.info("server", `Cliclaw server running at http://${host}:${actualPort}`);
-			console.log(`Cliclaw server running at http://${host}:${actualPort}`);
+			// Rebuild the Host/Origin allowlist with the actually-bound port (port may have been 0).
+			hostAllowlist = buildHostAllowlist({ port: actualPort, lanIps, mdnsName });
+			logger.info("server", `Omux server running at http://${host}:${actualPort}`);
+			console.log(`Omux server running at http://${host}:${actualPort}`);
+
+			// Pairing (SRV-1): print tokened access URLs once so a remote user pairs by opening
+			// one. Loopback stays token-free, so only print for remotely-reachable hosts. Prefer
+			// LAN/mDNS hosts for the shareable link; fall back to an explicit non-loopback bind
+			// host. The cookie is set on first tokened visit, then the token is stripped from
+			// the URL by a redirect.
+			const pairHosts: string[] = [];
+			for (const ip of lanIps) pairHosts.push(ip);
+			if (mdnsName) pairHosts.push(`${mdnsName}.local`);
+			if (pairHosts.length === 0 && host !== "0.0.0.0" && host !== "127.0.0.1" && host !== "localhost") {
+				pairHosts.push(host);
+			}
+			for (const h of pairHosts) {
+				const url = `http://${h}:${actualPort}/?${AUTH_QUERY_PARAM}=${authToken}`;
+				logger.info("server", `Pairing URL: ${url}`);
+				console.log(`Open on other devices (pairs once): ${url}`);
+			}
 
 			resolve({
 				port: actualPort,

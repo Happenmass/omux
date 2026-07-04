@@ -10,7 +10,7 @@ import {
 	repairDanglingFunctionCalls,
 	tryBuildIncremental,
 } from "../../src/llm/providers/openai-responses.js";
-import type { LLMMessage, ToolDefinition } from "../../src/llm/types.js";
+import type { ToolDefinition } from "../../src/llm/types.js";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ describe("OpenAIResponsesProvider — wire format", () => {
 
 	it('reasoning enabled with no explicit summary ⇒ defaults to summary="auto" (matches Codex ReasoningSummaryConfig::Auto)', () => {
 		// Codex (`codex-rs/core/src/client.rs:847`) treats summary as a separate dial that's
-		// non-None by default for reasoning-capable models. cliclaw mirrors that: when the
+		// non-None by default for reasoning-capable models. omux mirrors that: when the
 		// caller enables thinking but doesn't pick a summary level, we send "auto".
 		// Without this default, the wire body diverges from Codex's by exactly one field
 		// and the two clients can't share the same prompt-cache entry.
@@ -841,7 +841,7 @@ describe("tryBuildIncremental — pure decision function", () => {
 				call_id: "call_X",
 			},
 		];
-		// Turn 2: cliclaw appended the tool result → conversation now has the original user
+		// Turn 2: omux appended the tool result → conversation now has the original user
 		// msg + the function_call (assistant) + the function_call_output (tool).
 		const turn2Full = buildRequestBody({
 			model: "gpt-5.4",
@@ -1185,7 +1185,7 @@ describe("OpenAIResponsesProvider — Layer-2 chain integration", () => {
 	});
 
 	it("DEFAULT (no opts.enableIncremental): L2 is OFF → every turn full, no previous_response_id, no state retained, store=false (matches Codex HTTP path)", async () => {
-		// This is the steady-state behavior used by all real cliclaw sessions. The test
+		// This is the steady-state behavior used by all real omux sessions. The test
 		// pins the default-off so a regression that flips it back to default-on (which
 		// triggers 400 'No tool call found' on tool turns) gets caught.
 		const provider = makeProvider();
@@ -1283,7 +1283,7 @@ describe("OpenAIResponsesProvider — Layer-2 chain integration", () => {
 		const provider = makeProvider();
 		// Stub fetch to always return 400. If retries fired, it'd be called 4 times.
 		let fetchCount = 0;
-		(provider as any).fetchWithRetry = async (url: string, body: any) => {
+		(provider as any).fetchWithRetry = async (_url: string, _body: any) => {
 			fetchCount++;
 			// Reuse the real retry logic by constructing a fetch mock that always 400s.
 			throw Object.assign(new Error("[test-responses] API error 400: invalid"), { nonRetryable: true });
@@ -1495,5 +1495,154 @@ describe("OpenAIResponsesProvider — stream-level retry on transient response.f
 		// (signal aborted), or fetchWithRetry honored the signal earlier — both are acceptable.
 		// What we DON'T want is a successful 2nd-call recovery despite the abort.
 		expect(tap.calls).toBeLessThanOrEqual(1);
+	});
+});
+
+// ─── LLM-2: silent stream truncation (no response.completed) ─────────────────────────
+
+describe("OpenAIResponsesProvider — truncation detection (LLM-2)", () => {
+	function makeSseStream(events: any[]): ReadableStream<Uint8Array> {
+		const encoder = new TextEncoder();
+		return new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const ev of events) controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
+				controller.close();
+			},
+		});
+	}
+
+	function makeProvider(maxRetries: number): OpenAIResponsesProvider {
+		return new OpenAIResponsesProvider(
+			{
+				name: "test-responses",
+				displayName: "Test",
+				protocol: "openai-responses",
+				baseUrl: "https://example.invalid/v1",
+				apiKeyEnvVar: "TEST_API_KEY",
+				defaultModel: "gpt-5.4",
+			},
+			{ apiKey: "sk-test", maxRetries, timeout: 0 },
+		);
+	}
+
+	function stubFetchSequence(provider: OpenAIResponsesProvider, streams: any[][]): { calls: number } {
+		const ref = { calls: 0 };
+		(provider as any).fetchWithRetry = async () => {
+			const events = streams[ref.calls] ?? streams[streams.length - 1];
+			ref.calls++;
+			return new Response(makeSseStream(events), { headers: { "Content-Type": "text/event-stream" } });
+		};
+		return ref;
+	}
+
+	// A stream that drops after the created event with no response.completed marker.
+	const truncatedEvents = [
+		{ type: "response.created", response: { id: "resp_trunc" } },
+		{ type: "response.output_text.delta", delta: "partial" },
+		// NO response.completed — connection dropped mid-flight.
+	];
+
+	const successEvents = [
+		{ type: "response.created", response: { id: "resp_ok" } },
+		{ type: "response.output_text.delta", delta: "ok" },
+		{ type: "response.completed", response: { id: "resp_ok", status: "completed", usage: {} } },
+	];
+
+	it("retries when the stream ends without response.completed and no delta had been yielded", async () => {
+		// Truncate BEFORE any delta so the retry gate (yieldedOutput === false) allows a retry.
+		const truncatedNoDelta = [
+			{ type: "response.created", response: { id: "resp_trunc" } },
+			// stream ends here — no completed, no output text
+		];
+		const provider = makeProvider(3);
+		const tap = stubFetchSequence(provider, [truncatedNoDelta, successEvents]);
+
+		const events: any[] = [];
+		for await (const ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+			events.push(ev);
+		}
+
+		expect(tap.calls).toBe(2); // one truncation + one success
+		const done = events.at(-1);
+		expect(done.type).toBe("done");
+		expect(done.response.content).toBe("ok");
+	});
+
+	it("does NOT retry (throws) when truncation happens AFTER a delta was yielded (would duplicate UI)", async () => {
+		const provider = makeProvider(3);
+		const tap = stubFetchSequence(provider, [truncatedEvents]);
+
+		const collected: any[] = [];
+		let thrown: any;
+		try {
+			for await (const ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+				collected.push(ev);
+			}
+		} catch (err) {
+			thrown = err;
+		}
+
+		expect(thrown).toBeTruthy();
+		expect(String(thrown.message)).toMatch(/truncated|response\.completed/i);
+		expect(tap.calls).toBe(1); // no retry — a text delta had already flowed to the caller
+		// The partial text delta was surfaced, but NO done event (would look like clean finish).
+		expect(collected.some((e) => e.type === "done")).toBe(false);
+		expect(collected.filter((e) => e.type === "text_delta").map((e) => e.delta)).toEqual(["partial"]);
+	});
+});
+
+// ─── LLM-1: connect timeout scoped to response headers only ──────────────────────────
+
+describe("OpenAIResponsesProvider — connect timeout scoped to headers (LLM-1 regression)", () => {
+	it("a healthy stream running longer than `timeout` total (but never idle) completes without error", async () => {
+		// Regression: the connect timeout must be scoped to time-to-response-headers only.
+		// An overall AbortSignal.timeout would kill this stream mid-flight (~250ms total vs
+		// timeout=100ms) even though data flows steadily every 25ms — and because deltas had
+		// already been yielded, the whole turn would be lost (no retry allowed).
+		const provider = new OpenAIResponsesProvider(
+			{
+				name: "test-responses",
+				displayName: "Test",
+				protocol: "openai-responses",
+				baseUrl: "https://example.invalid/v1",
+				apiKeyEnvVar: "TEST_API_KEY",
+				defaultModel: "gpt-5.4",
+			},
+			{ apiKey: "sk-test", maxRetries: 0, timeout: 100 },
+		);
+
+		const sseEvents = [
+			{ type: "response.created", response: { id: "resp_long" } },
+			...Array.from({ length: 8 }, (_, i) => ({ type: "response.output_text.delta", delta: `c${i} ` })),
+			{ type: "response.completed", response: { id: "resp_long", status: "completed", usage: {} } },
+		];
+		(provider as any).fetch = async (_url: string, init: any) => {
+			const sig: AbortSignal | undefined = init?.signal;
+			const encoder = new TextEncoder();
+			const body = new ReadableStream<Uint8Array>({
+				async start(controller) {
+					for (const ev of sseEvents) {
+						await new Promise((r) => setTimeout(r, 25));
+						// Simulate undici: an aborted request signal errors the body mid-stream.
+						if (sig?.aborted) {
+							controller.error(sig.reason ?? new Error("aborted"));
+							return;
+						}
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
+					}
+					controller.close();
+				},
+			});
+			return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+		};
+
+		const events: any[] = [];
+		for await (const ev of provider.stream([{ role: "user", content: "hi" }], baseOpts)) {
+			events.push(ev);
+		}
+
+		const textDeltas = events.filter((e) => e.type === "text_delta").map((e) => e.delta);
+		expect(textDeltas.join("")).toBe("c0 c1 c2 c3 c4 c5 c6 c7 ");
+		expect(events.at(-1).type).toBe("done");
 	});
 });

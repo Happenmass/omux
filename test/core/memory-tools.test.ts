@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { MainAgent } from "../../src/core/main-agent.js";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MainAgent } from "../../src/core/main-agent.js";
 
 /**
  * Tests for memory tool execution (search, get, write) in MainAgent.
@@ -32,18 +32,6 @@ function createMockContextManager() {
 	} as any;
 }
 
-function createMockSignalRouter() {
-	return {
-		onSignal: vi.fn(),
-		startMonitoring: vi.fn(),
-		stopMonitoring: vi.fn(),
-		isPaused: vi.fn().mockReturnValue(false),
-		isAborted: vi.fn().mockReturnValue(false),
-		emit: vi.fn(),
-		on: vi.fn(),
-	} as any;
-}
-
 function createMockLLMClient() {
 	return {
 		complete: vi.fn().mockResolvedValue({
@@ -58,10 +46,20 @@ function createMockLLMClient() {
 
 function createMinimalMocks() {
 	return {
-		adapter: { sendPrompt: vi.fn(), sendResponse: vi.fn(), abort: vi.fn(), getCharacteristics: vi.fn().mockReturnValue({}) } as any,
+		adapter: {
+			sendPrompt: vi.fn(),
+			sendResponse: vi.fn(),
+			abort: vi.fn(),
+			getCharacteristics: vi.fn().mockReturnValue({}),
+		} as any,
 		bridge: { capturePane: vi.fn() } as any,
 		createAgentSettleMs: 0,
-		stateDetector: { setCooldown: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), onStateChange: vi.fn() } as any,
+		stateDetector: {
+			setCooldown: vi.fn(),
+			startMonitoring: vi.fn(),
+			stopMonitoring: vi.fn(),
+			onStateChange: vi.fn(),
+		} as any,
 	};
 }
 
@@ -79,11 +77,15 @@ function createMockMemoryStore(workspaceDir: string) {
 
 function createAgent(opts: { memoryStore?: any; embeddingProvider?: any } = {}) {
 	const mocks = createMinimalMocks();
-	const broadcaster = { broadcast: vi.fn(), addClient: vi.fn(), removeClient: vi.fn(), getClientCount: vi.fn() } as any;
+	const broadcaster = {
+		broadcast: vi.fn(),
+		addClient: vi.fn(),
+		removeClient: vi.fn(),
+		getClientCount: vi.fn(),
+	} as any;
 
 	return new MainAgent({
 		contextManager: createMockContextManager(),
-		signalRouter: createMockSignalRouter(),
 		llmClient: createMockLLMClient(),
 		adapter: mocks.adapter,
 		bridge: mocks.bridge,
@@ -98,7 +100,7 @@ function createAgent(opts: { memoryStore?: any; embeddingProvider?: any } = {}) 
 
 describe("MainAgent memory tools", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-memtest-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-memtest-"));
 		await mkdir(join(tmpDir, "memory"), { recursive: true });
 	});
 

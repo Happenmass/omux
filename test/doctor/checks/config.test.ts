@@ -5,7 +5,7 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 vi.mock("../../../src/utils/config.js", () => ({
-	getConfigFilePath: () => "/mock/.cliclaw/config.json",
+	getConfigFilePath: () => "/mock/.omux/config.json",
 }));
 
 import { readFile } from "node:fs/promises";

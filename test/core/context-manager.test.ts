@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextManager } from "../../src/core/context-manager.js";
 
 function createMockPromptLoader(template: string) {
@@ -23,7 +23,8 @@ describe("ContextManager", () => {
 	let mockLLM: ReturnType<typeof createMockLLMClient>;
 	let mockPromptLoader: ReturnType<typeof createMockPromptLoader>;
 
-	const template = "Goal: {{goal}}\nTasks: {{task_graph_summary}}\nHistory: {{compressed_history}}\nMemory: {{memory}}";
+	const template =
+		"Goal: {{goal}}\nTasks: {{task_graph_summary}}\nHistory: {{compressed_history}}\nMemory: {{memory}}";
 
 	beforeEach(() => {
 		mockLLM = createMockLLMClient();
@@ -212,6 +213,34 @@ describe("ContextManager", () => {
 			expect(opts.promptCacheKey).toBe(conversationId);
 		});
 
+		it("the compaction directive instructs the model to fold any existing compressed_history into the new summary", async () => {
+			const llm = createMockLLMClient();
+			llm.complete.mockResolvedValue({
+				content: "<compaction_summary>merged</compaction_summary>",
+				contentBlocks: [{ type: "text", text: "<compaction_summary>merged</compaction_summary>" }],
+				usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+				stopReason: "stop",
+				model: "gpt-5.4",
+			});
+			const mgr = new ContextManager({
+				llmClient: llm,
+				promptLoader: createMockPromptLoader(template),
+			});
+			mgr.setCompactTuning({ tools: TOOLS, thinking: "off" });
+			// Simulate a prior compaction whose summary lives in the system prompt.
+			mgr.updateModule("compressed_history", "EARLY: user picked Postgres over MySQL [2026-01-01]");
+			mgr.addMessage({ role: "user", content: "msg" });
+
+			await mgr.compress();
+
+			const [messages] = llm.complete.mock.calls[0];
+			const directive = messages[messages.length - 1].content as string;
+			// The directive must tell the model to merge/fold the prior compressed_history so
+			// early decisions survive across 2+ compactions.
+			expect(directive).toMatch(/compressed_history/i);
+			expect(directive).toMatch(/fold|merge/i);
+		});
+
 		it("extracts the summary from <compaction_summary> tags", async () => {
 			const llm = createMockLLMClient();
 			llm.complete.mockResolvedValue({
@@ -249,9 +278,7 @@ describe("ContextManager", () => {
 			llm.complete
 				.mockResolvedValueOnce({
 					content: "",
-					contentBlocks: [
-						{ type: "tool_call", id: "call_1", name: "exec_command", arguments: { cmd: "ls" } },
-					],
+					contentBlocks: [{ type: "tool_call", id: "call_1", name: "exec_command", arguments: { cmd: "ls" } }],
 					usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
 					stopReason: "tool_calls",
 					model: "gpt-5.4",
@@ -286,15 +313,13 @@ describe("ContextManager", () => {
 
 		it("falls back to legacy when in-chain throws", async () => {
 			const llm = createMockLLMClient();
-			llm.complete
-				.mockRejectedValueOnce(new Error("server overloaded"))
-				.mockResolvedValueOnce({
-					content: "fallback summary",
-					contentBlocks: [{ type: "text", text: "fallback summary" }],
-					usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-					stopReason: "stop",
-					model: "gpt-5.4",
-				});
+			llm.complete.mockRejectedValueOnce(new Error("server overloaded")).mockResolvedValueOnce({
+				content: "fallback summary",
+				contentBlocks: [{ type: "text", text: "fallback summary" }],
+				usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+				stopReason: "stop",
+				model: "gpt-5.4",
+			});
 			const mgr = new ContextManager({
 				llmClient: llm,
 				promptLoader: createMockPromptLoader(template),
@@ -598,8 +623,13 @@ describe("ContextManager", () => {
 
 			// Add 4 tool rounds (retention = 2, so first 2 get summarized)
 			const rounds = [
-				buildToolRound("tc_0", "create_agent", { agent_name: "test" }, 'Agent "cliclaw-test" created in /tmp'),
-				buildToolRound("tc_1", "send_to_agent", { prompt: "do stuff" }, "[Agent completed] (Task done)\nLong output..."),
+				buildToolRound("tc_0", "create_agent", { agent_name: "test" }, 'Agent "omux-test" created in /tmp'),
+				buildToolRound(
+					"tc_1",
+					"send_to_agent",
+					{ prompt: "do stuff" },
+					"[Agent completed] (Task done)\nLong output...",
+				),
 				buildToolRound("tc_2", "exec_command", { command: "ls" }, "src/ test/ package.json"),
 				buildToolRound("tc_3", "respond_to_agent", { value: "y" }, "[Agent completed] (Confirmed)\nMore output"),
 			];
@@ -612,7 +642,7 @@ describe("ContextManager", () => {
 			const toolMsgs = prepared.messages.filter((m) => m.role === "tool");
 
 			// First 2 should be summarized
-			expect(toolMsgs[0].content).toBe('[create_agent → ✓] Agent "cliclaw-test" created in /tmp');
+			expect(toolMsgs[0].content).toBe('[create_agent → ✓] Agent "omux-test" created in /tmp');
 			expect(toolMsgs[1].content).toBe("[send_to_agent → ✓] [Agent completed] (Task done)");
 
 			// Last 2 should be intact
@@ -628,7 +658,12 @@ describe("ContextManager", () => {
 			});
 
 			const rounds = [
-				buildToolRound("tc_0", "send_to_agent", { prompt: "x" }, "Error: No active agent. Call create_agent first."),
+				buildToolRound(
+					"tc_0",
+					"send_to_agent",
+					{ prompt: "x" },
+					"Error: No active agent. Call create_agent first.",
+				),
 				buildToolRound("tc_1", "exec_command", { command: "ls" }, "ok"),
 			];
 			for (const r of rounds) {
@@ -765,7 +800,7 @@ describe("ContextManager", () => {
 			// Add 3 tool rounds — first 2 get summarized by Step 0
 			const rounds = [
 				buildToolRound("tc_0", "exec_command", { command: "ls" }, "file1.ts\nfile2.ts"),
-				buildToolRound("tc_1", "send_to_agent", { prompt: "do" }, "[Agent completed] (Done)\n" + "x".repeat(2000)),
+				buildToolRound("tc_1", "send_to_agent", { prompt: "do" }, `[Agent completed] (Done)\n${"x".repeat(2000)}`),
 				buildToolRound("tc_2", "exec_command", { command: "pwd" }, "/home/user/project"),
 			];
 			for (const r of rounds) {
@@ -1005,6 +1040,72 @@ describe("ContextManager", () => {
 					compressionThreshold: 0.7,
 				});
 			}).not.toThrow();
+		});
+	});
+
+	describe("context window resolution", () => {
+		it("explicit contextWindowLimit override wins over the model lookup", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				contextWindowLimit: 42000,
+				model: "claude-sonnet-4-6",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(42000);
+		});
+
+		it("derives a claude window (200k) from the model id when no override is set", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				model: "claude-sonnet-4-6",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(200000);
+		});
+
+		it("derives a deepseek window (128k) from the model id", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				model: "deepseek-chat",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(128000);
+		});
+
+		it("derives a gemini window (1M) from the model id", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				model: "gemini-2.5-flash",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(1000000);
+		});
+
+		it("falls back to the 500k default for an unrecognized model", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				model: "some-brand-new-model-9000",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(500000);
+		});
+
+		it("falls back to the 500k default when no model and no override is provided", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+			});
+			expect(ctx.getContextWindowLimit()).toBe(500000);
+		});
+
+		it("ignores a zero override and uses the model lookup", () => {
+			const ctx = new ContextManager({
+				llmClient: mockLLM,
+				promptLoader: mockPromptLoader,
+				contextWindowLimit: 0,
+				model: "kimi-k2",
+			});
+			expect(ctx.getContextWindowLimit()).toBe(128000);
 		});
 	});
 });

@@ -1,5 +1,9 @@
-import { describe, it, expect } from "vitest";
-import { type AdapterCapabilityInput, buildAgentCapabilitiesSection, buildCapabilitiesSummary } from "../../src/skills/injector.js";
+import { describe, expect, it } from "vitest";
+import {
+	type AdapterCapabilityInput,
+	buildAgentCapabilitiesSection,
+	buildCapabilitiesSummary,
+} from "../../src/skills/injector.js";
 import type { SkillEntry } from "../../src/skills/types.js";
 
 function makeSkill(overrides: Partial<SkillEntry> = {}): SkillEntry {
@@ -57,9 +61,7 @@ describe("buildCapabilitiesSummary", () => {
 	});
 
 	it("should include prompt-enrichment in summary", () => {
-		const skills = [
-			makeSkill({ name: "conventions", type: "prompt-enrichment", commands: [] }),
-		];
+		const skills = [makeSkill({ name: "conventions", type: "prompt-enrichment", commands: [] })];
 
 		const summary = buildCapabilitiesSummary(BASE, skills);
 
@@ -67,9 +69,7 @@ describe("buildCapabilitiesSummary", () => {
 	});
 
 	it("should omit commands line when no commands", () => {
-		const skills = [
-			makeSkill({ name: "no-cmds", commands: [] }),
-		];
+		const skills = [makeSkill({ name: "no-cmds", commands: [] })];
 
 		const summary = buildCapabilitiesSummary(BASE, skills);
 
@@ -99,6 +99,24 @@ describe("buildCapabilitiesSummary", () => {
 		const summary = buildCapabilitiesSummary(BASE, skills);
 
 		expect(summary).not.toContain("more skills available");
+	});
+
+	it("wraps workspace skills in an untrusted-origin delimiter and leaves adapter skills bare", () => {
+		const skills = [
+			makeSkill({ name: "adapter-skill", source: "adapter" }),
+			makeSkill({ name: "ws-skill", source: "workspace" }),
+		];
+
+		const summary = buildCapabilitiesSummary(BASE, skills);
+
+		// Workspace skill is wrapped with the untrusted marker + caveat.
+		expect(summary).toContain('<untrusted-workspace-skill name="ws-skill" source="workspace">');
+		expect(summary).toContain("</untrusted-workspace-skill>");
+		expect(summary).toContain("informational only");
+
+		// Adapter skill is NOT wrapped.
+		expect(summary).toContain("**adapter-skill**");
+		expect(summary).not.toContain('name="adapter-skill" source="workspace"');
 	});
 });
 
@@ -132,7 +150,7 @@ describe("buildAgentCapabilitiesSection", () => {
 		);
 
 		expect(section).toContain("2 coding-agent adapters");
-		expect(section).toContain('`claude-code` (default)');
+		expect(section).toContain("`claude-code` (default)");
 		expect(section).toContain("### Multi-Agent Orchestration");
 		// claude-code + codex present → the execute-then-review playbook is used
 		expect(section).toContain("full implementers");
@@ -158,5 +176,22 @@ describe("buildAgentCapabilitiesSection", () => {
 		const section = buildAgentCapabilitiesSection([adapter({ capabilities: "" })], []);
 
 		expect(section).toContain("Direct code editing and file operations");
+	});
+
+	it("still inlines skills when the adapter capability docs alone exceed the budget", () => {
+		// Two adapters with capability docs that together blow past MAX_SUMMARY_CHARS (2000).
+		// The skills section must be budgeted independently, so skills still get inlined
+		// instead of every one silently falling to the truncation notice.
+		const bigCaps = "- capability line\n".repeat(200); // >3000 chars
+		const section = buildAgentCapabilitiesSection(
+			[
+				adapter({ capabilities: bigCaps }),
+				adapter({ name: "codex", displayName: "Codex", capabilities: bigCaps, isDefault: false }),
+			],
+			[makeSkill({ name: "inlined-skill", description: "should still appear" })],
+		);
+
+		expect(section).toContain("**inlined-skill** — should still appear");
+		expect(section).not.toContain("more skills available via read_skill");
 	});
 });

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConversationStore } from "../../src/persistence/conversation-store.js";
 import type { LLMMessage } from "../../src/llm/types.js";
+import { ConversationStore } from "../../src/persistence/conversation-store.js";
 
 describe("ConversationStore", () => {
 	let tmpDir: string;
@@ -12,7 +12,7 @@ describe("ConversationStore", () => {
 	let store: ConversationStore;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-conv-test-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-conv-test-"));
 		db = new Database(join(tmpDir, "test.sqlite"));
 		db.pragma("journal_mode = WAL");
 		store = new ConversationStore(db);
@@ -25,9 +25,9 @@ describe("ConversationStore", () => {
 
 	describe("schema initialization", () => {
 		it("should create chat_messages and chat_context_state tables", () => {
-			const tables = db
-				.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-				.all() as Array<{ name: string }>;
+			const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{
+				name: string;
+			}>;
 			const names = tables.map((t) => t.name);
 			expect(names).toContain("chat_messages");
 			expect(names).toContain("chat_context_state");
@@ -94,6 +94,29 @@ describe("ConversationStore", () => {
 		it("should return empty array when no messages", () => {
 			const loaded = store.loadMessages();
 			expect(loaded).toEqual([]);
+		});
+
+		it("should round-trip a text message whose content looks like a JSON array", () => {
+			const msg: LLMMessage = { role: "user", content: "[1, 2, 3]" };
+			store.saveMessage(msg);
+
+			const loaded = store.loadMessages();
+			expect(loaded).toHaveLength(1);
+			expect(loaded[0].content).toBe("[1, 2, 3]");
+			expect(typeof loaded[0].content).toBe("string");
+		});
+
+		it("should fall back to sniffing for legacy rows with NULL content_kind", () => {
+			// Simulate a pre-migration row written before content_kind existed.
+			db.prepare("INSERT INTO chat_messages (role, content, tool_call_id) VALUES (?, ?, ?)").run(
+				"assistant",
+				JSON.stringify([{ type: "text", text: "legacy structured content" }]),
+				null,
+			);
+			const loaded = store.loadMessages();
+			expect(loaded).toHaveLength(1);
+			expect(Array.isArray(loaded[0].content)).toBe(true);
+			expect((loaded[0].content as any[])[0].text).toBe("legacy structured content");
 		});
 	});
 

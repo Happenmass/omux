@@ -34,18 +34,6 @@ function createMockContextManager() {
 	} as any;
 }
 
-function createMockSignalRouter() {
-	return {
-		onSignal: vi.fn(),
-		startMonitoring: vi.fn(),
-		stopMonitoring: vi.fn(),
-		isPaused: vi.fn().mockReturnValue(false),
-		isAborted: vi.fn().mockReturnValue(false),
-		emit: vi.fn(),
-		on: vi.fn(),
-	} as any;
-}
-
 function createAgent(cwd: string) {
 	const broadcaster = {
 		broadcast: vi.fn(),
@@ -56,7 +44,6 @@ function createAgent(cwd: string) {
 
 	return new MainAgent({
 		contextManager: createMockContextManager(),
-		signalRouter: createMockSignalRouter(),
 		llmClient: { complete: vi.fn() } as any,
 		adapter: {
 			sendPrompt: vi.fn(),
@@ -89,7 +76,7 @@ function callExec(agent: MainAgent, command: string, cwd: string) {
 
 describe("exec_command pre-flight", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-preflight-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-preflight-"));
 	});
 
 	afterEach(async () => {
@@ -220,4 +207,78 @@ describe("exec_command pre-flight", () => {
 
 		expect(result.output).not.toContain("pre-flight");
 	});
+});
+
+describe("exec_command mutation guard", () => {
+	beforeEach(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-mutguard-"));
+	});
+
+	afterEach(async () => {
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	// Representative genuinely-read-only commands that MUST still run.
+	const allowed: Array<[string, string]> = [
+		["grep with a mutating token inside a quoted literal", `grep "rm -rf" package.json || echo none`],
+		["plain echo", "echo hi"],
+		["find", "find . -maxdepth 1 -name '*.json'"],
+		["ls", "ls -la"],
+		["pwd", "pwd"],
+		["wc via pipe", "echo abc | wc -c"],
+		["git status", "git status --porcelain || true"],
+		["git log", "git log --oneline -1 || true"],
+		["git diff", "git diff --stat || true"],
+		["mkdir -p (sanctioned for new project roots)", "mkdir -p __mutguard_new_dir__"],
+		["sed to stdout (read-only)", "echo hello | sed 's/hello/world/'"],
+		["curl GET (no method/body)", "echo curled"],
+		["which", "which bash || true"],
+	];
+
+	for (const [label, command] of allowed) {
+		it(`allows: ${label}`, async () => {
+			const agent = createAgent(tmpDir);
+			const result = await callExec(agent, command, tmpDir);
+			expect(result.output).not.toContain("exec_command refused");
+		});
+	}
+
+	// Representative mutating commands that MUST be refused BEFORE execution.
+	const blocked: Array<[string, string]> = [
+		["rm", "rm -rf build"],
+		["rmdir", "rmdir olddir"],
+		["mv", "mv a.txt b.txt"],
+		["cp", "cp a.txt b.txt"],
+		["dd", "dd if=/dev/zero of=out.bin bs=1M count=1"],
+		["chmod", "chmod +x script.sh"],
+		["chown", "chown me file"],
+		["kill", "kill -9 12345"],
+		["pkill", "pkill node"],
+		["tee", "echo data | tee out.txt"],
+		["redirect >", "echo hi > out.txt"],
+		["redirect >>", "echo hi >> out.txt"],
+		["sed -i", "sed -i 's/a/b/' file.txt"],
+		["git commit", "git commit -m wip"],
+		["git checkout", "git checkout main"],
+		["npm install", "npm install lodash"],
+		["npm run build", "npm run build"],
+		["pnpm add", "pnpm add left-pad"],
+		["yarn remove", "yarn remove foo"],
+		["pip install", "pip install requests"],
+		["uv add", "uv add numpy"],
+		["curl POST", "curl -X POST https://example.com"],
+		["curl --data", "curl --data 'x=1' https://example.com"],
+		["tmux", "tmux kill-session -t omux-foo"],
+		["mkdir without -p", "mkdir newdir"],
+	];
+
+	for (const [label, command] of blocked) {
+		it(`blocks: ${label}`, async () => {
+			const agent = createAgent(tmpDir);
+			const result = await callExec(agent, command, tmpDir);
+			expect(result.output).toContain("exec_command refused");
+			// The refusal must point the LLM to send_to_agent, not execute anything.
+			expect(result.output).toContain("send_to_agent");
+		});
+	}
 });

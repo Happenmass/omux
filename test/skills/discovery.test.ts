@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverSkills } from "../../src/skills/discovery.js";
 
 let tmpDir: string;
@@ -11,7 +11,7 @@ const SKILL_CONTENT = (name: string, type = "agent-capability") =>
 
 describe("discoverSkills", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-discovery-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-discovery-"));
 	});
 
 	afterEach(async () => {
@@ -30,16 +30,40 @@ describe("discoverSkills", () => {
 		expect(skills[0].source).toBe("adapter");
 	});
 
-	it("should discover skills from workspace directory", async () => {
+	it("should discover skills from trusted workspace directory", async () => {
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
-		const skills = await discoverSkills({ workspaceDir });
+		const skills = await discoverSkills({ workspaceDir, trustedWorkspaceDirs: [workspaceDir] });
 
 		expect(skills).toHaveLength(1);
 		expect(skills[0].name).toBe("custom");
 		expect(skills[0].source).toBe("workspace");
+	});
+
+	it("should SKIP workspace skills when the workspace is not trusted", async () => {
+		const workspaceDir = tmpDir;
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+
+		// No trustedWorkspaceDirs → untrusted checkout, skills must not load.
+		const skills = await discoverSkills({ workspaceDir });
+
+		expect(skills).toHaveLength(0);
+	});
+
+	it("should NOT trust a different workspace path", async () => {
+		const workspaceDir = tmpDir;
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+
+		const skills = await discoverSkills({
+			workspaceDir,
+			trustedWorkspaceDirs: [join(tmpDir, "some-other-project")],
+		});
+
+		expect(skills).toHaveLength(0);
 	});
 
 	it("should discover from both sources", async () => {
@@ -49,10 +73,14 @@ describe("discoverSkills", () => {
 		await mkdir(join(adapterDir, "openspec"), { recursive: true });
 		await writeFile(join(adapterDir, "openspec", "SKILL.md"), SKILL_CONTENT("openspec"));
 
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "custom"), { recursive: true });
-		await writeFile(join(workspaceDir, ".cliclaw", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
+		await mkdir(join(workspaceDir, ".omux", "skills", "custom"), { recursive: true });
+		await writeFile(join(workspaceDir, ".omux", "skills", "custom", "SKILL.md"), SKILL_CONTENT("custom"));
 
-		const skills = await discoverSkills({ adapterSkillsDir: adapterDir, workspaceDir });
+		const skills = await discoverSkills({
+			adapterSkillsDir: adapterDir,
+			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
+		});
 
 		expect(skills).toHaveLength(2);
 		const names = skills.map((s) => s.name).sort();
@@ -69,13 +97,17 @@ describe("discoverSkills", () => {
 			`---\nname: commit\ntype: agent-capability\ndescription: "adapter commit"\n---\nAdapter body`,
 		);
 
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "commit"), { recursive: true });
+		await mkdir(join(workspaceDir, ".omux", "skills", "commit"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".cliclaw", "skills", "commit", "SKILL.md"),
+			join(workspaceDir, ".omux", "skills", "commit", "SKILL.md"),
 			`---\nname: commit\ntype: agent-capability\ndescription: "workspace commit"\n---\nWorkspace body`,
 		);
 
-		const skills = await discoverSkills({ adapterSkillsDir: adapterDir, workspaceDir });
+		const skills = await discoverSkills({
+			adapterSkillsDir: adapterDir,
+			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
+		});
 
 		expect(skills).toHaveLength(1);
 		expect(skills[0].description).toBe("workspace commit");

@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ToolDefinition } from "../../src/llm/types.js";
 import { discoverSkills } from "../../src/skills/discovery.js";
 import { filterSkills } from "../../src/skills/filter.js";
 import { buildCapabilitiesSummary } from "../../src/skills/injector.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { mergeSkillTools } from "../../src/skills/tool-merge.js";
-import type { ToolDefinition } from "../../src/llm/types.js";
 
 let tmpDir: string;
 
@@ -21,7 +21,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
 
 describe("Skill System Integration", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-skill-integration-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-skill-integration-"));
 	});
 
 	afterEach(async () => {
@@ -63,9 +63,9 @@ How to use commit.`,
 
 		// Setup workspace skill
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "deploy"), { recursive: true });
+		await mkdir(join(workspaceDir, ".omux", "skills", "deploy"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".cliclaw", "skills", "deploy", "SKILL.md"),
+			join(workspaceDir, ".omux", "skills", "deploy", "SKILL.md"),
 			`---
 name: deploy
 description: "Deployment automation"
@@ -84,6 +84,7 @@ Deployment instructions.`,
 		const discovered = await discoverSkills({
 			adapterSkillsDir: adapterDir,
 			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
 		});
 		expect(discovered).toHaveLength(3);
 
@@ -118,16 +119,16 @@ Deployment instructions.`,
 
 		// Workspace overrides commit
 		const workspaceDir = tmpDir;
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "commit"), { recursive: true });
+		await mkdir(join(workspaceDir, ".omux", "skills", "commit"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".cliclaw", "skills", "commit", "SKILL.md"),
+			join(workspaceDir, ".omux", "skills", "commit", "SKILL.md"),
 			`---\nname: commit\ntype: agent-capability\ndescription: "custom commit"\ncommands: [/commit, /commit:amend]\n---\nCustom commit.`,
 		);
 
 		// Workspace also has a main-agent-tool
-		await mkdir(join(workspaceDir, ".cliclaw", "skills", "risk"), { recursive: true });
+		await mkdir(join(workspaceDir, ".omux", "skills", "risk"), { recursive: true });
 		await writeFile(
-			join(workspaceDir, ".cliclaw", "skills", "risk", "SKILL.md"),
+			join(workspaceDir, ".omux", "skills", "risk", "SKILL.md"),
 			`---
 name: risk
 type: main-agent-tool
@@ -143,7 +144,11 @@ tool:
 Steps to analyze risk.`,
 		);
 
-		const discovered = await discoverSkills({ adapterSkillsDir: adapterDir, workspaceDir });
+		const discovered = await discoverSkills({
+			adapterSkillsDir: adapterDir,
+			workspaceDir,
+			trustedWorkspaceDirs: [workspaceDir],
+		});
 		const filtered = filterSkills(discovered, {}, workspaceDir);
 		const registry = new SkillRegistry(filtered);
 

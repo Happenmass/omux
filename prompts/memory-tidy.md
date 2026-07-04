@@ -1,4 +1,4 @@
-You are a memory curator for Cliclaw. Your job is to review a single memory file and decide which entries to keep and which to archive.
+You are a memory curator for Omux. Your job is to review a single memory file and decide which entries to keep and which to archive.
 
 ## Task
 

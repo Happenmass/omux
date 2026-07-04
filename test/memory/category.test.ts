@@ -32,6 +32,12 @@ describe("categoryFromPath", () => {
 		expect(categoryFromPath("memory/nested/deep.md")).toBe("topic");
 	});
 
+	it("should map learning-pipeline subdir files to topic", () => {
+		// memory/learning/<id>.md is written by the learning pipeline and indexed
+		// recursively; it should map deterministically to a reasonable category.
+		expect(categoryFromPath("memory/learning/01HXYZ.md")).toBe("topic");
+	});
+
 	it("should normalize backslashes", () => {
 		expect(categoryFromPath("memory\\core.md")).toBe("core");
 	});

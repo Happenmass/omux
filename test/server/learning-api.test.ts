@@ -27,7 +27,7 @@ describe("learning REST API", () => {
 	let cookie: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-api-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-api-"));
 		db = new Database(join(tmpDir, "x.sqlite"));
 		db.pragma("journal_mode = WAL");
 		new ConversationStore(db);
@@ -79,7 +79,6 @@ describe("learning REST API", () => {
 			host: "127.0.0.1",
 			port: 0,
 			mainAgent,
-			signalRouter: {} as any,
 			contextManager: {} as any,
 			conversationStore: {
 				loadMessages: () => [],

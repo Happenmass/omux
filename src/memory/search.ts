@@ -256,12 +256,22 @@ export function buildFtsQuery(raw: string): string | null {
 }
 
 /**
- * Convert BM25 rank value to a 0-1 score.
- * BM25 rank is a negative value where more negative = more relevant.
+ * Convert a BM25 rank value to a 0-1 relevance score.
+ *
+ * SQLite FTS5 `bm25()` returns values where MORE NEGATIVE = BETTER match.
+ * We map that to a monotonically increasing score in (0, 1] where a
+ * more-negative rank yields a HIGHER score, so that sorting by score
+ * descending matches sorting by rank ascending (the FTS convention).
+ *
+ * - rank = 0        → score 0 (no relevance)
+ * - rank = -1       → score 0.5
+ * - rank → -∞       → score → 1
+ * - rank > 0 (rare) → score 0 (treated as non-relevant)
  */
 export function bm25RankToScore(rank: number): number {
-	const normalized = Math.abs(rank);
-	return 1 / (1 + normalized);
+	if (rank >= 0) return 0;
+	const magnitude = Math.abs(rank);
+	return magnitude / (1 + magnitude);
 }
 
 // ─── Result Merging ─────────────────────────────────────

@@ -3,13 +3,12 @@
 import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import type { AgentAdapter } from "./agents/adapter.js";
 import { ClaudeCodeAdapter } from "./agents/claude-code.js";
 import { CodexAdapter } from "./agents/codex.js";
-import { VERSION, parseCliArgs, printHelp, printVersion } from "./cli.js";
+import { parseCliArgs, printHelp, printVersion, VERSION } from "./cli.js";
 import { ChangeTracker } from "./core/change-tracker.js";
 import { ContextManager } from "./core/context-manager.js";
 import { LearningChat } from "./core/learning-chat.js";
@@ -18,7 +17,6 @@ import { LearningStore } from "./core/learning-store.js";
 import { LearningSummarizer } from "./core/learning-summarizer.js";
 import { MainAgent } from "./core/main-agent.js";
 import { PromptTracker } from "./core/prompt-tracker.js";
-import { SignalRouter } from "./core/signal-router.js";
 import { runDoctor } from "./doctor/run.js";
 import { LLMClient } from "./llm/client.js";
 import { PromptLoader } from "./llm/prompt-loader.js";
@@ -32,7 +30,8 @@ import { ConversationStore } from "./persistence/conversation-store.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
-import { isValidMdnsName, type MdnsSupervisor, startMdnsSupervisor } from "./server/mdns.js";
+import { getLanIPv4, isValidMdnsName, type MdnsSupervisor, startMdnsSupervisor } from "./server/mdns.js";
+import { t } from "./server/messages.js";
 import { UiEventStore } from "./server/ui-events.js";
 import { discoverSkills } from "./skills/discovery.js";
 import { filterSkills } from "./skills/filter.js";
@@ -47,11 +46,11 @@ import {
 	ensureGlobalStorageDir,
 	getConfigDir,
 	getGlobalDbPath,
-	getGlobalStorageDir,
 	getLogsDir,
 	KNOWN_AGENTS,
 	loadConfig,
 	loadServerRuntimeState,
+	projectDotDir,
 	type ServerRuntimeState,
 	saveServerRuntimeState,
 } from "./utils/config.js";
@@ -209,7 +208,6 @@ function createAdapter(agentName: string): AgentAdapter {
 	switch (agentName) {
 		case "codex":
 			return new CodexAdapter();
-		case "claude-code":
 		default:
 			return new ClaudeCodeAdapter();
 	}
@@ -315,14 +313,14 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 
 	const running = await getActiveServerState();
 	if (running) {
-		console.log(`Cliclaw is already running: ${running.url}`);
+		console.log(`Omux is already running: ${running.url}`);
 		return;
 	}
 
 	// Check if port is already in use (e.g. by a foreground process without state file)
 	if (await isPortInUse(args.host, args.port)) {
 		console.error(`Port ${args.port} is already in use.`);
-		console.error("Run 'cliclaw stop' first, or use --port to specify a different port.");
+		console.error("Run 'omux stop' first, or use --port to specify a different port.");
 		process.exit(1);
 	}
 
@@ -336,20 +334,20 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 			stdio: ["ignore", fd, fd],
 			env: {
 				...process.env,
-				CLICLAW_DAEMON: "1",
+				OMUX_DAEMON: "1",
 			},
 		});
 
 		child.unref();
 
 		if (!child.pid) {
-			console.error("Failed to launch Cliclaw background process.");
+			console.error("Failed to launch Omux background process.");
 			process.exit(1);
 		}
 
 		const state = await waitForServerState(child.pid);
 		if (state) {
-			console.log(`Cliclaw started in background: ${state.url}`);
+			console.log(`Omux started in background: ${state.url}`);
 			printAccessUrls(state);
 			console.log(`Log file: ${logFile}`);
 			return;
@@ -362,12 +360,12 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 				const logContent = readFileSync(logFile, "utf-8");
 				const lastLines = logContent.split("\n").filter(Boolean).slice(-5).join("\n");
 				if (lastLines) {
-					console.error(`Failed to start Cliclaw:\n${lastLines}`);
+					console.error(`Failed to start Omux:\n${lastLines}`);
 				} else {
-					console.error(`Failed to start Cliclaw. See logs: ${logFile}`);
+					console.error(`Failed to start Omux. See logs: ${logFile}`);
 				}
 			} catch {
-				console.error(`Failed to start Cliclaw. See logs: ${logFile}`);
+				console.error(`Failed to start Omux. See logs: ${logFile}`);
 			}
 			process.exit(1);
 		}
@@ -376,14 +374,14 @@ async function handleStartCommand(args: ReturnType<typeof parseCliArgs>): Promis
 		await sleep(2000);
 		const retryState = await waitForServerState(child.pid, 3000);
 		if (retryState) {
-			console.log(`Cliclaw started in background: ${retryState.url}`);
+			console.log(`Omux started in background: ${retryState.url}`);
 			printAccessUrls(retryState);
 			console.log(`Log file: ${logFile}`);
 			return;
 		}
 
 		const fallbackUrl = `http://${args.host}:${args.port}`;
-		console.log(`Cliclaw started in background: ${fallbackUrl}`);
+		console.log(`Omux started in background: ${fallbackUrl}`);
 		console.log(`Log file: ${logFile}`);
 	} finally {
 		closeSync(fd);
@@ -403,12 +401,12 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			console.log(`No state file found, but port ${port} is in use. Attempting to stop by port...`);
 			if (await killByPort(port)) {
 				await waitForPortRelease(host, port);
-				console.log(`Stopped Cliclaw on port ${port}.`);
+				console.log(`Stopped Omux on port ${port}.`);
 			} else {
 				console.error(`Failed to stop process on port ${port}. Try manually: lsof -ti :${port} | xargs kill`);
 			}
 		} else {
-			console.log("Cliclaw is not running.");
+			console.log("Omux is not running.");
 		}
 		return;
 	}
@@ -421,19 +419,19 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			await killByPort(port);
 			await waitForPortRelease(host, port);
 		} else {
-			console.log("Cliclaw is not running (cleared stale state).");
+			console.log("Omux is not running (cleared stale state).");
 		}
 		return;
 	}
 
-	// Preserve cliclaw-* tmux sessions — they will be rediscovered on next startup.
+	// Preserve omux-* (and legacy cliclaw-*) tmux sessions — they will be rediscovered on next startup.
 
 	try {
 		process.kill(state.pid, "SIGTERM");
 	} catch (err: any) {
 		if (err?.code === "ESRCH") {
 			await clearServerRuntimeState();
-			console.log("Cliclaw is not running (cleared stale state).");
+			console.log("Omux is not running (cleared stale state).");
 			return;
 		}
 		throw err;
@@ -445,7 +443,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 			await clearServerRuntimeState();
 			// Wait for port release to avoid EADDRINUSE on immediate restart
 			await waitForPortRelease(host, port);
-			console.log(`Stopped Cliclaw: ${state.url}`);
+			console.log(`Stopped Omux: ${state.url}`);
 			return;
 		}
 		await sleep(200);
@@ -461,7 +459,7 @@ async function handleStopCommand(args?: { host?: string; port?: number }): Promi
 
 	await clearServerRuntimeState();
 	await waitForPortRelease(host, port);
-	console.log(`Stopped Cliclaw (forced): ${state.url}`);
+	console.log(`Stopped Omux (forced): ${state.url}`);
 }
 
 async function main(): Promise<void> {
@@ -519,13 +517,15 @@ async function main(): Promise<void> {
 	if (args.rememberText !== undefined) {
 		if (args.rememberText) {
 			const { appendToPersistentMemory } = await import("./memory/persistent.js");
-			const targetPath = args.global ? join(getConfigDir(), "MEMORY.md") : join(args.cwd, ".cliclaw", "MEMORY.md");
+			const targetPath = args.global
+				? join(getConfigDir(), "MEMORY.md")
+				: join(projectDotDir(args.cwd), "MEMORY.md");
 			await appendToPersistentMemory(targetPath, "active_notes", args.rememberText);
 			const scope = args.global ? "global" : "project";
 			console.log(`${chalk.green("Remembered")} (${scope}): ${args.rememberText}`);
 		} else {
 			console.error(chalk.yellow("Please provide text to remember."));
-			console.error('Usage: cliclaw remember "your note here"');
+			console.error('Usage: omux remember "your note here"');
 			console.error("  --global/-g  Save to global memory instead of project memory");
 			process.exit(1);
 		}
@@ -535,8 +535,9 @@ async function main(): Promise<void> {
 	// Handle "init" subcommand
 	if (args.isInit) {
 		const { mkdir, writeFile, access } = await import("node:fs/promises");
-		const cliclawDir = join(args.cwd, ".cliclaw");
-		const dirs = [join(cliclawDir, "skills"), join(cliclawDir, "prompts")];
+		// Reuses an existing legacy cliclaw `.cliclaw/` dir; creates `.omux/` otherwise.
+		const omuxDir = projectDotDir(args.cwd);
+		const dirs = [join(omuxDir, "skills"), join(omuxDir, "prompts")];
 		let created = 0;
 		for (const dir of dirs) {
 			await mkdir(dir, { recursive: true });
@@ -549,17 +550,17 @@ async function main(): Promise<void> {
 			}
 		}
 		if (created > 0) {
-			console.log(chalk.green("Initialized Cliclaw project directories:"));
+			console.log(chalk.green("Initialized Omux project directories:"));
 		} else {
-			console.log(chalk.dim("Cliclaw project directories already exist:"));
+			console.log(chalk.dim("Omux project directories already exist:"));
 		}
-		console.log(`  ${cliclawDir}/skills/`);
-		console.log(`  ${cliclawDir}/prompts/`);
+		console.log(`  ${omuxDir}/skills/`);
+		console.log(`  ${omuxDir}/prompts/`);
 		process.exit(0);
 	}
 
 	// ─── Default: Start Server ──────────────────────────
-	const isDaemonProcess = process.env.CLICLAW_DAEMON === "1";
+	const isDaemonProcess = process.env.OMUX_DAEMON === "1";
 
 	await ensureConfigDir();
 	await logger.init();
@@ -568,13 +569,13 @@ async function main(): Promise<void> {
 	if (!isDaemonProcess) {
 		const existingDaemon = await getActiveServerState();
 		if (existingDaemon) {
-			console.error(`Cliclaw is already running as a daemon: ${existingDaemon.url}`);
-			console.error("Run 'cliclaw stop' first, or use 'cliclaw restart'.");
+			console.error(`Omux is already running as a daemon: ${existingDaemon.url}`);
+			console.error("Run 'omux stop' first, or use 'omux restart'.");
 			process.exit(1);
 		}
 		if (await isPortInUse(args.host, args.port)) {
 			console.error(`Port ${args.port} is already in use.`);
-			console.error("Run 'cliclaw stop' first, or use --port to specify a different port.");
+			console.error("Run 'omux stop' first, or use --port to specify a different port.");
 			process.exit(1);
 		}
 	}
@@ -594,7 +595,7 @@ async function main(): Promise<void> {
 	}
 	const defaultAgentName = requestedDefault;
 
-	console.log(`${chalk.bold("Cliclaw")} v${VERSION}\n`);
+	console.log(`${chalk.bold("Omux")} v${VERSION}\n`);
 
 	// Check prerequisites
 	const bridge = new TmuxBridge();
@@ -624,10 +625,10 @@ async function main(): Promise<void> {
 	});
 
 	// Initialize PromptLoader
-	const promptLoader = new PromptLoader();
+	const promptLoader = new PromptLoader(undefined, locale);
 	await promptLoader.load(args.cwd);
 
-	// Initialize global storage directory (~/.cliclaw/memory/)
+	// Initialize global storage directory (~/.omux/memory/)
 	const storageDir = await ensureGlobalStorageDir();
 
 	logger.info("main", `Memory: ${storageDir}/memory/`);
@@ -718,7 +719,7 @@ async function main(): Promise<void> {
 	let learningChat: LearningChat | undefined;
 
 	if (config.learning.enabled) {
-		const learningDiffDir = join(homedir(), ".cliclaw", "learning", "diffs");
+		const learningDiffDir = join(getConfigDir(), "learning", "diffs");
 		learningStore = new LearningStore(memoryStore.getDb(), learningDiffDir);
 		changeTracker = new ChangeTracker();
 		promptTracker = new PromptTracker();
@@ -740,10 +741,10 @@ async function main(): Promise<void> {
 		});
 		logger.info("main", "Learning Sessions enabled");
 	} else {
-		logger.info("main", "Learning Sessions disabled (enable via `cliclaw config`)");
+		logger.info("main", "Learning Sessions disabled (enable via `omux config`)");
 	}
 
-	// Global persistent memory dir (~/.cliclaw) — captured once and reused by the reloader
+	// Global persistent memory dir (~/.omux) — captured once and reused by the reloader
 	// so that /clear, /compact, and /reset can refresh {{memory}} from disk without rebuilding
 	// the path each time.
 	const globalDir = getConfigDir();
@@ -763,7 +764,10 @@ async function main(): Promise<void> {
 		memoryStore,
 		syncMemory,
 		memoryReloader: reloadGlobalMemory,
+		// Explicit override (CLI flag or config); when unset, ContextManager derives the window
+		// from the model id via KNOWN_CONTEXT_WINDOWS (→ 500k fallback with a startup warning).
 		contextWindowLimit: args.contextWindow || config.context.contextWindowLimit,
+		model: llmModel,
 		compressionThreshold: config.context.compressionThreshold,
 		flushThreshold: config.memory.flushThreshold,
 		toolResultRetention: config.memory.toolResultRetention,
@@ -784,6 +788,7 @@ async function main(): Promise<void> {
 	const discoveredSkills = await discoverSkills({
 		adapterSkillsDir,
 		workspaceDir: args.cwd,
+		trustedWorkspaceDirs: config.skills?.trustedWorkspaceDirs,
 	});
 	const filteredSkills = filterSkills(discoveredSkills, { disabled: config.skills?.disabled }, args.cwd);
 	const capabilityInputs = buildAdapterCapabilityInputs(adapters, defaultAgentName, promptLoader);
@@ -793,7 +798,7 @@ async function main(): Promise<void> {
 	// Inject configured MCP servers list so MainAgent knows what's available
 	contextManager.updateModule("available_mcp_servers", buildMcpServersSummary(config.mcpServers));
 
-	// Load global persistent memory (~/.cliclaw/MEMORY.md) into the {{memory}} module ONCE
+	// Load global persistent memory (~/.omux/MEMORY.md) into the {{memory}} module ONCE
 	// at session start. The module is intentionally NOT hot-reloaded after `persistent_memory`
 	// tool writes — keeping the system prompt byte-stable preserves prompt-cache hits across
 	// turns. The module is refreshed only at explicit cache-invalidation breakpoints:
@@ -812,12 +817,9 @@ async function main(): Promise<void> {
 	const skillRegistry = new SkillRegistry(filteredSkills);
 	logger.info("main", `Skills loaded: ${skillRegistry.size} (${filteredSkills.map((s) => s.name).join(", ")})`);
 
-	// Initialize SignalRouter and MainAgent
-	const signalRouter = new SignalRouter(stateDetector, bridge, contextManager);
-
+	// Initialize MainAgent (the stop latch lives on MainAgent itself)
 	const mainAgent = new MainAgent({
 		contextManager,
-		signalRouter,
 		llmClient,
 		adapters,
 		defaultAdapter: defaultAgentName,
@@ -872,10 +874,10 @@ async function main(): Promise<void> {
 		}
 	}
 
-	// Discover live cliclaw-* tmux sessions not already restored from AgentStore.
+	// Discover live omux-* (and legacy cliclaw-*) tmux sessions not already restored from AgentStore.
 	// This handles agents that survived a crash or were created before persistence existed.
 	try {
-		const liveSessions = await bridge.listCliclawAgents();
+		const liveSessions = await bridge.listOmuxAgents();
 		for (const session of liveSessions) {
 			if (restoredAgentIds.has(session.name)) continue;
 			// Construct a default pane target for the discovered session
@@ -934,6 +936,7 @@ async function main(): Promise<void> {
 		const resetDiscovered = await discoverSkills({
 			adapterSkillsDir: resetAdapterSkillsDir,
 			workspaceDir: args.cwd,
+			trustedWorkspaceDirs: config.skills?.trustedWorkspaceDirs,
 		});
 		const resetFiltered = filterSkills(resetDiscovered, { disabled: config.skills?.disabled }, args.cwd);
 
@@ -1004,11 +1007,18 @@ async function main(): Promise<void> {
 
 	// ─── Start Server ───────────────────────────────────
 
+	// mDNS advertising decision — computed here so the Host/Origin allowlist and pairing URLs
+	// can include the LAN IPs and `<name>.local` even though the supervisor starts below.
+	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
+	const mdnsName = args.mdnsName ?? config.mdns.name;
+	const advertisesMdns =
+		mdnsEnabled && isValidMdnsName(mdnsName) && args.host !== "127.0.0.1" && args.host !== "localhost";
+	const lanIps = getLanIPv4();
+
 	const serverInstance = await startServer({
 		host: args.host,
 		port: args.port,
 		mainAgent,
-		signalRouter,
 		contextManager,
 		conversationStore,
 		broadcaster,
@@ -1025,6 +1035,9 @@ async function main(): Promise<void> {
 		learningChat,
 		learningEnabled: config.learning.enabled,
 		locale,
+		autoTidy: config.memory.autoTidy,
+		lanIps,
+		mdnsName: advertisesMdns ? mdnsName : undefined,
 	});
 
 	// ─── Start mDNS / Bonjour advertising ───────────────
@@ -1033,7 +1046,7 @@ async function main(): Promise<void> {
 	let mdnsUrl: string | undefined;
 	let lanUrls: string[] = [];
 
-	// Persist runtime state so `cliclaw stop` and the startup banner can find us;
+	// Persist runtime state so `omux stop` and the startup banner can find us;
 	// re-called whenever the mDNS supervisor re-publishes after a network change.
 	const persistRuntimeState = () =>
 		saveServerRuntimeState({
@@ -1047,8 +1060,6 @@ async function main(): Promise<void> {
 			lanUrls,
 		});
 
-	const mdnsEnabled = args.mdns ?? config.mdns.enabled;
-	const mdnsName = args.mdnsName ?? config.mdns.name;
 	if (mdnsEnabled) {
 		if (!isValidMdnsName(mdnsName)) {
 			logger.warn("main", `Invalid mDNS name "${mdnsName}", skipping advertisement`);
@@ -1076,7 +1087,7 @@ async function main(): Promise<void> {
 							// Network changed under us — tell connected clients the address moved.
 							broadcaster.broadcast({
 								type: "system",
-								message: `网络已变化，mDNS 已重新广播：${mdnsUrl}`,
+								message: t("mdns_rebroadcast", locale, { url: mdnsUrl }),
 							});
 						}
 					},
@@ -1093,7 +1104,7 @@ async function main(): Promise<void> {
 		setTimeout(() => {
 			broadcaster.broadcast({
 				type: "system",
-				message: `已从上次会话恢复 ${restoredMessageCount} 条消息`,
+				message: t("restored_messages", locale, { count: restoredMessageCount }),
 			});
 		}, 500);
 	}
@@ -1116,12 +1127,12 @@ async function main(): Promise<void> {
 
 		// Stop MainAgent if executing
 		if (mainAgent.state === "executing") {
-			signalRouter.stop();
+			mainAgent.requestStop();
 			// Give the loop a moment to exit cleanly
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 
-		// Preserve cliclaw-* tmux sessions across shutdown/restart — they are
+		// Preserve omux-* (and legacy cliclaw-*) tmux sessions across shutdown/restart — they are
 		// persisted in AgentStore and will be rediscovered on next startup.
 
 		// Stop mDNS advertising (also stops the IP-change poll loop)

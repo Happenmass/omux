@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { getAllProviders, getProvider } from "../llm/providers/registry.js";
-import { type CliclawConfig, KNOWN_AGENTS, normalizeAgents } from "../utils/config.js";
+import { KNOWN_AGENTS, normalizeAgents, type OmuxConfig } from "../utils/config.js";
 import { BoxComponent } from "./components/box.js";
 import type { Component } from "./components/renderer.js";
 import type { SelectItem } from "./components/select-list.js";
@@ -27,12 +27,12 @@ interface ConfigMenuItem {
 }
 
 export interface ConfigViewOptions {
-	onSave?: (config: CliclawConfig) => void;
+	onSave?: (config: OmuxConfig) => void;
 	onClose?: () => void;
 }
 
 export class ConfigView implements Component {
-	private config: CliclawConfig;
+	private config: OmuxConfig;
 	private mode: ConfigMode = "list";
 	private selectedIndex = 0;
 	private menuItems: ConfigMenuItem[];
@@ -47,12 +47,12 @@ export class ConfigView implements Component {
 	private hintText: TextComponent;
 
 	// Callbacks
-	private onSave: ((config: CliclawConfig) => void) | null;
+	private onSave: ((config: OmuxConfig) => void) | null;
 	private onClose: (() => void) | null;
 
 	private cached: string[] | null = null;
 
-	constructor(config: CliclawConfig, options: ConfigViewOptions = {}) {
+	constructor(config: OmuxConfig, options: ConfigViewOptions = {}) {
 		this.config = { ...config, llm: { ...config.llm } };
 		this.onSave = options.onSave ?? null;
 		this.onClose = options.onClose ?? null;
@@ -60,7 +60,7 @@ export class ConfigView implements Component {
 		this.menuItems = this.buildMenuItems();
 
 		this.box = new BoxComponent({
-			title: "Cliclaw Configuration",
+			title: "Omux Configuration",
 			borderStyle: "rounded",
 			borderStyleFn: chalk.cyan,
 			titleStyleFn: chalk.bold.cyan,

@@ -14,6 +14,7 @@ import type {
 	ToolDefinition,
 	Verbosity,
 } from "../types.js";
+import { classifyFetchAbort, createConnectTimeout, isTimeoutError, readWithIdleTimeout } from "./stream-timeout.js";
 
 // ─── Wire-format types (mirror Codex `codex-rs/codex-api/src/common.rs:165`) ──────────
 //
@@ -127,7 +128,7 @@ interface ResponsesApiRequestIncrementalWire {
  *   - Cleared on `response.failed` / `response.incomplete` / non-200 HTTP / unexpected stream errors
  *   - Cleared (effectively) when the next-turn double-check fails — that turn sends full and
  *     re-seeds the state with the new full request as baseline
- *   - NOT persisted to disk: cliclaw restart re-starts the chain (first request after restart
+ *   - NOT persisted to disk: omux restart re-starts the chain (first request after restart
  *     is full, but `prompt_cache_key` keeps the server-side cache hit). This matches Codex's
  *     in-memory WS session behavior.
  */
@@ -232,8 +233,12 @@ export class OpenAIResponsesProvider implements LLMProvider {
 		// `store` only matters for Layer-2 (server retains prior response so prev_id chain
 		// can reconstruct baseline). With L2 off, `store=false` matches what Codex's HTTP
 		// path sends to OpenAI direct (`is_azure_responses_endpoint() == false`). A provider
-		// config can still explicitly opt-in via `headers["x-cliclaw-store"]: "true"`.
-		this.store = this.incrementalEnabled || config.headers?.["x-cliclaw-store"] === "true";
+		// config can still explicitly opt-in via `headers["x-omux-store"]: "true"`
+		// (the legacy cliclaw header `x-cliclaw-store` is still honored).
+		this.store =
+			this.incrementalEnabled ||
+			config.headers?.["x-omux-store"] === "true" ||
+			config.headers?.["x-cliclaw-store"] === "true";
 	}
 
 	/**
@@ -255,7 +260,7 @@ export class OpenAIResponsesProvider implements LLMProvider {
 	}
 
 	async complete(messages: LLMMessage[], opts?: CompletionOptions): Promise<LLMResponse> {
-		// Non-streaming Responses API is supported (stream=false) but cliclaw's flow always
+		// Non-streaming Responses API is supported (stream=false) but omux's flow always
 		// streams; we still expose `complete` for parity with other providers. Implement by
 		// running the stream and returning its final `done` event.
 		let final: LLMResponse | null = null;
@@ -328,7 +333,14 @@ export class OpenAIResponsesProvider implements LLMProvider {
 			let yieldedOutput = false;
 
 			try {
-				for await (const ev of parseResponsesSse(response.body, this.model, this.name, opts?.thinking, collector)) {
+				for await (const ev of parseResponsesSse(
+					response.body,
+					this.model,
+					this.name,
+					opts?.thinking,
+					collector,
+					this.timeout,
+				)) {
 					if (
 						ev.type === "text_delta" ||
 						ev.type === "tool_call_delta" ||
@@ -422,18 +434,29 @@ export class OpenAIResponsesProvider implements LLMProvider {
 				if (attempt > 0) {
 					// Surface retries explicitly — every retry is a SEPARATE billable call. If the
 					// dashboard shows N entries for what was logically one /compact, attempt counter
-					// here will tell us if cliclaw retried internally.
+					// here will tell us if omux retried internally.
 					logger.info(
 						"llm",
 						`[${this.name}] fetch attempt ${attempt + 1}/${this.maxRetries + 1} — this is a RETRY of the previous failed request`,
 					);
 				}
-				const response = await this.fetch(url, {
-					method: "POST",
-					headers,
-					body: JSON.stringify(body),
-					signal,
-				});
+				// Connect-phase timeout, scoped to time-to-response-headers only: the timer is
+				// disarmed the moment fetch settles, so a healthy long-running SSE body is never
+				// aborted mid-flight — body stalls are guarded by the per-read idle watchdog in
+				// parseResponsesSse instead. Caller abort → AbortError (non-retryable);
+				// timeout leg → retryable TimeoutError (classified in the catch below).
+				const connect = createConnectTimeout(signal, this.timeout);
+				let response: Response;
+				try {
+					response = await this.fetch(url, {
+						method: "POST",
+						headers,
+						body: JSON.stringify(body),
+						signal: connect.signal,
+					});
+				} finally {
+					connect.disarm();
+				}
 				if (response.ok) return response;
 				if (response.status === 429 || response.status >= 500) {
 					const retryAfter = response.headers.get("retry-after");
@@ -455,13 +478,21 @@ export class OpenAIResponsesProvider implements LLMProvider {
 				(error as { nonRetryable?: boolean }).nonRetryable = true;
 				throw error;
 			} catch (err: any) {
-				if (err.name === "AbortError" || err.nonRetryable) throw err;
-				lastError = err;
+				// AbortError/TimeoutError from the composed signal: caller abort (rethrow, non-
+				// retryable) vs our own connect timeout (retryable TimeoutError → fall through).
+				let effectiveErr: any = err;
+				if (err.name === "AbortError" || err.name === "TimeoutError") {
+					const classified = classifyFetchAbort(err, signal, this.name);
+					if (!isTimeoutError(classified)) throw classified;
+					effectiveErr = classified;
+				}
+				if (effectiveErr.nonRetryable) throw effectiveErr;
+				lastError = effectiveErr;
 				if (attempt < this.maxRetries) {
 					const delay = Math.min(1000 * 2 ** attempt, this.timeout);
 					logger.warn(
 						"llm",
-						`[${this.name}] fetch threw on attempt ${attempt + 1}, retrying in ${delay}ms (each retry is a separate billable call): ${err.message}`,
+						`[${this.name}] fetch threw on attempt ${attempt + 1}, retrying in ${delay}ms (each retry is a separate billable call): ${effectiveErr.message}`,
 					);
 					await new Promise((r) => setTimeout(r, delay));
 				}
@@ -617,7 +648,7 @@ export function tryBuildIncremental(
 	// `build_responses_request`, which does NOT splice in previous_response_id at all.
 	//
 	// Defensive workaround: any delta carrying a function_call_output forces a full request.
-	// We lose L2 wire-byte savings on tool-result turns (which is most cliclaw turns since
+	// We lose L2 wire-byte savings on tool-result turns (which is most omux turns since
 	// the orchestrator is tool-heavy), but every other turn type (text-only, new user input)
 	// still rides the L2 fast path. Server-side L1 prompt-cache (prompt_cache_key) still
 	// helps on the full path — that's untouched by this fallback.
@@ -902,6 +933,9 @@ interface SseCollector {
  *                                                into `collector.itemsAddedWire` for L2 baseline
  *   - response.completed                      → final usage + done event + responseId
  *   - response.failed / response.incomplete   → throw
+ *
+ * If the stream ends WITHOUT a `response.completed` event (connection dropped mid-flight), a
+ * retryable transient error is thrown rather than yielding a `done` with truncated content.
  */
 async function* parseResponsesSse(
 	body: ReadableStream<Uint8Array>,
@@ -909,6 +943,7 @@ async function* parseResponsesSse(
 	providerName: string,
 	thinking: ThinkingLevel | undefined,
 	collector?: SseCollector,
+	idleMs = 0,
 ): AsyncIterable<LLMStreamEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -925,7 +960,10 @@ async function* parseResponsesSse(
 
 	try {
 		while (!done) {
-			const { done: streamDone, value } = await reader.read();
+			// Per-read idle watchdog: a Responses stream that resolves the fetch but then stalls
+			// mid-flight (no bytes for `idleMs`) is cancelled and surfaced as a retryable timeout
+			// rather than hanging the loop. `idleMs <= 0` disables it (plain read()).
+			const { done: streamDone, value } = await readWithIdleTimeout(reader, idleMs, providerName);
 			if (streamDone) break;
 			buffer += decoder.decode(value, { stream: true });
 
@@ -1170,6 +1208,20 @@ async function* parseResponsesSse(
 		reader.releaseLock();
 	}
 
+	// The stream ended (reader done) without a terminal `response.completed` event: the
+	// connection dropped mid-flight. `done` is only set on `response.completed`, so `!done` here
+	// means truncation. Throwing a retryable error (instead of yielding a `done` with partial
+	// text) lets the caller's stream-level retry re-run the POST. Because we've yielded no
+	// caller-visible delta at the point the caller decides to retry only when `yieldedOutput`
+	// is false, this composes with the existing retry gate without duplicating UI deltas.
+	if (!done) {
+		const error = new Error(
+			`[${providerName}] stream ended before response.completed — connection dropped mid-stream (truncated response)`,
+		) as Error & { retryable?: boolean };
+		error.retryable = true;
+		throw error;
+	}
+
 	// Splice text into contentBlocks in chronological order: text appears at first text_delta
 	// arrival, but for the assistant-message replay shape we just need it represented.
 	if (textAccum.length > 0) {
@@ -1179,11 +1231,11 @@ async function* parseResponsesSse(
 	if (reasoningChars > 0) {
 		const m = `[${providerName}] reasoning chars=${reasoningChars}`;
 		logger.info("llm", m);
-		console.log(`[cliclaw] ${m}`);
+		console.log(`[omux] ${m}`);
 	} else if (thinking && thinking !== "off") {
 		const m = `[${providerName}] reasoning effort=${thinking} requested but no reasoning text returned`;
 		logger.info("llm", m);
-		console.log(`[cliclaw] ${m}`);
+		console.log(`[omux] ${m}`);
 	}
 
 	yield {

@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omux — run your CLI coding agents unattended, in parallel</title>
+<meta name="description" content="omux is a meta-agent that drives Claude Code, Codex — any CLI coding agent — through tmux. It spawns them, reads their terminals, answers their prompts, and loops until the job is verifiably done.">
+<link rel="canonical" href="https://omux.sh/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://omux.sh/">
+<meta property="og:title" content="omux — run your CLI coding agents unattended, in parallel">
+<meta property="og:description" content="A meta-agent that drives Claude Code, Codex — any CLI coding agent — through tmux. Spawns them, answers their prompts, loops until verifiably done. You walk away.">
+<meta property="og:image" content="https://omux.sh/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="omux — run your CLI coding agents unattended, in parallel">
+<meta name="twitter:description" content="The orchestrator that lives where your agents live. orchestrate × tmux.">
+<meta name="twitter:image" content="https://omux.sh/og.png">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%23101418"/><text x="7" y="23" font-family="Menlo,monospace" font-size="17" font-weight="700" fill="%23e6b450">❯_</text></svg>'>
+<style>
+:root{
+	--bg:#101418; --bg-raised:#171d23; --bg-inset:#0b0f13;
+	--ink:#e8e4d9; --muted:#8b94a1; --line:#232b33;
+	--amber:#e6b450; --amber-dim:#8a6d33;
+	--cyan:#5ccfe6; --magenta:#c678dd; --green:#7fd88f; --red:#e06c75;
+	--mono:"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+	--sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+	background:var(--bg);color:var(--ink);font-family:var(--sans);
+	font-size:16.5px;line-height:1.65;
+	padding-bottom:64px; /* clear the fixed tmux status bar */
+}
+::selection{background:var(--amber);color:#101418}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+h1,h2,h3{font-family:var(--mono);letter-spacing:-.01em;text-wrap:balance}
+p{max-width:65ch}
+code,kbd{font-family:var(--mono);font-size:.92em}
+
+/* ── header ─────────────────────────────── */
+.top{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.brand{font-family:var(--mono);font-weight:700;font-size:19px;color:var(--ink)}
+.brand .cursor{color:var(--amber);animation:blink 1.2s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.brand .cursor{animation:none}}
+.top-links{display:flex;gap:20px;font-family:var(--mono);font-size:13.5px}
+.top-links a{color:var(--muted)}
+.top-links a:hover{color:var(--ink);text-decoration:none}
+
+/* ── hero ───────────────────────────────── */
+.hero{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:48px;align-items:center;padding:56px 0 72px}
+.eyebrow{font-family:var(--mono);font-size:13px;color:var(--amber);letter-spacing:.08em;text-transform:lowercase;margin-bottom:18px}
+.eyebrow b{color:var(--ink);font-weight:600}
+h1{font-size:clamp(28px,3.6vw,40px);line-height:1.22;font-weight:700;margin-bottom:18px}
+h1 em{font-style:normal;color:var(--amber)}
+.sub{color:var(--muted);margin-bottom:28px}
+.install{
+	display:flex;align-items:center;gap:0;margin-bottom:22px;max-width:520px;
+	background:var(--bg-inset);border:1px solid var(--line);border-radius:8px;overflow:hidden;
+}
+.install code{flex:1;padding:13px 16px;font-size:13.5px;color:var(--green);white-space:nowrap;overflow-x:auto}
+.install button{
+	font-family:var(--mono);font-size:12.5px;padding:13px 16px;border:0;border-left:1px solid var(--line);
+	background:var(--bg-raised);color:var(--muted);cursor:pointer;transition:color .15s
+}
+.install button:hover{color:var(--amber)}
+.ctas{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px}
+.btn{
+	display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:14px;
+	padding:11px 20px;border-radius:8px;border:1px solid var(--line);color:var(--ink)
+}
+.btn:hover{text-decoration:none;border-color:var(--muted)}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#141005;font-weight:700}
+.btn.primary:hover{background:#f0c164;border-color:#f0c164}
+.fineprint{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.fineprint span+span::before{content:"·";margin:0 8px;color:var(--line)}
+
+/* ── terminal mock ──────────────────────── */
+.term{
+	background:var(--bg-inset);border:1px solid var(--line);border-radius:10px;
+	font-family:var(--mono);font-size:12.5px;line-height:1.55;
+	box-shadow:0 24px 60px -24px rgba(0,0,0,.7);overflow:hidden
+}
+.term-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-raised)}
+.dot{width:11px;height:11px;border-radius:50%;background:#2d3742}
+.term-title{margin-left:8px;color:var(--muted);font-size:11.5px}
+.panes{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto}
+.pane{padding:12px 14px;min-height:150px;border-bottom:1px solid var(--line)}
+.pane.chat{grid-row:1 / span 2;grid-column:1;border-right:1px solid var(--line);min-height:0}
+.pane:last-of-type{border-bottom:0}
+.pane-label{font-size:10.5px;letter-spacing:.06em;margin-bottom:8px;opacity:.9}
+.chat .pane-label{color:var(--amber)}
+.p-claude .pane-label{color:var(--cyan)}
+.p-codex .pane-label{color:var(--magenta)}
+.pane .line{white-space:pre-wrap;word-break:break-word;min-height:1.55em;color:#c7c2b6}
+.line .you{color:var(--ink);font-weight:700}
+.line .om{color:var(--amber);font-weight:700}
+.line .ok{color:var(--green)}
+.line .err{color:var(--red)}
+.line .dim{color:var(--muted)}
+.line .spin{color:var(--cyan)}
+.term-status{
+	display:flex;gap:14px;padding:7px 14px;border-top:1px solid var(--line);
+	background:var(--bg-raised);color:var(--muted);font-size:11px;white-space:nowrap;overflow-x:auto
+}
+.term-status .sess{color:var(--amber)}
+.term-status .st-ok{color:var(--green)}
+
+/* ── section chrome (tmux window headers) ── */
+section{padding:64px 0 8px}
+.win{display:flex;align-items:center;gap:12px;margin-bottom:34px}
+.win .idx{font-family:var(--mono);font-size:13px;color:var(--amber);background:var(--bg-raised);border:1px solid var(--line);padding:3px 10px;border-radius:6px}
+.win h2{font-size:clamp(20px,2.4vw,26px)}
+.win .rule{flex:1;height:1px;background:var(--line)}
+
+/* ── problem cards ──────────────────────── */
+.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.card{background:var(--bg-raised);border:1px solid var(--line);border-radius:10px;padding:22px}
+.card h3{font-size:15.5px;margin-bottom:10px;color:var(--ink)}
+.card p{font-size:14.5px;color:var(--muted)}
+.card .glyph{font-family:var(--mono);color:var(--amber);font-size:13px;display:block;margin-bottom:14px}
+
+/* ── how it works ───────────────────────── */
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:36px}
+.step{border-left:2px solid var(--line);padding:2px 0 2px 16px}
+.step b{display:block;font-family:var(--mono);font-size:13.5px;color:var(--amber);margin-bottom:6px}
+.step p{font-size:14px;color:var(--muted)}
+.mech{display:grid;grid-template-columns:1fr 1fr;gap:16px 32px;margin-bottom:40px}
+.mech div{font-size:14.5px;color:var(--muted);padding-left:22px;position:relative}
+.mech div::before{content:"❯";position:absolute;left:0;color:var(--amber);font-family:var(--mono)}
+.mech b{color:var(--ink);font-weight:600}
+blockquote{
+	border-left:3px solid var(--amber);background:var(--bg-raised);border-radius:0 10px 10px 0;
+	padding:20px 24px;margin-bottom:14px;max-width:720px
+}
+blockquote p{font-size:15.5px;font-style:italic;color:var(--ink);max-width:none}
+blockquote footer{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:10px;font-style:normal}
+.quote-kicker{font-size:14.5px;color:var(--muted);margin-bottom:40px;max-width:720px}
+.quote-kicker b{color:var(--amber)}
+.demo{margin-top:8px}
+.demo video{width:100%;border:1px solid var(--line);border-radius:10px;background:var(--bg-inset)}
+.demo .cap{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:10px}
+
+/* ── features ───────────────────────────── */
+.feat{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.feat .card b{font-family:var(--mono);font-size:14px;color:var(--ink);display:block;margin-bottom:8px}
+
+/* ── compare table ──────────────────────── */
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+th{font-family:var(--mono);font-size:12.5px;color:var(--muted);font-weight:600;background:var(--bg-raised)}
+td:first-child{color:var(--muted)}
+td{font-variant-numeric:tabular-nums}
+.yes{color:var(--green);font-family:var(--mono)}
+.no{color:var(--muted);font-family:var(--mono)}
+.part{color:var(--amber);font-family:var(--mono)}
+.tbl-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:12px}
+
+/* ── install ────────────────────────────── */
+.shell{
+	background:var(--bg-inset);border:1px solid var(--line);border-radius:10px;
+	padding:20px 22px;font-family:var(--mono);font-size:13.5px;line-height:2;overflow-x:auto;margin-bottom:18px
+}
+.shell .c{color:var(--muted)}
+.shell .g{color:var(--green)}
+.sec-note{font-size:14px;color:var(--muted);max-width:720px}
+.sec-note code{color:var(--amber)}
+
+/* ── faq ────────────────────────────────── */
+.faq details{border:1px solid var(--line);border-radius:10px;background:var(--bg-raised);margin-bottom:12px}
+.faq summary{cursor:pointer;padding:16px 20px;font-family:var(--mono);font-size:14.5px;list-style:none}
+.faq summary::before{content:"❯ ";color:var(--amber)}
+.faq details[open] summary::before{content:"▾ "}
+.faq details p{padding:0 20px 18px;font-size:14.5px;color:var(--muted)}
+
+/* ── footer ─────────────────────────────── */
+.foot{padding:56px 0 40px;color:var(--muted);font-family:var(--mono);font-size:12.5px}
+.foot span+span::before{content:"·";margin:0 10px;color:var(--line)}
+
+/* ── tmux status bar (site nav) ─────────── */
+.tmuxbar{
+	position:fixed;left:0;right:0;bottom:0;z-index:50;
+	display:flex;align-items:center;gap:2px;
+	background:#0d1115;border-top:1px solid var(--line);
+	font-family:var(--mono);font-size:12.5px;
+	padding:0 12px;height:44px;overflow-x:auto;white-space:nowrap
+}
+.tmuxbar .sess{color:#141005;background:var(--amber);padding:3px 10px;border-radius:4px;font-weight:700;margin-right:10px}
+.tmuxbar a{color:var(--muted);padding:3px 10px;border-radius:4px}
+.tmuxbar a:hover{color:var(--ink);text-decoration:none}
+.tmuxbar a.active{color:var(--amber);background:var(--bg-raised)}
+.tmuxbar .spacer{flex:1}
+.tmuxbar .gh{color:var(--cyan)}
+
+/* ── responsive ─────────────────────────── */
+@media (max-width:920px){
+	.hero{grid-template-columns:1fr;gap:36px;padding-top:32px}
+	.cards3,.feat{grid-template-columns:1fr 1fr}
+	.steps{grid-template-columns:1fr 1fr}
+}
+@media (max-width:600px){
+	.cards3,.feat,.steps,.mech{grid-template-columns:1fr}
+	.panes{grid-template-columns:1fr}
+	.pane.chat{grid-row:auto;grid-column:auto;border-right:0}
+}
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+	<div class="brand">omux<span class="cursor">▌</span></div>
+	<nav class="top-links" aria-label="top">
+		<a href="#how">how it works</a>
+		<a href="#compare">compare</a>
+		<a href="#install">install</a>
+		<a href="https://github.com/Happenmass/Cliclaw">github ↗</a>
+	</nav>
+</header>
+
+<main>
+<div class="wrap hero">
+	<div>
+		<p class="eyebrow"><b>omux</b> = orchestrate × tmux &nbsp;·&nbsp; formerly cliclaw</p>
+		<h1>Run your coding agents <em>unattended</em>, in parallel, at scale.</h1>
+		<p class="sub">omux is a meta-agent that drives Claude Code, Codex — any CLI coding agent — through tmux. It spawns them in panes, reads their terminals, answers their prompts, and loops until the job is verifiably done. You walk away.</p>
+		<div class="install">
+			<code id="npmcmd">npm install -g @happenmass/omux</code>
+			<button id="copybtn" aria-label="Copy install command">copy</button>
+		</div>
+		<div class="ctas">
+			<a class="btn primary" href="https://github.com/Happenmass/Cliclaw">★ Star on GitHub</a>
+			<a class="btn" href="#how">See how it works ↓</a>
+		</div>
+		<p class="fineprint"><span>MIT</span><span>Node 20+</span><span>tmux</span><span>your model, your keys</span></p>
+	</div>
+
+	<div class="term" id="term" aria-label="Animated demo of an omux session">
+		<div class="term-bar">
+			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
+			<span class="term-title">tmux — omux-session</span>
+		</div>
+		<div class="panes">
+			<div class="pane chat">
+				<div class="pane-label">omux · chat</div>
+				<div class="lines" id="pn-chat"></div>
+			</div>
+			<div class="pane p-claude">
+				<div class="pane-label">claude-code · ~/api</div>
+				<div class="lines" id="pn-claude"></div>
+			</div>
+			<div class="pane p-codex">
+				<div class="pane-label">codex · review</div>
+				<div class="lines" id="pn-codex"></div>
+			</div>
+		</div>
+		<div class="term-status">
+			<span class="sess">[omux-session]</span>
+			<span>0:chat</span><span>1:claude*</span><span>2:codex</span>
+			<span class="spacer"></span>
+			<span id="st-line">state: <span class="st-ok">idle</span></span>
+		</div>
+	</div>
+</div>
+
+<section id="problem" class="wrap">
+	<div class="win"><span class="idx">0:problem</span><h2>Great at writing code. Bad at being left alone.</h2><span class="rule"></span></div>
+	<div class="cards3">
+		<div class="card">
+			<span class="glyph">Do you want to allow this? ❯ 1. Yes</span>
+			<h3>They can't run without you</h3>
+			<p>CLI agents pause on every confirmation, every choice between two approaches. Step away for coffee and the run is exactly where you left it. omux answers the prompts and keeps the loop moving.</p>
+		</div>
+		<div class="card">
+			<span class="glyph">$ tmux attach -t agent2 &nbsp;# again</span>
+			<h3>One terminal per agent, and you're the router</h3>
+			<p>Backend agent in one window, frontend in another — and you babysitting both. omux runs the fleet in tmux panes, routes callbacks, and fans out independent work in parallel.</p>
+		</div>
+		<div class="card">
+			<span class="glyph">— session ended, context lost —</span>
+			<h3>Every run starts amnesiac</h3>
+			<p>Decisions, conventions, gotchas — gone between sessions. omux keeps two-tier memory (about you, and about each codebase) plus resume ids, so agents pick up where they left off.</p>
+		</div>
+	</div>
+</section>
+
+<section id="how" class="wrap">
+	<div class="win"><span class="idx">1:how</span><h2>A loop, not a prompt box</h2><span class="rule"></span></div>
+
+	<blockquote>
+		<p>"I don't prompt Claude anymore. I have loops running that prompt Claude and figure out what to do. My job is to write loops."</p>
+		<footer>— Boris Cherny, creator of Claude Code</footer>
+	</blockquote>
+	<p class="quote-kicker"><b>omux is that loop, pre-built.</b> You state the goal in plain language; it writes the prompts, reads the panes, decides the next move, and keeps going until the success criteria are verifiably met.</p>
+
+	<div class="steps">
+		<div class="step"><b>1 · you state the goal</b><p>"Fix the flaky auth test and cover token expiry." That's the whole prompt you write.</p></div>
+		<div class="step"><b>2 · omux plans &amp; spawns</b><p>Picks the right agent per task, briefs it with repo context and memory, launches it in a tmux pane.</p></div>
+		<div class="step"><b>3 · the fleet executes</b><p>Agents implement test-first. omux reads their terminals, answers confirmations, interrupts wrong turns.</p></div>
+		<div class="step"><b>4 · verified done</b><p>A failing test is a continue signal, not a stop. It hands back only when tests pass — or a human is truly needed.</p></div>
+	</div>
+
+	<div class="mech">
+		<div><b>Pane-native state detection.</b> Per-agent regex classifies waiting / active / done / error; an LLM pass settles ambiguous frames — biased toward "still working", so busy agents never get cut off.</div>
+		<div><b>Zero tokens while you wait.</b> Waiting is push-based: while sub-agents grind, the MainAgent parks and spends nothing until a callback wakes it. No polling loop burning money.</div>
+		<div><b>Cross-vendor execute-then-review.</b> Claude Code implements; a separate Codex agent independently reviews the diff — different vendor, different blind spots. Roles are swappable.</div>
+		<div><b>Memory that survives sessions.</b> Hybrid search (vector + BM25) over markdown files; a global tier for you, a project tier per codebase. Kill an agent, keep its resume id, revive it later.</div>
+	</div>
+
+	<div class="demo">
+		<video controls preload="none" poster="https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo_poster.png">
+			<source src="https://github.com/Happenmass/Cliclaw/raw/main/assets/cliclaw_demo.mp4" type="video/mp4">
+		</video>
+		<p class="cap">real session, real time — one goal in, verified diff out</p>
+	</div>
+</section>
+
+<section id="features" class="wrap">
+	<div class="win"><span class="idx">2:features</span><h2>Built for the parts around the coding</h2><span class="rule"></span></div>
+	<div class="feat">
+		<div class="card"><b>Tool-agnostic adapters</b><p>Claude Code and Codex today; a new agent is one adapter file — launch command, four regexes, confirm keys. The orchestration layer never changes.</p></div>
+		<div class="card"><b>Per-agent MCP scoping</b><p>Each agent gets only the tools it needs. A docs agent never sees your Postgres MCP: smaller prompts, no name collisions, sharper decisions.</p></div>
+		<div class="card"><b>Take over anytime</b><p>Grab any agent's live terminal from the web UI, type keystrokes yourself, release it back. The orchestrator keeps its hands off while you drive.</p></div>
+		<div class="card"><b>Survives crashes</b><p>Agents live in tmux, not in the server process. omux restarts, re-adopts running sessions, restores conversation state from SQLite, repairs interrupted tool calls.</p></div>
+		<div class="card"><b>Thin token bill</b><p>Context compaction rides the same prompt cache as normal turns; mutable prompt sections are ordered to keep the cache prefix stable. The orchestrator's own cost stays small.</p></div>
+		<div class="card"><b>Your language, their language</b><p>Chat with omux in Chinese while it briefs coding agents in English — or any combination. zh-CN and en-US built in.</p></div>
+	</div>
+</section>
+
+<section id="compare" class="wrap">
+	<div class="win"><span class="idx">3:compare</span><h2>The honest landscape</h2><span class="rule"></span></div>
+	<div class="tblwrap">
+		<table>
+			<thead><tr><th></th><th>omux</th><th>Claude Code subagents</th><th>OpenHands</th><th>Cursor Composer</th></tr></thead>
+			<tbody>
+				<tr><td>Run multiple agents in parallel</td><td class="yes">✓</td><td class="part">limited</td><td class="yes">✓</td><td class="part">partial</td></tr>
+				<tr><td>Tool-agnostic (Claude Code, Codex, …)</td><td class="yes">✓</td><td class="no">Claude only</td><td class="no">own runtime</td><td class="no">own runtime</td></tr>
+				<tr><td>Native TUI — watch agents reason live</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td></tr>
+				<tr><td>Drives confirmations / interactive flows</td><td class="yes">✓</td><td class="no">n/a</td><td class="no">—</td><td class="no">—</td></tr>
+				<tr><td>Remote-friendly (SSH, detach, resume)</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">✗</td></tr>
+				<tr><td>Per-agent MCP scoping</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+			</tbody>
+		</table>
+	</div>
+	<p class="tbl-note">landscape as of mid-2026 — these tools move fast; corrections welcome</p>
+</section>
+
+<section id="install" class="wrap">
+	<div class="win"><span class="idx">4:install</span><h2>Two commands to a running fleet</h2><span class="rule"></span></div>
+	<div class="shell">
+<span class="c"># requires Node 20+ and tmux (brew install tmux)</span><br>
+$ npm install -g @happenmass/omux<br>
+$ omux<br>
+<span class="g">→ open http://localhost:3120 — pair once, then chat</span>
+	</div>
+	<p class="sec-note">Runs on your machine, with your keys — one for omux's reasoning, and whatever your coding agents already use. On a laptop it's LAN-discoverable by default so you can drive it from your phone; on shared networks, lock it down with <code>omux --host 127.0.0.1 --no-mdns</code> or an SSH tunnel.</p>
+</section>
+
+<section id="faq" class="wrap faq">
+	<div class="win"><span class="idx">5:faq</span><h2>Questions people actually ask</h2><span class="rule"></span></div>
+	<details open>
+		<summary>Why tmux instead of wrapping the APIs?</summary>
+		<p>Because the experience of Claude Code and Codex is not in their APIs — it's in their TUIs: the step-by-step reasoning, the previews, the confirmations. Wrapping the API throws that away. Driving the terminal keeps it, and makes omux compatible with any CLI agent that ever ships.</p>
+	</details>
+	<details>
+		<summary>Does omux pick which agent handles a task?</summary>
+		<p>Within the adapters you've enabled, yes — Codex for gnarly single-point reasoning, Claude Code for broad multi-file loops, then the other one reviews. Roles are heuristics, not hard-wiring; override per task. It never reaches for a tool you didn't enable.</p>
+	</details>
+	<details>
+		<summary>Can I run it on a remote server?</summary>
+		<p>That's the main mode the author uses: SSH in, start omux, detach, come back hours later. Agents keep working in tmux the whole time. Prefer an SSH tunnel over exposing the port on untrusted networks.</p>
+	</details>
+	<details>
+		<summary>Why "omux"?</summary>
+		<p><b>o</b>rchestrate × t<b>mux</b> — the orchestrator that lives where your agents live. omux is the new name of cliclaw; same project, sharper name.</p>
+	</details>
+</section>
+</main>
+
+<footer class="wrap foot">
+	<span>MIT © <a href="https://github.com/Happenmass">Happenmass</a></span><span><a href="https://github.com/Happenmass/Cliclaw">github</a></span><span><a href="https://www.npmjs.com/package/@happenmass/omux">npm</a></span><span>omux.sh</span>
+</footer>
+
+<nav class="tmuxbar" aria-label="sections">
+	<span class="sess">[omux]</span>
+	<a href="#problem" data-w="problem">0:problem</a>
+	<a href="#how" data-w="how">1:how</a>
+	<a href="#features" data-w="features">2:features</a>
+	<a href="#compare" data-w="compare">3:compare</a>
+	<a href="#install" data-w="install">4:install</a>
+	<a href="#faq" data-w="faq">5:faq</a>
+	<span class="spacer"></span>
+	<a class="gh" href="https://github.com/Happenmass/Cliclaw">★ github</a>
+</nav>
+
+<script>
+/* copy button */
+document.getElementById('copybtn').addEventListener('click',function(){
+	var t=document.getElementById('npmcmd').textContent;
+	(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>{
+		this.textContent='copied ✓';setTimeout(()=>this.textContent='copy',1600);
+	}).catch(()=>{this.textContent=t;});
+});
+
+/* tmux bar active-window highlight */
+(function(){
+	var links={};document.querySelectorAll('.tmuxbar a[data-w]').forEach(a=>links[a.dataset.w]=a);
+	if(!('IntersectionObserver' in window))return;
+	var io=new IntersectionObserver(es=>{es.forEach(e=>{
+		if(e.isIntersecting){Object.values(links).forEach(a=>a.classList.remove('active'));
+		var l=links[e.target.id];if(l)l.classList.add('active');}
+	});},{rootMargin:'-35% 0px -55% 0px'});
+	document.querySelectorAll('main section').forEach(s=>io.observe(s));
+})();
+
+/* choreographed terminal demo */
+(function(){
+	var reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	var P={chat:document.getElementById('pn-chat'),claude:document.getElementById('pn-claude'),codex:document.getElementById('pn-codex')};
+	var st=document.getElementById('st-line');
+	if(!P.chat)return;
+	/* [pane, html, delayBeforeMs, typewriter?] */
+	var SCRIPT=[
+		['chat','<span class="you">you ❯</span> fix the flaky auth test, cover token expiry',400,true],
+		['chat','<span class="om">omux ❯</span> spawning <span class="spin">claude-code</span> in ~/api…',900],
+		['status','state: <span>launching</span>',200],
+		['claude','❯ npx vitest run test/auth',700],
+		['claude','<span class="err">FAIL</span> token expiry — expected 401, got 200',900],
+		['chat','<span class="om">omux ❯</span> flake reproduced → briefing fix, test-first',800],
+		['claude','<span class="spin">⠋</span> editing src/auth/token.ts…',900],
+		['status','state: <span>active</span>',100],
+		['claude','❯ npx vitest run <span class="dim">(rerun)</span>',1400],
+		['claude','<span class="ok">✓ 42 passed</span> <span class="dim">(42)</span>',900],
+		['chat','<span class="om">omux ❯</span> green. spawning <span class="spin">codex</span> for independent review',700],
+		['codex','› reviewing diff — correctness, edge cases…',800],
+		['codex','edge case: clock skew — <span class="ok">handled ✓</span>',1200],
+		['codex','<span class="ok">LGTM</span> <span class="dim">— no regressions found</span>',800],
+		['chat','<span class="om">omux ❯</span> <span class="ok">✓ done &amp; verified</span> — 42/42 pass, cross-reviewed, 2 files changed',600],
+		['status','state: <span class="st-ok">completed ✓</span>',200]
+	];
+	function addLine(pane,html){var d=document.createElement('div');d.className='line';d.innerHTML=html;P[pane].appendChild(d);
+		while(P[pane].children.length>6)P[pane].removeChild(P[pane].firstChild);return d;}
+	function typeInto(el,html,done){ /* typewriter for plain tail text only */
+		var tmp=document.createElement('div');tmp.innerHTML=html;var full=tmp.textContent;
+		var pre=html.slice(0,html.indexOf('</span>')+7),tail=full.slice(full.indexOf('❯')+2);
+		el.innerHTML=pre+' ';var i=0;
+		(function tick(){if(i<=tail.length){el.innerHTML=pre+' '+tail.slice(0,i)+'<span class="dim">▌</span>';i++;setTimeout(tick,28);}
+		else{el.innerHTML=html;done&&done();}})();
+	}
+	function finalFrame(){
+		SCRIPT.forEach(function(s){if(s[0]==='status'){st.innerHTML=s[1];}else{addLine(s[0],s[1]);}});
+	}
+	if(reduced){finalFrame();return;}
+	var idx=0;
+	function next(){
+		if(idx>=SCRIPT.length){setTimeout(function(){P.chat.innerHTML='';P.claude.innerHTML='';P.codex.innerHTML='';st.innerHTML='state: <span>idle</span>';idx=0;setTimeout(next,900);},7000);return;}
+		var s=SCRIPT[idx++];
+		setTimeout(function(){
+			if(s[0]==='status'){st.innerHTML=s[1];next();}
+			else if(s[3]){var el=addLine(s[0],'');typeInto(el,s[1],next);}
+			else{addLine(s[0],s[1]);next();}
+		},s[2]);
+	}
+	next();
+})();
+</script>
+</body>
+</html>

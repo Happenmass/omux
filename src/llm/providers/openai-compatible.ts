@@ -7,9 +7,8 @@ import type {
 	LLMStreamEvent,
 	MessageContent,
 	ProviderConfig,
-	TextContent,
-	ToolCallContent,
 } from "../types.js";
+import { classifyFetchAbort, createConnectTimeout, isTimeoutError, readWithIdleTimeout } from "./stream-timeout.js";
 
 /**
  * OpenAI-compatible provider.
@@ -73,10 +72,16 @@ export class OpenAICompatibleProvider implements LLMProvider {
 		let stopReason = "stop";
 		let model = this.model;
 		let lastReasoningTokens: number | undefined;
+		// Track whether the terminal `[DONE]` marker was seen. A stream that ends (reader done)
+		// WITHOUT it was truncated mid-flight — yielding a normal `done` with partial text would
+		// be indistinguishable from a clean finish. We throw a retryable error instead.
+		let sawDoneMarker = false;
 
 		try {
 			while (true) {
-				const { done, value } = await reader.read();
+				// Per-read idle watchdog: if the server stops sending bytes mid-stream, cancel and
+				// surface a retryable timeout instead of hanging the loop indefinitely.
+				const { done, value } = await readWithIdleTimeout(reader, this.timeout, this.name);
 				if (done) break;
 
 				buffer += decoder.decode(value, { stream: true });
@@ -88,7 +93,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
 					if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
 					const dataStr = trimmed.slice(6);
-					if (dataStr === "[DONE]") continue;
+					if (dataStr === "[DONE]") {
+						sawDoneMarker = true;
+						continue;
+					}
 
 					let data: any;
 					try {
@@ -153,14 +161,26 @@ export class OpenAICompatibleProvider implements LLMProvider {
 			reader.releaseLock();
 		}
 
+		// The reader reached `done` without ever seeing `[DONE]`: the connection dropped
+		// mid-stream. Yielding a `done` event here would look like a clean finish with truncated
+		// text. Throw a retryable transient error so callers (and openai-responses-style retry)
+		// can retry instead of silently accepting a partial response.
+		if (!sawDoneMarker) {
+			const err = new Error(
+				`[${this.name}] stream ended before [DONE] marker — connection dropped mid-stream (truncated response)`,
+			) as Error & { retryable?: boolean };
+			err.retryable = true;
+			throw err;
+		}
+
 		if (lastReasoningTokens !== undefined && lastReasoningTokens > 0) {
 			const msg = `[${this.name}] reasoning_tokens=${lastReasoningTokens}`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		} else if (opts?.thinking && opts.thinking !== "off") {
 			const msg = `[${this.name}] reasoning_effort requested but reasoning_tokens=0 (model may ignore the field)`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		}
 
 		// Build content blocks
@@ -217,7 +237,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 			body.reasoning_effort = opts.thinking;
 			const msg = `[${this.name}] reasoning_effort=${opts.thinking}`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		} else {
 			logger.debug("llm", `[${this.name}] reasoning_effort off (level=${opts?.thinking ?? "undefined"})`);
 		}
@@ -340,15 +360,26 @@ export class OpenAICompatibleProvider implements LLMProvider {
 				};
 
 				if (this.apiKey) {
-					headers["Authorization"] = `Bearer ${this.apiKey}`;
+					headers.Authorization = `Bearer ${this.apiKey}`;
 				}
 
-				const response = await this.fetch(url, {
-					method: "POST",
-					headers,
-					body: JSON.stringify(body),
-					signal,
-				});
+				// Connect-phase timeout, scoped to time-to-response-headers only: the timer is
+				// disarmed the moment fetch settles, so a healthy long-running body (streaming or
+				// a slow non-streaming complete()) is never aborted mid-flight — body stalls are
+				// guarded by the per-read idle watchdog instead. A caller abort surfaces as
+				// AbortError (non-retryable); the timeout leg as a retryable TimeoutError (see catch).
+				const connect = createConnectTimeout(signal, this.timeout);
+				let response: Response;
+				try {
+					response = await this.fetch(url, {
+						method: "POST",
+						headers,
+						body: JSON.stringify(body),
+						signal: connect.signal,
+					});
+				} finally {
+					connect.disarm();
+				}
 
 				if (response.ok) {
 					return response;
@@ -368,12 +399,20 @@ export class OpenAICompatibleProvider implements LLMProvider {
 				const errorBody = await response.text().catch(() => "");
 				throw new Error(`[${this.name}] API error ${response.status}: ${errorBody.substring(0, 500)}`);
 			} catch (err: any) {
-				if (err.name === "AbortError") throw err;
-				lastError = err;
+				// AbortError from the composed signal is either the caller aborting (rethrow) or
+				// our own connect timeout firing (convert to a retryable TimeoutError, fall through
+				// to retry). classifyFetchAbort discriminates via the caller's signal state.
+				let effectiveErr: any = err;
+				if (err.name === "AbortError" || err.name === "TimeoutError") {
+					const classified = classifyFetchAbort(err, signal, this.name);
+					if (!isTimeoutError(classified)) throw classified;
+					effectiveErr = classified;
+				}
+				lastError = effectiveErr;
 
 				if (attempt < this.maxRetries) {
 					const delay = Math.min(1000 * 2 ** attempt, this.timeout);
-					logger.warn("llm", `[${this.name}] Request failed, retrying in ${delay}ms: ${err.message}`);
+					logger.warn("llm", `[${this.name}] Request failed, retrying in ${delay}ms: ${effectiveErr.message}`);
 					await new Promise((r) => setTimeout(r, delay));
 				}
 			}
@@ -415,7 +454,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 		if (reasoningTokens && reasoningTokens > 0) {
 			const msg = `[${this.name}] reasoning_tokens=${reasoningTokens}`;
 			logger.info("llm", msg);
-			console.log(`[cliclaw] ${msg}`);
+			console.log(`[omux] ${msg}`);
 		}
 
 		return {

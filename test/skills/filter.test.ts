@@ -25,7 +25,7 @@ function makeSkill(overrides: Partial<SkillEntry> = {}): SkillEntry {
 
 describe("filterSkills", () => {
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-filter-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-filter-"));
 	});
 
 	afterEach(async () => {
@@ -80,7 +80,7 @@ describe("filterSkills", () => {
 		// PATH is always set
 		const skills = [
 			makeSkill({ name: "has-path", when: { env: ["PATH"] } }),
-			makeSkill({ name: "needs-missing", when: { env: ["CLICLAW_TEST_NONEXISTENT_VAR_12345"] } }),
+			makeSkill({ name: "needs-missing", when: { env: ["OMUX_TEST_NONEXISTENT_VAR_12345"] } }),
 		];
 		const result = filterSkills(skills, {}, tmpDir);
 		expect(result).toHaveLength(1);

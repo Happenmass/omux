@@ -22,6 +22,7 @@ function createMockMainAgent(state: "idle" | "executing" = "idle") {
 		handleMessage: vi.fn().mockResolvedValue(undefined),
 		getPendingUserMessageCount: vi.fn().mockReturnValue(0),
 		getContextUsage: vi.fn().mockReturnValue({ tokens: 0, limit: 200000 }),
+		setTakenOver: vi.fn(),
 	} as any;
 }
 
@@ -136,6 +137,29 @@ describe("handleWebSocket", () => {
 
 		expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
 			expect.objectContaining({ type: "system", message: expect.stringContaining("LLM failed") }),
+		);
+	});
+
+	it("defaults to English system messages (SRV-5)", () => {
+		connect();
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "takeover", agentId: "a1" })));
+		expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: "Session a1 has been taken over by a human" }),
+		);
+	});
+
+	it("routes system messages through the zh-CN table when locale is zh-CN (SRV-5)", () => {
+		handleWebSocket(ws, {
+			mainAgent: mockAgent,
+			broadcaster: mockBroadcaster,
+			commandRouter: mockCommandRouter,
+			bridge: {} as any,
+			locale: "zh-CN",
+		});
+		mockAgent.setTakenOver = vi.fn();
+		ws._emit("message", Buffer.from(JSON.stringify({ type: "release", agentId: "a2" })));
+		expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "system", message: "会话 a2 已恢复 MainAgent 控制" }),
 		);
 	});
 });

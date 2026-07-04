@@ -12,7 +12,7 @@ describe("learning tables schema", () => {
 	let db: Database.Database;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-learning-schema-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-learning-schema-"));
 		db = new Database(join(tmpDir, "test.sqlite"));
 		db.pragma("journal_mode = WAL");
 		new ConversationStore(db); // triggers schema creation
@@ -86,7 +86,7 @@ function makeInput(overrides: Partial<CreateLearningEntryInput> = {}): CreateLea
 		title: "Test entry",
 		sourceType: "agent",
 		sourceAgents: [
-			{ sessionId: "s1", sessionName: "cliclaw-a", baseRef: "deadbeef", endRef: "cafef00d", cwd: "/tmp/repo" },
+			{ sessionId: "s1", sessionName: "omux-a", baseRef: "deadbeef", endRef: "cafef00d", cwd: "/tmp/repo" },
 		],
 		agentPrompts: ["do the thing"],
 		summaryJson: {
@@ -109,7 +109,7 @@ describe("LearningStore entries", () => {
 	let store: LearningStore;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-learning-store-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-learning-store-"));
 		db = new Database(join(tmpDir, "test.sqlite"));
 		db.pragma("journal_mode = WAL");
 		db.pragma("foreign_keys = ON");

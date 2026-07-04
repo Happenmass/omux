@@ -18,7 +18,7 @@ describe("LearningChat", () => {
 	let entryId: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-lc-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-lc-"));
 		db = new Database(join(tmpDir, "x.sqlite"));
 		db.pragma("journal_mode = WAL");
 		db.pragma("foreign_keys = ON");

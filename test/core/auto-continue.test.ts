@@ -1,23 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MainAgent } from "../../src/core/main-agent.js";
 
 function createAgent(opts: { enabled?: boolean; max?: number } = {}) {
-	const broadcaster = { broadcast: vi.fn(), addClient: vi.fn(), removeClient: vi.fn(), getClientCount: vi.fn() } as any;
+	const broadcaster = {
+		broadcast: vi.fn(),
+		addClient: vi.fn(),
+		removeClient: vi.fn(),
+		getClientCount: vi.fn(),
+	} as any;
 	const complete = vi.fn();
 	const llmClient = { complete } as any;
 	const promptLoader = { resolve: vi.fn().mockReturnValue("GATE PROMPT") } as any;
-	const signalRouter = {
-		on: vi.fn(), emit: vi.fn(),
-		isStopRequested: vi.fn().mockReturnValue(false),
-	} as any;
 	const agent = new MainAgent({
 		contextManager: {
-			addMessage: vi.fn(), getMessages: vi.fn().mockReturnValue([]),
+			addMessage: vi.fn(),
+			getMessages: vi.fn().mockReturnValue([]),
 			getCurrentTokenEstimate: vi.fn().mockReturnValue(0),
 			getContextWindowLimit: vi.fn().mockReturnValue(200000),
 			setCompactTuning: vi.fn(),
 		} as any,
-		signalRouter,
 		llmClient,
 		adapter: { getCharacteristics: vi.fn().mockReturnValue({}) } as any,
 		bridge: { capturePane: vi.fn() } as any,
@@ -27,11 +28,16 @@ function createAgent(opts: { enabled?: boolean; max?: number } = {}) {
 		promptLoader,
 		autoContinue: { enabled: opts.enabled ?? false, maxConsecutive: opts.max ?? 10 },
 	});
-	return { agent, broadcaster, complete, signalRouter };
+	return { agent, broadcaster, complete };
 }
 
 function gateResponse(decision: object) {
-	return { content: JSON.stringify(decision), usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, stopReason: "end_turn", model: "test" };
+	return {
+		content: JSON.stringify(decision),
+		usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+		stopReason: "end_turn",
+		model: "test",
+	};
 }
 
 const run = (agent: MainAgent, text = "done for now") => (agent as any).maybeAutoContinue(text);
@@ -47,13 +53,15 @@ describe("maybeAutoContinue", () => {
 
 	it("continues: enqueues driverText, increments the counter, broadcasts", async () => {
 		const { agent, complete, broadcaster } = createAgent({ enabled: true });
-		complete.mockResolvedValue(gateResponse({ continue: true, reason: "tests not run", driverText: "Run the test suite" }));
+		complete.mockResolvedValue(
+			gateResponse({ continue: true, reason: "tests not run", driverText: "Run the test suite" }),
+		);
 		expect(await run(agent)).toBe(true);
 		expect((agent as any).autoContinueCount).toBe(1);
 		expect(queueSize(agent)).toBe(1);
 		expect((agent as any).workQueue.dequeue()).toEqual({ kind: "user_message", content: "Run the test suite" });
 		expect(broadcaster.broadcast).toHaveBeenCalledWith(
-			expect.objectContaining({ type: "system", message: expect.stringContaining("自动继续 (1/") }),
+			expect.objectContaining({ type: "system", message: expect.stringContaining("Auto-continue (1/") }),
 		);
 	});
 
@@ -79,8 +87,8 @@ describe("maybeAutoContinue", () => {
 	});
 
 	it("does not run when a stop was requested", async () => {
-		const { agent, complete, signalRouter } = createAgent({ enabled: true });
-		signalRouter.isStopRequested.mockReturnValue(true);
+		const { agent, complete } = createAgent({ enabled: true });
+		agent.requestStop();
 		expect(await run(agent)).toBe(false);
 		expect(complete).not.toHaveBeenCalled();
 	});
@@ -90,6 +98,25 @@ describe("maybeAutoContinue", () => {
 		(agent as any).workQueue.enqueueUserMessage("user typed something");
 		expect(await run(agent)).toBe(false);
 		expect(complete).not.toHaveBeenCalled();
+	});
+
+	it("MA-4: drops the driverText when a user message arrives DURING the gate call", async () => {
+		const { agent, complete } = createAgent({ enabled: true });
+		// The gate LLM call takes multiple seconds; simulate a human message landing mid-call.
+		complete.mockImplementation(async () => {
+			(agent as any).workQueue.enqueueUserMessage("actually, do something else");
+			return gateResponse({ continue: true, reason: "more to do", driverText: "stale driver text" });
+		});
+
+		expect(await run(agent)).toBe(false);
+
+		// The human message must be the ONLY queued item — no stale driver text behind it.
+		expect(queueSize(agent)).toBe(1);
+		expect((agent as any).workQueue.dequeue()).toEqual({
+			kind: "user_message",
+			content: "actually, do something else",
+		});
+		expect((agent as any).autoContinueCount).toBe(0);
 	});
 
 	it("fails safe (false) when the gate returns non-JSON twice", async () => {

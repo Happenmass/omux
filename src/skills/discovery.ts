@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
+import { projectDotDir } from "../utils/config.js";
 import { logger } from "../utils/logger.js";
 import { readSkillDir } from "./reader.js";
 import type { SkillEntry } from "./types.js";
@@ -9,6 +10,13 @@ const MAX_SKILLS = 50;
 export interface DiscoveryOptions {
 	adapterSkillsDir?: string;
 	workspaceDir?: string;
+	/**
+	 * Absolute workspace directories whose `.omux/skills/` (or legacy cliclaw
+	 * `.cliclaw/skills/`) are trusted to be loaded. A workspace not in this list has its
+	 * skills dir SKIPPED — those skills would otherwise steer the orchestrator with
+	 * system-prompt / tool-result authority. Default [].
+	 */
+	trustedWorkspaceDirs?: string[];
 }
 
 /**
@@ -26,15 +34,27 @@ export async function discoverSkills(opts: DiscoveryOptions): Promise<SkillEntry
 		}
 	}
 
-	// Load workspace skills (high priority, overrides adapter)
+	// Load workspace skills (high priority, overrides adapter) — but ONLY from trusted
+	// workspaces. Workspace skills execute with orchestrator authority, so a cloned repo's
+	// `.omux/skills/` must be explicitly trusted before it can steer the MainAgent.
+	// projectDotDir prefers `.omux/` and falls back to a legacy cliclaw `.cliclaw/` dir.
 	if (opts.workspaceDir) {
-		const workspaceSkillsDir = join(opts.workspaceDir, ".cliclaw", "skills");
-		const workspaceSkills = await scanDirectory(workspaceSkillsDir, "workspace");
-		for (const skill of workspaceSkills) {
-			if (merged.has(skill.name)) {
-				logger.info("skill-discovery", `Workspace skill "${skill.name}" overrides adapter skill`);
+		const workspaceSkillsDir = join(projectDotDir(opts.workspaceDir), "skills");
+		if (isTrustedWorkspace(opts.workspaceDir, opts.trustedWorkspaceDirs)) {
+			const workspaceSkills = await scanDirectory(workspaceSkillsDir, "workspace");
+			for (const skill of workspaceSkills) {
+				if (merged.has(skill.name)) {
+					logger.info("skill-discovery", `Workspace skill "${skill.name}" overrides adapter skill`);
+				}
+				merged.set(skill.name, skill);
 			}
-			merged.set(skill.name, skill);
+		} else if (await directoryExists(workspaceSkillsDir)) {
+			logger.warn(
+				"skill-discovery",
+				`Skipping untrusted workspace skills at ${workspaceSkillsDir}. Workspace skills run with ` +
+					`orchestrator authority; to load them, add "${resolvePath(opts.workspaceDir)}" to ` +
+					`skills.trustedWorkspaceDirs in ~/.omux/config.json.`,
+			);
 		}
 	}
 
@@ -87,4 +107,19 @@ async function scanDirectory(dir: string, source: "adapter" | "workspace"): Prom
 	}
 
 	return entries;
+}
+
+async function directoryExists(dir: string): Promise<boolean> {
+	try {
+		return (await stat(dir)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** Whether a workspace's skills dir is trusted to load. Compares resolved absolute paths. */
+function isTrustedWorkspace(workspaceDir: string, trusted?: string[]): boolean {
+	if (!trusted || trusted.length === 0) return false;
+	const target = resolvePath(workspaceDir);
+	return trusted.some((t) => resolvePath(t) === target);
 }

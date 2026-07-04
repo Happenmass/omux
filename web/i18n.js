@@ -1,4 +1,4 @@
-// web/i18n.js — Minimal i18n for Cliclaw frontend
+// web/i18n.js — Minimal i18n for Omux frontend
 
 const messages = {
 	"zh-CN": {

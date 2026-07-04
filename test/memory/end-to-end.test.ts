@@ -22,7 +22,7 @@ const todayStr = `${TODAY.getUTCFullYear()}-${String(TODAY.getUTCMonth() + 1).pa
 
 const MEMORY_FILES: Record<string, string> = {
 	"memory/core.md":
-		"## Core Conventions\nThe Cliclaw MainAgent uses a two-state machine (IDLE and EXECUTING).\n" +
+		"## Core Conventions\nThe Omux MainAgent uses a two-state machine (IDLE and EXECUTING).\n" +
 		"Tool calls run sequentially. Streaming deltas are broadcast to WebSocket clients.\n",
 	"memory/preferences.md":
 		"## Preferences\nThe user prefers Chinese for the final summary.\nUse tabs for indentation, width 3.\nAlways prefer const.\n",
@@ -69,7 +69,7 @@ describe("Memory pipeline — end-to-end", () => {
 	};
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-e2e-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-e2e-"));
 		storageDir = join(tmpDir, "storage");
 		await mkdir(join(storageDir, "memory"), { recursive: true });
 		for (const [rel, content] of Object.entries(MEMORY_FILES)) {
@@ -248,7 +248,7 @@ describe("Memory pipeline — end-to-end", () => {
 
 	it("FTS-only fallback (no embedding provider) still returns relevant results after sync", async () => {
 		// Re-sync without a provider — chunks should still index, just without embeddings
-		const ftsTmp = await mkdtemp(join(tmpdir(), "cliclaw-e2e-fts-"));
+		const ftsTmp = await mkdtemp(join(tmpdir(), "omux-e2e-fts-"));
 		try {
 			const ftsStorage = join(ftsTmp, "storage");
 			await mkdir(join(ftsStorage, "memory"), { recursive: true });
@@ -277,6 +277,51 @@ describe("Memory pipeline — end-to-end", () => {
 		}
 	});
 
+	it("recovers from a transient embedding failure via retry (sync does not abort)", async () => {
+		// A provider whose embedBatch throws a transient error on its first call,
+		// then succeeds. Wired through embedBatchWithRetry, sync must recover.
+		const retryTmp = await mkdtemp(join(tmpdir(), "omux-e2e-retry-"));
+		try {
+			const retryStorage = join(retryTmp, "storage");
+			await mkdir(join(retryStorage, "memory"), { recursive: true });
+			await writeFile(join(retryStorage, "memory/core.md"), MEMORY_FILES["memory/core.md"]);
+
+			const retryStore = new MemoryStore({
+				dbPath: join(retryStorage, "retry.sqlite"),
+				workspaceDir: retryTmp,
+				storageDir: retryStorage,
+				vectorEnabled: false,
+			});
+
+			let calls = 0;
+			const flakyProvider: EmbeddingProvider = {
+				id: "mock",
+				model: "e2e-mock-retry",
+				embedQuery: async () => [0, 0, 0, 0, 0, 0, 0, 0],
+				embedBatch: async (ts) => {
+					calls++;
+					if (calls === 1) {
+						const err: any = new Error("rate limited");
+						err.status = 429;
+						throw err;
+					}
+					return ts.map(() => [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]);
+				},
+			};
+
+			try {
+				const stats = await syncMemoryFiles(retryStore, { embeddingProvider: flakyProvider });
+				expect(calls).toBeGreaterThanOrEqual(2); // retried at least once
+				expect(stats.added).toBe(1);
+				expect(stats.chunksIndexed).toBeGreaterThan(0);
+			} finally {
+				retryStore.close();
+			}
+		} finally {
+			await rm(retryTmp, { recursive: true, force: true });
+		}
+	}, 15000);
+
 	it("survives a restart: closing and re-opening the store preserves search", async () => {
 		const dbPath = join(storageDir, "e2e.sqlite");
 		store.close();
@@ -289,7 +334,7 @@ describe("Memory pipeline — end-to-end", () => {
 		});
 		try {
 			expect(reopened.getTrackedFilePaths().sort()).toEqual(Object.keys(MEMORY_FILES).sort());
-			const results = await searchMemory(reopened, "Cliclaw MainAgent", provider, config, {
+			const results = await searchMemory(reopened, "Omux MainAgent", provider, config, {
 				maxResults: 3,
 				minScore: 0,
 			});

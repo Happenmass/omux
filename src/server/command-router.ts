@@ -1,28 +1,31 @@
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { ContextManager } from "../core/context-manager.js";
 import type { MainAgent } from "../core/main-agent.js";
-import type { SignalRouter } from "../core/signal-router.js";
 import type { LLMClient } from "../llm/client.js";
 import type { PromptLoader } from "../llm/prompt-loader.js";
 import type { MemoryStore } from "../memory/store.js";
 import { loadConfig } from "../utils/config.js";
+import type { SupportedLocale } from "../utils/locale.js";
 import { logger } from "../utils/logger.js";
 import type { ChatBroadcaster } from "./chat-broadcaster.js";
 import type { CommandDescriptor, CommandRegistry } from "./command-registry.js";
+import { t } from "./messages.js";
 import type { UiEventStore } from "./ui-events.js";
 
-/** Built-in command descriptors registered at construction time */
-const BUILTIN_COMMANDS: CommandDescriptor[] = [
-	{ name: "stop", description: "停止当前执行任务", category: "builtin" },
-	{ name: "clear", description: "清空对话历史", category: "builtin" },
-	{ name: "reset", description: "重置对话并重新加载提示词和技能", category: "builtin" },
-	{ name: "compact", description: "压缩对话历史并注入系统提示词", category: "builtin" },
-	{ name: "context", description: "查看上下文用量", category: "builtin" },
-	{ name: "tidy", description: "整理记忆文件，归档过时条目", category: "builtin" },
-	{ name: "autocontinue", description: "切换 auto-continue 自动续跑模式", category: "builtin" },
-];
+/** Built-in command descriptors (descriptions localized at construction time). */
+function buildBuiltinCommands(locale: SupportedLocale): CommandDescriptor[] {
+	return [
+		{ name: "stop", description: t("cmd_stop", locale), category: "builtin" },
+		{ name: "clear", description: t("cmd_clear", locale), category: "builtin" },
+		{ name: "reset", description: t("cmd_reset", locale), category: "builtin" },
+		{ name: "compact", description: t("cmd_compact", locale), category: "builtin" },
+		{ name: "context", description: t("cmd_context", locale), category: "builtin" },
+		{ name: "tidy", description: t("cmd_tidy", locale), category: "builtin" },
+		{ name: "autocontinue", description: t("cmd_autocontinue", locale), category: "builtin" },
+	];
+}
 
 /**
  * Commands that rewrite/clear conversation history via async LLM work while the agent is idle.
@@ -52,7 +55,6 @@ interface TidyResult {
  */
 export class CommandRouter {
 	private mainAgent: MainAgent;
-	private signalRouter: SignalRouter;
 	private contextManager: ContextManager;
 	private broadcaster: ChatBroadcaster;
 	private uiEventStore: UiEventStore | null;
@@ -61,10 +63,10 @@ export class CommandRouter {
 	private promptLoader: PromptLoader | null;
 	private memoryStore: MemoryStore | null;
 	private syncMemory: (() => Promise<void>) | null;
+	private locale: SupportedLocale;
 
 	constructor(opts: {
 		mainAgent: MainAgent;
-		signalRouter: SignalRouter;
 		contextManager: ContextManager;
 		broadcaster: ChatBroadcaster;
 		commandRegistry: CommandRegistry;
@@ -74,9 +76,9 @@ export class CommandRouter {
 		promptLoader?: PromptLoader;
 		memoryStore?: MemoryStore;
 		syncMemory?: () => Promise<void>;
+		locale?: SupportedLocale;
 	}) {
 		this.mainAgent = opts.mainAgent;
-		this.signalRouter = opts.signalRouter;
 		this.contextManager = opts.contextManager;
 		this.broadcaster = opts.broadcaster;
 		this.uiEventStore = opts.uiEventStore ?? null;
@@ -85,9 +87,10 @@ export class CommandRouter {
 		this.promptLoader = opts.promptLoader ?? null;
 		this.memoryStore = opts.memoryStore ?? null;
 		this.syncMemory = opts.syncMemory ?? null;
+		this.locale = opts.locale ?? "en-US";
 
 		// Register built-in commands into the central registry
-		opts.commandRegistry.registerMany(BUILTIN_COMMANDS);
+		opts.commandRegistry.registerMany(buildBuiltinCommands(this.locale));
 	}
 
 	async handle(name: string): Promise<void> {
@@ -120,7 +123,7 @@ export class CommandRouter {
 			default:
 				this.broadcaster.broadcast({
 					type: "system",
-					message: `未知指令: /${name}`,
+					message: t("unknown_command", this.locale, { name }),
 				});
 		}
 	}
@@ -129,11 +132,11 @@ export class CommandRouter {
 		if (this.mainAgent.state !== "executing") {
 			this.broadcaster.broadcast({
 				type: "system",
-				message: "当前未在执行任务",
+				message: t("not_executing", this.locale),
 			});
 			return;
 		}
-		this.signalRouter.stop();
+		this.mainAgent.requestStop();
 		// The MainAgent's executeToolLoop will check isStopRequested between rounds
 	}
 
@@ -150,21 +153,21 @@ export class CommandRouter {
 		const max = this.mainAgent.getAutoContinueMax();
 		this.broadcaster.broadcast({
 			type: "system",
-			message: on ? `auto-continue 已开启 · 上限 ${max} 次` : "auto-continue 已关闭",
+			message: on ? t("autocontinue_on", this.locale, { max }) : t("autocontinue_off", this.locale),
 		});
 	}
 
 	private async handleClear(): Promise<void> {
 		// Stop first if executing
 		if (this.mainAgent.state === "executing") {
-			this.signalRouter.stop();
+			this.mainAgent.requestStop();
 			await this.mainAgent.waitForIdle();
 		}
 
 		// Pre-flight notice: clear() does a memory-flush LLM call that can take seconds
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "正在清理对话并提取记忆...",
+			message: t("clearing_conversation", this.locale),
 		});
 
 		// Clear context (runs memory flush → clears memory → clears SQLite)
@@ -191,7 +194,7 @@ export class CommandRouter {
 				"command-router",
 				`[compact ${compactRunId}] state=executing → requesting stop and waiting for idle`,
 			);
-			this.signalRouter.stop();
+			this.mainAgent.requestStop();
 			await this.mainAgent.waitForIdle();
 			logger.info("command-router", `[compact ${compactRunId}] reached idle (waited ${Date.now() - t0}ms)`);
 		}
@@ -200,14 +203,14 @@ export class CommandRouter {
 			logger.info("command-router", `[compact ${compactRunId}] empty conversation → no-op`);
 			this.broadcaster.broadcast({
 				type: "system",
-				message: "当前没有对话内容，无需压缩",
+				message: t("compact_empty", this.locale),
 			});
 			return;
 		}
 
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "正在提取关键记忆...",
+			message: t("compact_extracting", this.locale),
 		});
 
 		const tFlush = Date.now();
@@ -226,7 +229,7 @@ export class CommandRouter {
 
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "正在压缩对话历史...",
+			message: t("compact_compressing", this.locale),
 		});
 
 		const tCompress = Date.now();
@@ -238,7 +241,7 @@ export class CommandRouter {
 
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "对话历史已压缩并注入系统提示词",
+			message: t("compact_done", this.locale),
 		});
 
 		logger.info("command-router", `[compact ${compactRunId}] /compact done`);
@@ -247,14 +250,14 @@ export class CommandRouter {
 	private async handleReset(): Promise<void> {
 		// Stop first if executing
 		if (this.mainAgent.state === "executing") {
-			this.signalRouter.stop();
+			this.mainAgent.requestStop();
 			await this.mainAgent.waitForIdle();
 		}
 
 		// Pre-flight notice: reset triggers reload + memory-flush LLM call
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "正在重置：重新加载提示词与技能，并清理对话...",
+			message: t("resetting", this.locale),
 		});
 
 		// Reload prompts, skills, tools, and commands
@@ -274,7 +277,7 @@ export class CommandRouter {
 		this.broadcaster.broadcast({ type: "clear" });
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "系统已重置：对话已清空，提示词和技能已重新加载",
+			message: t("reset_done", this.locale),
 		});
 
 		logger.info("command-router", "System reset complete");
@@ -287,9 +290,13 @@ export class CommandRouter {
 		const messages = this.contextManager.getConversationLength();
 
 		const lines = [
-			`📊 上下文用量`,
-			`Token 估算: ${estimate.toLocaleString()} / ${limit.toLocaleString()} (${usage}%)`,
-			`对话消息数: ${messages}`,
+			t("context_title", this.locale),
+			t("context_tokens", this.locale, {
+				estimate: estimate.toLocaleString(),
+				limit: limit.toLocaleString(),
+				usage,
+			}),
+			t("context_messages", this.locale, { count: messages }),
 		];
 
 		this.broadcaster.broadcast({
@@ -302,24 +309,27 @@ export class CommandRouter {
 		if (!this.llmClient || !this.promptLoader || !this.memoryStore) {
 			this.broadcaster.broadcast({
 				type: "system",
-				message: "记忆整理不可用：缺少 LLM 或记忆存储配置",
+				message: t("tidy_unavailable", this.locale),
 			});
 			return;
 		}
 
 		// Stop first if executing
 		if (this.mainAgent.state === "executing") {
-			this.signalRouter.stop();
+			this.mainAgent.requestStop();
 			await this.mainAgent.waitForIdle();
 		}
 
 		this.broadcaster.broadcast({
 			type: "system",
-			message: "正在整理记忆文件...",
+			message: t("tidy_running", this.locale),
 		});
 
 		const today = new Date().toISOString().slice(0, 10);
 		const archivePath = `memory/${today}.md`;
+		// Backups live OUTSIDE the indexed memory tree (memory/) so a truncated or hallucinated
+		// LLM response never silently destroys the only copy of a memory file.
+		const backupDir = join(this.memoryStore.getStorageDir(), "memory-backups");
 		const summaries: string[] = [];
 		let totalArchived = 0;
 
@@ -333,7 +343,8 @@ export class CommandRouter {
 					continue; // File doesn't exist, skip
 				}
 
-				if (content.trim().length === 0) continue;
+				const originalNonEmpty = content.trim().length > 0;
+				if (!originalNonEmpty) continue;
 
 				const systemPrompt = this.promptLoader.resolve("memory-tidy", {
 					file_path: target.path,
@@ -346,14 +357,32 @@ export class CommandRouter {
 					temperature: 0,
 				});
 
-				// Write retained content back (overwrite)
-				if (result.retained.trim().length > 0) {
-					await this.memoryStore.write({
-						path: target.path,
-						content: result.retained,
-						mode: "overwrite",
-					});
+				// Guard: refuse to overwrite a non-empty file with an empty/whitespace "retained"
+				// (a truncated or hallucinated response). Skip and warn instead of destroying it.
+				if (result.retained.trim().length === 0) {
+					logger.warn(
+						"command-router",
+						`Tidy ${target.path}: empty retained content against non-empty original — skipping overwrite`,
+					);
+					summaries.push(t("tidy_file_failed", this.locale, { path: target.path, error: "empty retained" }));
+					continue;
 				}
+
+				// Back up the original before overwriting.
+				try {
+					await mkdir(backupDir, { recursive: true });
+					const backupPath = join(backupDir, `${today}-${basename(target.path)}`);
+					await copyFile(absPath, backupPath);
+				} catch (err: any) {
+					logger.warn("command-router", `Tidy backup failed for ${target.path}: ${err.message}`);
+				}
+
+				// Write retained content back (overwrite)
+				await this.memoryStore.write({
+					path: target.path,
+					content: result.retained,
+					mode: "overwrite",
+				});
 
 				// Append archived content to daily file
 				if (result.archived.trim().length > 0) {
@@ -366,13 +395,13 @@ export class CommandRouter {
 				}
 
 				if (result.summary) {
-					summaries.push(`${target.path}: ${result.summary}`);
+					summaries.push(t("tidy_file_summary", this.locale, { path: target.path, summary: result.summary }));
 				}
 
 				logger.info("command-router", `Tidy ${target.path}: ${result.summary}`);
 			} catch (err: any) {
 				logger.warn("command-router", `Tidy failed for ${target.path}: ${err.message}`);
-				summaries.push(`${target.path}: 处理失败 - ${err.message}`);
+				summaries.push(t("tidy_file_failed", this.locale, { path: target.path, error: err.message }));
 			}
 		}
 
@@ -388,8 +417,12 @@ export class CommandRouter {
 
 		const resultMessage =
 			summaries.length > 0
-				? `记忆整理完成：\n${summaries.join("\n")}${totalArchived > 0 ? `\n归档文件: ${archivePath}` : ""}`
-				: "记忆文件为空，无需整理";
+				? t("tidy_done", this.locale, {
+						summaries:
+							summaries.join("\n") +
+							(totalArchived > 0 ? `\n${t("tidy_archived_file", this.locale, { path: archivePath })}` : ""),
+					})
+				: t("tidy_empty", this.locale);
 
 		this.broadcaster.broadcast({
 			type: "system",

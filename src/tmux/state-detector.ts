@@ -30,7 +30,7 @@ export interface WaitForSettledOptions {
 	preHash: string;
 	timeoutMs?: number;
 	isAborted?: () => boolean;
-	/** Adapter-specific detection patterns for this pane. Falls back to the detector's global set when omitted. */
+	/** Adapter-specific detection patterns for this pane. When omitted, no pattern matching runs and classification defers to Layer 2. */
 	characteristics?: AgentCharacteristics | null;
 }
 
@@ -42,12 +42,19 @@ export interface SettledResult {
 
 type StateChangeCallback = (analysis: PaneAnalysis, paneContent: string) => void;
 
+/**
+ * Consecutive capturePane() failures in waitForSettled before we give up and
+ * report the pane as unreachable. A single transient tmux hiccup should not end
+ * a wait, but a killed session (every poll throwing) must not run to the 4-hour
+ * timeout — that would park wait_for_agents on a wake-up that arrives hours late.
+ */
+const MAX_CONSECUTIVE_CAPTURE_FAILURES = 5;
+
 export class StateDetector {
 	private config: StateDetectorConfig;
 	private bridge: TmuxBridge;
 	private llmClient: LLMClient;
 	private promptLoader: PromptLoader;
-	private characteristics: AgentCharacteristics | null = null;
 
 	private monitoring = false;
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -64,10 +71,6 @@ export class StateDetector {
 		this.promptLoader = promptLoader;
 	}
 
-	setCharacteristics(characteristics: AgentCharacteristics): void {
-		this.characteristics = characteristics;
-	}
-
 	onStateChange(callback: StateChangeCallback): () => void {
 		this.callbacks.push(callback);
 		return () => {
@@ -76,7 +79,15 @@ export class StateDetector {
 		};
 	}
 
-	startMonitoring(paneTarget: string, taskContext: string): void {
+	/**
+	 * Single-pane interval-poll monitor. Characteristics are passed explicitly per
+	 * call — the detector no longer holds a global set (which would misclassify a
+	 * pane with the patterns of the most-recently-created agent once Claude Code (❯)
+	 * and Codex (›) panes coexist). The core flow drives panes through
+	 * {@link waitForSettled}; this interval-poll path is currently unused by the
+	 * core flow (its former consumer, SignalRouter, was removed).
+	 */
+	startMonitoring(paneTarget: string, taskContext: string, characteristics: AgentCharacteristics | null): void {
 		if (this.monitoring) return;
 		this.monitoring = true;
 		this.lastHash = null;
@@ -86,7 +97,7 @@ export class StateDetector {
 		logger.info("state-detector", `Starting monitoring for ${paneTarget}`);
 
 		this.pollTimer = setInterval(() => {
-			this.poll(paneTarget, taskContext).catch((err) => {
+			this.poll(paneTarget, taskContext, characteristics).catch((err) => {
 				logger.error("state-detector", `Poll error: ${err.message}`);
 			});
 		}, this.config.pollIntervalMs);
@@ -101,7 +112,11 @@ export class StateDetector {
 		logger.info("state-detector", "Monitoring stopped");
 	}
 
-	private async poll(paneTarget: string, taskContext: string): Promise<void> {
+	private async poll(
+		paneTarget: string,
+		taskContext: string,
+		characteristics: AgentCharacteristics | null,
+	): Promise<void> {
 		if (!this.monitoring) return;
 
 		try {
@@ -120,7 +135,7 @@ export class StateDetector {
 				this.lastContent = content;
 
 				// Quick pattern check (Layer 1.5)
-				const quickResult = this.quickPatternCheck(content);
+				const quickResult = this.quickPatternCheck(content, characteristics);
 				if (quickResult) {
 					this.emit(quickResult, content);
 				}
@@ -148,27 +163,42 @@ export class StateDetector {
 		}
 	}
 
-	/** Layer 1.5: Quick regex-based pattern matching */
-	quickPatternCheck(
-		content: string,
-		characteristics: AgentCharacteristics | null = this.characteristics,
-	): PaneAnalysis | null {
+	/** Whether any active pattern matches the tail of the pane content. */
+	private matchesActive(content: string, characteristics: AgentCharacteristics): boolean {
+		const lastLines = content.split("\n").slice(-8).join("\n");
+		return characteristics.activePatterns.some((pattern) => pattern.test(lastLines));
+	}
+
+	/** Whether any error pattern matches the tail of the pane content. */
+	private matchesError(content: string, characteristics: AgentCharacteristics): boolean {
+		const lastLines = content.split("\n").slice(-8).join("\n");
+		return characteristics.errorPatterns.some((pattern) => pattern.test(lastLines));
+	}
+
+	/**
+	 * Layer 1.5: Quick regex-based pattern matching.
+	 *
+	 * `characteristics` is required — the detector no longer keeps a global set,
+	 * so every classification is scoped to the pane's own adapter (mixing Claude
+	 * Code and Codex panes previously misclassified whichever pane wasn't the
+	 * most-recently-created agent).
+	 *
+	 * Priority ordering intentionally puts waiting/active ABOVE error: while an
+	 * agent is still working, its transcript may quote strings like
+	 * `Error: expected 200`. A live spinner or interactive prompt on screen is a
+	 * stronger signal of "still busy" than a stray "Error:" is of "failed", so we
+	 * never report `error` when the agent visibly is active/waiting. A genuine
+	 * error that survives the stability window (no active pattern present) is still
+	 * caught — see `waitForSettled`, which additionally requires stability before
+	 * returning a pattern-detected error.
+	 */
+	quickPatternCheck(content: string, characteristics: AgentCharacteristics | null): PaneAnalysis | null {
 		if (!characteristics) return null;
 
 		const lastLines = content.split("\n").slice(-8).join("\n");
 
-		// Check error patterns (highest priority)
-		for (const pattern of characteristics.errorPatterns) {
-			if (pattern.test(lastLines)) {
-				return {
-					status: "error",
-					confidence: 0.7,
-					detail: "Error pattern detected in output",
-				};
-			}
-		}
-
-		// Check waiting patterns (specific interactive prompts)
+		// Check waiting patterns first (specific interactive prompts). These win over
+		// a co-present "Error:" in the transcript because a live prompt is decisive.
 		for (const pattern of characteristics.waitingPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
@@ -179,7 +209,8 @@ export class StateDetector {
 			}
 		}
 
-		// Check active patterns
+		// Check active patterns before error: a running spinner / live status hint
+		// means the agent is still working, so a quoted "Error:" is not terminal.
 		for (const pattern of characteristics.activePatterns) {
 			if (pattern.test(lastLines)) {
 				return {
@@ -190,8 +221,21 @@ export class StateDetector {
 			}
 		}
 
+		// Check error patterns. Only reached when no waiting/active pattern is
+		// present — i.e. the pane is not visibly busy. waitForSettled still gates
+		// this behind the stability window before treating it as terminal.
+		for (const pattern of characteristics.errorPatterns) {
+			if (pattern.test(lastLines)) {
+				return {
+					status: "error",
+					confidence: 0.7,
+					detail: "Error pattern detected in output",
+				};
+			}
+		}
+
 		// Check completion patterns (idle prompt — lowest priority so that
-		// waiting/active signals take precedence when both are present)
+		// waiting/active/error signals take precedence when both are present)
 		for (const pattern of characteristics.completionPatterns) {
 			if (pattern.test(lastLines)) {
 				return {
@@ -218,15 +262,41 @@ export class StateDetector {
 	 * Two-phase model:
 	 *   Phase 1: Wait for hash !== preHash (agent started responding)
 	 *   Phase 2: Wait for content to stabilize >= stableThresholdMs, then analyze
+	 *
+	 * Terminal-state discipline (see SD-1):
+	 *  - Only `waiting_input` takes the fast escape on a content change. A live
+	 *    interactive prompt is unambiguous and time-sensitive.
+	 *  - `error` is NOT fast-escaped. A sub-agent quoting "Error: expected 200" in
+	 *    its own transcript while still working must not be classified terminal.
+	 *    Error is only returned after the content has been stable across the window
+	 *    AND no active pattern is currently on screen (corroboration). Ambiguous
+	 *    cases (error text present but stability inconclusive) fall through to the
+	 *    Layer-2 LLM tiebreaker.
+	 *  - `completed` additionally requires evidence the agent actually ran. The idle
+	 *    prompt glyph (❯ / ›) is on screen both after real work AND during a slow
+	 *    silent startup where the prompt's own echo satisfied Phase 1 but the agent
+	 *    never began. So a completion is only accepted once we've observed an
+	 *    "active" classification at least once during this wait; if we never saw
+	 *    activity, we demand a substantially longer stability window before trusting
+	 *    the idle glyph.
 	 */
 	async waitForSettled(paneTarget: string, taskContext: string, opts: WaitForSettledOptions): Promise<SettledResult> {
-		const timeoutMs = opts.timeoutMs ?? 1800000; // 30 minutes
-		const characteristics = opts.characteristics ?? this.characteristics;
+		const timeoutMs = opts.timeoutMs ?? 14400000; // 4 hours
+		const characteristics = opts.characteristics ?? null;
 		const startTime = Date.now();
 		let lastChangeTime = Date.now();
 		let lastHash = opts.preHash;
 		let lastContent = "";
 		let phase: 1 | 2 = 1;
+		// SD-1b: has an "active" classification ever been observed during this wait?
+		// Gates whether a bare idle prompt is trusted as "completed".
+		let sawActive = false;
+		// SD-3: consecutive capturePane() failures — a killed session must not run
+		// the loop out to the 4-hour timeout.
+		let consecutiveCaptureFailures = 0;
+		// When the agent was never seen active, require a longer stable window before
+		// trusting the idle glyph as "completed" (guards the slow-start false positive).
+		const noActivityStableThresholdMs = this.config.stableThresholdMs * 3;
 
 		logger.info("state-detector", `waitForSettled: starting Phase 1, preHash=${opts.preHash.slice(0, 8)}`);
 
@@ -259,6 +329,7 @@ export class StateDetector {
 				const capture = await this.bridge.capturePane(paneTarget, {
 					startLine: -this.config.captureLines,
 				});
+				consecutiveCaptureFailures = 0;
 				const content = capture.content;
 				const hash = createHash("md5").update(content).digest("hex");
 
@@ -269,6 +340,9 @@ export class StateDetector {
 						lastChangeTime = Date.now();
 						lastContent = content;
 						phase = 2;
+						if (characteristics && this.matchesActive(content, characteristics)) {
+							sawActive = true;
+						}
 						logger.info("state-detector", "waitForSettled: Phase 1 → Phase 2 (content changed)");
 					}
 					continue;
@@ -281,12 +355,16 @@ export class StateDetector {
 					lastChangeTime = Date.now();
 					lastContent = content;
 
-					// Fast escape: only for urgent states (error/waiting_input).
-					// "completed" must go through the stability window to avoid false positives
-					// when the agent is still writing output.
+					// Fast escape: ONLY waiting_input. A live interactive prompt is
+					// unambiguous. error/completed must go through the stability window
+					// (error can be a quoted string mid-work; the idle glyph can be a
+					// slow-start echo), so they are deliberately NOT fast-escaped here.
 					const quickResult = this.quickPatternCheck(content, characteristics);
-					if (quickResult && (quickResult.status === "error" || quickResult.status === "waiting_input")) {
-						logger.info("state-detector", `waitForSettled: ${quickResult.status} fast escape`);
+					if (quickResult?.status === "active") {
+						sawActive = true;
+					}
+					if (quickResult?.status === "waiting_input") {
+						logger.info("state-detector", "waitForSettled: waiting_input fast escape");
 						return { analysis: quickResult, content, timedOut: false };
 					}
 					continue;
@@ -300,21 +378,56 @@ export class StateDetector {
 					if (quickResult) {
 						if (quickResult.status === "active" && quickResult.confidence > 0.7) {
 							// Agent appears still active despite stable content — reset and continue
+							sawActive = true;
 							logger.info("state-detector", "waitForSettled: stable but active pattern detected, continuing");
 							lastChangeTime = Date.now();
 							continue;
 						}
-						// error, waiting_input, completed, etc. — return
-						logger.info("state-detector", `waitForSettled: settled with pattern ${quickResult.status}`);
-						return { analysis: quickResult, content: lastContent, timedOut: false };
+
+						if (quickResult.status === "error") {
+							// SD-1a: require corroboration before a terminal error. quickPatternCheck
+							// already suppresses error when a waiting/active pattern is present, and
+							// we are here only because the content held stable across the window. If
+							// an active pattern is somehow still on screen, defer to Layer 2 rather
+							// than declaring failure; otherwise the stable error stands.
+							if (characteristics && this.matchesActive(lastContent, characteristics)) {
+								logger.info(
+									"state-detector",
+									"waitForSettled: error pattern but active present — deferring to Layer 2",
+								);
+							} else {
+								logger.info("state-detector", "waitForSettled: settled with stable error pattern");
+								return { analysis: quickResult, content: lastContent, timedOut: false };
+							}
+						} else if (quickResult.status === "completed") {
+							// SD-1b: the idle glyph is trustworthy only if the agent was observed
+							// active at some point, OR it has held stable for a much longer window
+							// (guards the slow-start case where the prompt echo satisfied Phase 1
+							// but no work ever ran).
+							if (sawActive || stableDuration >= noActivityStableThresholdMs) {
+								logger.info("state-detector", "waitForSettled: settled with pattern completed");
+								return { analysis: quickResult, content: lastContent, timedOut: false };
+							}
+							logger.info(
+								"state-detector",
+								`waitForSettled: idle glyph but no activity seen yet (stable ${stableDuration}ms < ${noActivityStableThresholdMs}ms) — continuing`,
+							);
+							// Fall through to Layer 2 as a tiebreaker rather than blindly waiting.
+						} else {
+							// waiting_input or other non-terminal-ambiguous pattern — return.
+							logger.info("state-detector", `waitForSettled: settled with pattern ${quickResult.status}`);
+							return { analysis: quickResult, content: lastContent, timedOut: false };
+						}
 					}
 
-					// No pattern match — use Layer 2 LLM analysis
+					// No decisive pattern match (or a deferred error/unverified completion)
+					// — use Layer 2 LLM analysis as the tiebreaker.
 					logger.info("state-detector", `waitForSettled: stable for ${stableDuration}ms, triggering Layer 2`);
 					const analysis = await this.analyzeState(lastContent, taskContext);
 
 					if (analysis.status === "active" && analysis.confidence > 0.7) {
 						// LLM thinks still active — reset and continue
+						sawActive = true;
 						logger.info("state-detector", "waitForSettled: Layer 2 says active, continuing");
 						lastChangeTime = Date.now();
 						continue;
@@ -324,7 +437,26 @@ export class StateDetector {
 					return { analysis, content: lastContent, timedOut: false };
 				}
 			} catch (err: any) {
-				logger.error("state-detector", `waitForSettled capture error: ${err.message}`);
+				// SD-3: a killed/unreachable pane throws on every capture. Tolerate a few
+				// transient failures, but after N consecutive give up so the caller's
+				// wake-up fires promptly instead of hanging until the 4-hour timeout.
+				consecutiveCaptureFailures++;
+				logger.error(
+					"state-detector",
+					`waitForSettled capture error (${consecutiveCaptureFailures}/${MAX_CONSECUTIVE_CAPTURE_FAILURES}): ${err.message}`,
+				);
+				if (consecutiveCaptureFailures >= MAX_CONSECUTIVE_CAPTURE_FAILURES) {
+					logger.error("state-detector", "waitForSettled: pane unreachable, giving up");
+					return {
+						analysis: {
+							status: "error",
+							confidence: 0,
+							detail: `pane unreachable (${consecutiveCaptureFailures} consecutive capture failures): ${err.message}`,
+						},
+						content: lastContent,
+						timedOut: false,
+					};
+				}
 			}
 		}
 	}

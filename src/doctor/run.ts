@@ -12,7 +12,7 @@ import type { CheckResult } from "./types.js";
  * `process.exit()` directly so the event loop can clean up.
  */
 export async function runDoctor(): Promise<void> {
-	console.log(`\n${chalk.bold("Cliclaw Doctor")}\n`);
+	console.log(`\n${chalk.bold("Omux Doctor")}\n`);
 
 	const checks = [checkTmux, checkConfig, checkApiKey];
 	const results: CheckResult[] = [];

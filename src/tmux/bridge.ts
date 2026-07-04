@@ -90,9 +90,11 @@ export class TmuxBridge {
 		}
 	}
 
-	async listCliclawAgents(): Promise<TmuxSession[]> {
+	async listOmuxAgents(): Promise<TmuxSession[]> {
 		const all = await this.listSessions();
-		return all.filter((s) => s.name.startsWith("cliclaw-"));
+		// Legacy cliclaw sessions are still recognized so agents created before
+		// the omux rename can be adopted and managed.
+		return all.filter((s) => s.name.startsWith("omux-") || s.name.startsWith("cliclaw-"));
 	}
 
 	// Window management
@@ -198,16 +200,19 @@ export class TmuxBridge {
 	}
 
 	async sendText(target: string, text: string): Promise<void> {
-		if (text.length <= 200) {
+		if (text.length <= 200 && !text.includes("\n")) {
 			await this.sendKeys(target, text, { literal: true });
 		} else {
-			// For long text, use load-buffer + paste-buffer to avoid truncation
+			// For long text, or any text containing an embedded newline, use load-buffer +
+			// paste-buffer. `send-keys -l` delivers an embedded "\n" as a real keypress,
+			// which submits the input mid-string in the Claude Code/Codex TUIs — paste-buffer
+			// inserts the newline as literal content instead.
 			const { writeFile, unlink } = await import("node:fs/promises");
 			const { randomUUID } = await import("node:crypto");
 			const { join } = await import("node:path");
 			const { tmpdir } = await import("node:os");
 
-			const tmpFile = join(tmpdir(), `cliclaw-${randomUUID()}.txt`);
+			const tmpFile = join(tmpdir(), `omux-${randomUUID()}.txt`);
 			try {
 				await writeFile(tmpFile, text);
 				await this.exec(["load-buffer", tmpFile]);

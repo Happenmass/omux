@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MainAgent } from "../../src/core/main-agent.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import type { SkillEntry } from "../../src/skills/types.js";
@@ -54,12 +54,21 @@ function createMockLLMClient() {
 function createAgent(registry?: SkillRegistry) {
 	return new MainAgent({
 		contextManager: createMockContextManager(),
-		signalRouter: { onSignal: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), isPaused: vi.fn().mockReturnValue(false), isAborted: vi.fn().mockReturnValue(false), emit: vi.fn(), on: vi.fn() } as any,
 		llmClient: createMockLLMClient(),
-		adapter: { sendPrompt: vi.fn(), sendResponse: vi.fn(), abort: vi.fn(), getCharacteristics: vi.fn().mockReturnValue({}) } as any,
+		adapter: {
+			sendPrompt: vi.fn(),
+			sendResponse: vi.fn(),
+			abort: vi.fn(),
+			getCharacteristics: vi.fn().mockReturnValue({}),
+		} as any,
 		bridge: { capturePane: vi.fn() } as any,
 		createAgentSettleMs: 0,
-		stateDetector: { setCooldown: vi.fn(), startMonitoring: vi.fn(), stopMonitoring: vi.fn(), onStateChange: vi.fn() } as any,
+		stateDetector: {
+			setCooldown: vi.fn(),
+			startMonitoring: vi.fn(),
+			stopMonitoring: vi.fn(),
+			onStateChange: vi.fn(),
+		} as any,
 		goal: "test",
 		skillRegistry: registry,
 	});

@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { mergeSkillTools } from "../../src/skills/tool-merge.js";
+import { describe, expect, it } from "vitest";
 import type { ToolDefinition } from "../../src/llm/types.js";
+import { mergeSkillTools } from "../../src/skills/tool-merge.js";
 import type { SkillEntry } from "../../src/skills/types.js";
 
 function makeSkill(overrides: Partial<SkillEntry> = {}): SkillEntry {
@@ -84,9 +84,7 @@ describe("mergeSkillTools", () => {
 	});
 
 	it("should handle skills with type main-agent-tool but no tool definition", () => {
-		const skills = [
-			makeSkill({ name: "broken", type: "main-agent-tool", tool: null }),
-		];
+		const skills = [makeSkill({ name: "broken", type: "main-agent-tool", tool: null })];
 
 		const merged = mergeSkillTools(BUILTIN_TOOLS, skills);
 
@@ -110,6 +108,37 @@ describe("mergeSkillTools", () => {
 		const merged = mergeSkillTools(BUILTIN_TOOLS, skills);
 
 		expect(merged).toHaveLength(4);
+	});
+
+	it("should reject a second skill declaring the same tool name (no duplicate on the wire)", () => {
+		const skills = [
+			makeSkill({
+				name: "first",
+				type: "main-agent-tool",
+				tool: {
+					name: "shared_tool",
+					description: "first",
+					parameters: { type: "object", properties: {}, required: [] },
+				},
+			}),
+			makeSkill({
+				name: "second",
+				type: "main-agent-tool",
+				tool: {
+					name: "shared_tool",
+					description: "second",
+					parameters: { type: "object", properties: {}, required: [] },
+				},
+			}),
+		];
+
+		const merged = mergeSkillTools(BUILTIN_TOOLS, skills);
+
+		// Only the first wins; the collided second is skipped — no duplicate ToolDefinition.
+		expect(merged).toHaveLength(3);
+		const shared = merged.filter((t) => t.name === "shared_tool");
+		expect(shared).toHaveLength(1);
+		expect(shared[0].description).toBe("first");
 	});
 
 	it("should handle empty skills array", () => {

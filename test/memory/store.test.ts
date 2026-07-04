@@ -1,8 +1,15 @@
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MemoryStore, buildFileEntry, isMemoryPath, listMemoryFiles, sanitizeVecTableProvider, sha256 } from "../../src/memory/store.js";
+import {
+	buildFileEntry,
+	isMemoryPath,
+	listMemoryFiles,
+	MemoryStore,
+	sanitizeVecTableProvider,
+	sha256,
+} from "../../src/memory/store.js";
 
 describe("MemoryStore", () => {
 	let tmpDir: string;
@@ -11,7 +18,7 @@ describe("MemoryStore", () => {
 	let store: MemoryStore;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-test-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-test-"));
 		storageDir = join(tmpDir, "storage");
 		await mkdir(storageDir, { recursive: true });
 		dbPath = join(storageDir, "test.sqlite");
@@ -61,7 +68,7 @@ describe("MemoryStore", () => {
 
 		it("should store schema version in meta table", () => {
 			const row = store.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as any;
-			expect(row.value).toBe("2");
+			expect(row.value).toBe("3");
 		});
 
 		it("should migrate old schema by rebuilding tables", async () => {
@@ -72,7 +79,9 @@ describe("MemoryStore", () => {
 			const Database = (await import("better-sqlite3")).default;
 			const db = new Database(dbPath);
 			db.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
-			db.prepare("INSERT OR REPLACE INTO files (path, source, hash, mtime, size) VALUES ('memory/old.md', 'memory', 'h', 1000, 50)").run();
+			db.prepare(
+				"INSERT OR REPLACE INTO files (path, source, hash, mtime, size) VALUES ('memory/old.md', 'memory', 'h', 1000, 50)",
+			).run();
 			db.close();
 
 			// Re-open — should detect version mismatch and rebuild
@@ -89,7 +98,7 @@ describe("MemoryStore", () => {
 
 			// Version should be updated
 			const row = newStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as any;
-			expect(row.value).toBe("2");
+			expect(row.value).toBe("3");
 
 			newStore.close();
 		});
@@ -188,6 +197,48 @@ describe("MemoryStore", () => {
 
 			const c2 = store.getDb().prepare("SELECT * FROM chunks WHERE id = 'c2'").get();
 			expect(c2).toBeDefined();
+		});
+
+		it("should not duplicate FTS rows when re-inserting the same chunk id", () => {
+			const params = {
+				id: "c1",
+				path: "memory/core.md",
+				startLine: 1,
+				endLine: 5,
+				hash: "h1",
+				model: "test",
+				text: "some searchable content",
+				embedding: [],
+			};
+			store.insertChunk(params);
+			// Re-insert the same id (e.g. crash-recovery / re-index without a prior remove).
+			store.insertChunk({ ...params, text: "updated searchable content" });
+
+			const ftsRows = store.getDb().prepare("SELECT * FROM chunks_fts WHERE id = 'c1'").all();
+			expect(ftsRows).toHaveLength(1);
+			const chunkRows = store.getDb().prepare("SELECT * FROM chunks WHERE id = 'c1'").all();
+			expect(chunkRows).toHaveLength(1);
+		});
+
+		it("should re-index a file atomically via runInTransaction", () => {
+			store.runInTransaction(() => {
+				store.removeChunksByPath("memory/core.md");
+				store.insertChunk({
+					id: "tx1",
+					path: "memory/core.md",
+					startLine: 1,
+					endLine: 3,
+					hash: "h1",
+					model: "test",
+					text: "transactional content",
+					embedding: [],
+				});
+				store.upsertFile({ path: "memory/core.md", hash: "fh", mtimeMs: 1000, size: 20 });
+			});
+
+			expect(store.getDb().prepare("SELECT * FROM chunks WHERE id = 'tx1'").get()).toBeDefined();
+			expect(store.getDb().prepare("SELECT * FROM chunks_fts WHERE id = 'tx1'").all()).toHaveLength(1);
+			expect(store.getTrackedFile("memory/core.md")).toBeDefined();
 		});
 	});
 
@@ -343,15 +394,39 @@ describe("MemoryStore", () => {
 		});
 
 		it("should throw when match missing for replace mode", async () => {
-			await expect(
-				store.edit({ path: "memory/core.md", mode: "replace", content: "new" }),
-			).rejects.toThrow("match is required");
+			await expect(store.edit({ path: "memory/core.md", mode: "replace", content: "new" })).rejects.toThrow(
+				"match is required",
+			);
 		});
 
 		it("should throw when match missing for delete mode", async () => {
+			await expect(store.edit({ path: "memory/core.md", mode: "delete" })).rejects.toThrow("match is required");
+		});
+
+		it("should reject path traversal that escapes the storage dir", async () => {
+			// "memory/../../../etc/x.md" join()'d onto storageDir would land outside
+			// <storageDir>/memory. Must be rejected before any FS write.
 			await expect(
-				store.edit({ path: "memory/core.md", mode: "delete" }),
-			).rejects.toThrow("match is required");
+				store.edit({ path: "memory/../../../etc/x.md", content: "pwned", mode: "overwrite" }),
+			).rejects.toThrow("Only .md files under memory/");
+
+			// The escaped file must NOT have been written.
+			const { readFile } = await import("node:fs/promises");
+			await expect(readFile(join(tmpDir, "..", "..", "..", "etc", "x.md"), "utf-8")).rejects.toThrow();
+		});
+
+		it("should expand $-sequences literally in replace content", async () => {
+			await mkdir(join(storageDir, "memory"), { recursive: true });
+			await writeFile(join(storageDir, "memory/core.md"), "# Core\nPRICE_HERE done\n");
+
+			// Replacement contains $&, $', $` and $1 — a naive String.replace(match, content)
+			// would expand these; the function replacer must insert them verbatim.
+			const literal = "cost is $5 and $& $' $` $1 tokens";
+			await store.edit({ path: "memory/core.md", mode: "replace", match: "PRICE_HERE", content: literal });
+
+			const { readFile } = await import("node:fs/promises");
+			const content = await readFile(join(storageDir, "memory/core.md"), "utf-8");
+			expect(content).toBe(`# Core\n${literal} done\n`);
 		});
 	});
 
@@ -381,13 +456,19 @@ describe("isMemoryPath", () => {
 		expect(isMemoryPath("memory/nested/deep.md")).toBe(true); // subdirs are ok
 		expect(isMemoryPath("memory/file.txt")).toBe(false); // non-md
 	});
+
+	it("should reject path traversal segments", () => {
+		expect(isMemoryPath("memory/../../../x.md")).toBe(false);
+		expect(isMemoryPath("memory/../secret.md")).toBe(false);
+		expect(isMemoryPath("memory/sub/../../escape.md")).toBe(false);
+	});
 });
 
 describe("listMemoryFiles", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-list-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-list-"));
 	});
 
 	afterEach(async () => {
@@ -416,6 +497,29 @@ describe("listMemoryFiles", () => {
 		const files = await listMemoryFiles(tmpDir);
 		expect(files).toHaveLength(0);
 	});
+
+	it("should recursively find .md files in subdirectories", async () => {
+		// Learning-pipeline output lands at memory/learning/<id>.md — it must be
+		// discovered so memory_search can index and find it.
+		await mkdir(join(tmpDir, "memory", "learning"), { recursive: true });
+		await writeFile(join(tmpDir, "memory/core.md"), "core");
+		await writeFile(join(tmpDir, "memory/learning/abc123.md"), "learned");
+
+		const files = await listMemoryFiles(tmpDir);
+		expect(files).toHaveLength(2);
+		expect(files.some((f) => f.endsWith(join("learning", "abc123.md")))).toBe(true);
+		expect(files.some((f) => f.endsWith("core.md"))).toBe(true);
+	});
+
+	it("should ignore non-.md files in subdirectories", async () => {
+		await mkdir(join(tmpDir, "memory", "learning"), { recursive: true });
+		await writeFile(join(tmpDir, "memory/learning/diff.txt"), "not markdown");
+		await writeFile(join(tmpDir, "memory/learning/note.md"), "markdown");
+
+		const files = await listMemoryFiles(tmpDir);
+		expect(files).toHaveLength(1);
+		expect(files[0].endsWith("note.md")).toBe(true);
+	});
 });
 
 describe("sha256", () => {
@@ -429,7 +533,7 @@ describe("buildFileEntry", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "cliclaw-entry-"));
+		tmpDir = await mkdtemp(join(tmpdir(), "omux-entry-"));
 	});
 
 	afterEach(async () => {
