@@ -46,7 +46,7 @@ p{max-width:65ch}
 code,kbd{font-family:var(--mono);font-size:.92em}
 
 /* ── header ─────────────────────────────── */
-.top{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.top{display:flex;align-items:center;justify-content:space-between;padding-top:22px;padding-bottom:22px}
 .brand{font-family:var(--mono);font-weight:700;font-size:19px;color:var(--ink)}
 .brand .cursor{color:var(--amber);animation:blink 1.2s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
@@ -56,7 +56,7 @@ code,kbd{font-family:var(--mono);font-size:.92em}
 .top-links a:hover{color:var(--ink);text-decoration:none}
 
 /* ── hero ───────────────────────────────── */
-.hero{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:48px;align-items:center;padding:56px 0 72px}
+.hero{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:48px;align-items:center;padding-top:56px;padding-bottom:72px}
 .eyebrow{font-family:var(--mono);font-size:13px;color:var(--amber);letter-spacing:.08em;text-transform:lowercase;margin-bottom:18px}
 .eyebrow b{color:var(--ink);font-weight:600}
 h1{font-size:clamp(28px,3.6vw,40px);line-height:1.22;font-weight:700;margin-bottom:18px}
@@ -210,7 +210,7 @@ td{font-variant-numeric:tabular-nums}
 .faq details p{padding:0 20px 18px;font-size:14.5px;color:var(--muted)}
 
 /* ── footer ─────────────────────────────── */
-.foot{padding:56px 0 40px;color:var(--muted);font-family:var(--mono);font-size:12.5px}
+.foot{padding-top:56px;padding-bottom:40px;color:var(--muted);font-family:var(--mono);font-size:12.5px}
 .foot span+span::before{content:"·";margin:0 10px;color:var(--line)}
 
 /* ── tmux status bar (site nav) ─────────── */
@@ -230,7 +230,7 @@ td{font-variant-numeric:tabular-nums}
 
 /* ── responsive ─────────────────────────── */
 @media (max-width:920px){
-	.hero{grid-template-columns:1fr;gap:36px;padding-top:32px}
+	.hero{grid-template-columns:minmax(0,1fr);gap:36px;padding-top:32px}
 	.cards3,.feat{grid-template-columns:1fr 1fr}
 	.steps{grid-template-columns:1fr 1fr}
 }
