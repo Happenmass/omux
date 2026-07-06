@@ -1,0 +1,19 @@
+{
+	// Static-assets Worker for the omux marketing site (omux.sh).
+	// Deploys the ./site folder as static assets. No Worker script.
+	//
+	// workers_dev:false skips the *.workers.dev subdomain registration that was
+	// failing the Git auto-build. The custom domains (omux.sh, www.omux.sh) are
+	// bound to this Worker via the Cloudflare dashboard and persist across
+	// deploys, so they are intentionally NOT redeclared here.
+	//
+	// Assumes the CF Workers Build uses the repo root as its root directory and
+	// the default `npx wrangler deploy` command. If the build root is set to
+	// `site/`, move this file there and set "directory": ".".
+	"name": "omux",
+	"compatibility_date": "2026-07-04",
+	"workers_dev": false,
+	"assets": {
+		"directory": "./site"
+	}
+}
