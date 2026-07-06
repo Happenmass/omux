@@ -395,6 +395,7 @@ export async function loadServerRuntimeState(): Promise<ServerRuntimeState | nul
 			lanUrls: Array.isArray(parsed.lanUrls)
 				? parsed.lanUrls.filter((u): u is string => typeof u === "string")
 				: undefined,
+			token: typeof parsed.token === "string" ? parsed.token : undefined,
 		};
 	} catch {
 		return null;
