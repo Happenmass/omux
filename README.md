@@ -10,7 +10,7 @@ omux is a meta-agent that orchestrates the CLI coding agent of your choice — C
 [![license](https://img.shields.io/npm/l/%40happenmass%2Fomux.svg)](./LICENSE)
 [![node](https://img.shields.io/node/v/%40happenmass%2Fomux.svg)](https://nodejs.org)
 
-[Demo video](#demo) · [How it works](#how-it-works) · [Install](#install) · [FAQ](#faq)
+[Website](https://www.omux.sh) · [Demo video](#demo) · [How it works](#how-it-works) · [Install](#install) · [FAQ](#faq)
 
 </div>
 
