@@ -75,6 +75,8 @@ export interface ServerOptions {
 export interface ServerInstance {
 	close: () => Promise<void>;
 	port: number;
+	/** One-time pairing token required by non-loopback (LAN) clients to pair. */
+	authToken: string;
 }
 
 /**
@@ -608,6 +610,7 @@ export async function startServer(opts: ServerOptions): Promise<ServerInstance> 
 
 			resolve({
 				port: actualPort,
+				authToken,
 				close: async () => {
 					if (tidyTimer) clearTimeout(tidyTimer);
 					clearInterval(terminalBroadcastInterval);
