@@ -225,6 +225,8 @@ export interface ServerRuntimeState {
 	mdnsUrl?: string;
 	/** LAN IPv4 URLs the server is reachable at. */
 	lanUrls?: string[];
+	/** One-time pairing token, appended as ?token= to the LAN URLs so a remote device can pair. */
+	token?: string;
 }
 
 const DEFAULT_CONFIG: OmuxConfig = {

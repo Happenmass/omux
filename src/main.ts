@@ -27,6 +27,7 @@ import { MemoryStore } from "./memory/store.js";
 import { syncMemoryFiles } from "./memory/sync.js";
 import { AgentStore } from "./persistence/agent-store.js";
 import { ConversationStore } from "./persistence/conversation-store.js";
+import { AUTH_QUERY_PARAM } from "./server/auth.js";
 import { ChatBroadcaster } from "./server/chat-broadcaster.js";
 import { CommandRegistry } from "./server/command-registry.js";
 import { startServer } from "./server/index.js";
@@ -283,11 +284,14 @@ function buildDaemonChildArgs(args: ReturnType<typeof parseCliArgs>): string[] {
 }
 
 function printAccessUrls(state: ServerRuntimeState): void {
+	// Append the one-time pairing token so a remote device can pair straight from this
+	// banner. Loopback pairs implicitly, so only the LAN URLs need it.
+	const withToken = (url: string) => (state.token ? `${url}/?${AUTH_QUERY_PARAM}=${state.token}` : url);
 	if (state.mdnsUrl) {
-		console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(state.mdnsUrl)}`);
+		console.log(`${chalk.dim("LAN URL:  ")}${chalk.cyan(withToken(state.mdnsUrl))}`);
 	}
 	if (state.lanUrls && state.lanUrls.length > 0) {
-		console.log(`${chalk.dim("Also at:  ")}${state.lanUrls.join(", ")}`);
+		console.log(`${chalk.dim("Also at:  ")}${state.lanUrls.map(withToken).join(", ")}`);
 	}
 }
 
@@ -1058,6 +1062,7 @@ async function main(): Promise<void> {
 			startedAt,
 			mdnsUrl,
 			lanUrls,
+			token: serverInstance.authToken,
 		});
 
 	if (mdnsEnabled) {
