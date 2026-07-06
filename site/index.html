@@ -80,36 +80,62 @@ h1 em{font-style:normal;color:var(--amber)}
 .fineprint{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .fineprint span+span::before{content:"·";margin:0 8px;color:var(--line)}
 
-/* ── terminal mock ──────────────────────── */
-.term{
-	background:var(--bg-inset);border:1px solid var(--line);border-radius:10px;
-	font-family:var(--mono);font-size:12.5px;line-height:1.55;
-	box-shadow:0 24px 60px -24px rgba(0,0,0,.7);overflow:hidden
+/* ── product-UI mock (mirrors the real omux web app) ── */
+.uiwin{
+	--u-bg:#1a1814;--u-soft:#22201b;--u-panel:#211e19;--u-border:#2e2a23;--u-bstrong:#3d372d;
+	--u-text:#f1ebde;--u-tsoft:#beb29c;--u-muted:#8a7e6c;
+	--u-accent:#e89259;--u-asoft:#3a2818;--u-aink:#f8d2a8;--u-success:#a8c98c;--u-warn:#e2b75a;--u-danger:#e08163;--u-userbg:#2c2620;
+	--u-term:#0f0d0a;--u-ttext:#e8dfce;--u-tdim:#7a6e5a;--u-taccent:#e8a35a;--u-tborder:#23201a;
+	background:var(--u-bg);border:1px solid var(--u-border);border-radius:16px;overflow:hidden;
+	box-shadow:0 24px 60px -24px rgba(0,0,0,.7);color:var(--u-text);font-family:var(--sans)
 }
-.term-bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-raised)}
-.dot{width:11px;height:11px;border-radius:50%;background:#2d3742}
-.term-title{margin-left:8px;color:var(--muted);font-size:11.5px}
-.panes{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto}
-.pane{padding:12px 14px;min-height:150px;border-bottom:1px solid var(--line)}
-.pane.chat{grid-row:1 / span 2;grid-column:1;border-right:1px solid var(--line);min-height:0}
-.pane:last-of-type{border-bottom:0}
-.pane-label{font-size:10.5px;letter-spacing:.06em;margin-bottom:8px;opacity:.9}
-.chat .pane-label{color:var(--amber)}
-.p-claude .pane-label{color:var(--cyan)}
-.p-codex .pane-label{color:var(--magenta)}
-.pane .line{white-space:pre-wrap;word-break:break-word;min-height:1.55em;color:#c7c2b6}
-.line .you{color:var(--ink);font-weight:700}
-.line .om{color:var(--amber);font-weight:700}
-.line .ok{color:var(--green)}
-.line .err{color:var(--red)}
-.line .dim{color:var(--muted)}
-.line .spin{color:var(--cyan)}
-.term-status{
-	display:flex;gap:14px;padding:7px 14px;border-top:1px solid var(--line);
-	background:var(--bg-raised);color:var(--muted);font-size:11px;white-space:nowrap;overflow-x:auto
-}
-.term-status .sess{color:var(--amber)}
-.term-status .st-ok{color:var(--green)}
+/* top bar: window chrome + app header, merged */
+.uiwin-bar{display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--u-border)}
+.uiwin-bar .tl{width:10px;height:10px;border-radius:50%;background:#39332b}
+.uiwin-brand{font-family:Georgia,"Times New Roman",serif;font-size:16px;margin-left:6px;letter-spacing:.2px}
+.uiwin-sep{color:var(--u-bstrong);font-weight:300}
+.uiwin-status{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--u-tsoft);text-transform:lowercase}
+.uiwin-dot{position:relative;width:7px;height:7px;border-radius:50%;background:var(--u-muted)}
+.uiwin-dot.executing{background:var(--u-accent)}
+.uiwin-dot.executing::before{content:"";position:absolute;inset:-4px;border-radius:50%;background:var(--u-accent);opacity:.25;animation:uxpulse 2s ease-out infinite}
+@keyframes uxpulse{0%{transform:scale(1);opacity:.4}100%{transform:scale(2.4);opacity:0}}
+.uiwin-spacer{flex:1}
+.uiwin-host{font-family:var(--mono);font-size:10.5px;color:var(--u-muted);border:1px solid var(--u-border);border-radius:999px;padding:2px 10px}
+/* body: chat card + terminal panel */
+.uiwin-body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:10px;padding:10px}
+.ux-chat,.ux-term{display:flex;flex-direction:column;border:1px solid var(--u-border);border-radius:12px;overflow:hidden;min-height:300px}
+.ux-chat{background:var(--u-panel)}
+.ux-overline{font-family:var(--mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--u-accent);padding:11px 14px 9px;border-bottom:1px solid var(--u-border)}
+.ux-msgs{flex:1;min-height:0;overflow:hidden;padding:11px 11px 4px;display:flex;flex-direction:column;gap:8px}
+.ux-user{align-self:flex-end;max-width:86%;background:var(--u-userbg);color:var(--u-text);padding:8px 12px;border-radius:12px;font-size:12px;line-height:1.45}
+.ux-au{background:var(--u-asoft);color:var(--u-tsoft);border-left:2px solid var(--u-accent);padding:7px 11px;border-radius:0 8px 8px 0;font-size:11.5px;line-height:1.5}
+.ux-au::before{content:"◆ ";color:var(--u-accent);font-size:9px;vertical-align:1px}
+.ux-au.ok{color:var(--u-success)}
+.ux-au.ok::before{color:var(--u-success)}
+.ux-au b{color:var(--u-aink);font-weight:600}
+.ux-au .c{font-family:var(--mono);color:var(--u-accent)}
+.ux-input{display:flex;align-items:center;gap:8px;margin:6px 10px 10px;padding:8px 10px;border:1px solid var(--u-border);border-radius:10px;background:var(--u-bg)}
+.ux-input-ph{flex:1;color:var(--u-muted);font-size:11.5px}
+.ux-send{font-family:var(--mono);font-size:11px;color:#191410;background:var(--u-accent);padding:4px 12px;border-radius:7px;font-weight:600}
+.ux-term{background:var(--u-term)}
+.ux-tabs{display:flex;gap:2px;padding:7px 7px 0;background:rgba(255,255,255,.03);border-bottom:1px solid var(--u-tborder)}
+.ux-tab{display:inline-flex;align-items:center;gap:7px;padding:7px 11px 8px;border-radius:8px 8px 0 0;color:var(--u-tdim);font-family:var(--mono);font-size:11px;position:relative;border:1px solid transparent;border-bottom:none}
+.ux-tab.active{background:var(--u-term);color:var(--u-ttext);border-color:var(--u-tborder);top:1px}
+.ux-tab.active::after{content:"";position:absolute;left:8px;right:8px;top:0;height:2px;background:var(--u-taccent);border-radius:0 0 2px 2px}
+.ux-tdot{width:7px;height:7px;border-radius:50%;background:var(--u-tdim);position:relative;flex-shrink:0}
+.ux-tdot.status-active{background:var(--u-accent)}
+.ux-tdot.status-active::before{content:"";position:absolute;inset:-4px;border-radius:50%;background:var(--u-accent);opacity:.25;animation:uxpulse 2s ease-out infinite}
+.ux-termbody{flex:1;min-height:0;overflow:hidden;padding:12px 14px;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--u-ttext);white-space:pre-wrap;word-break:break-word}
+.ux-termbody .ln{min-height:1.6em}
+.ux-termbody .p{color:var(--u-taccent)}
+.ux-termbody .ok{color:var(--u-success)}
+.ux-termbody .err{color:var(--u-danger)}
+.ux-termbody .dim{color:var(--u-tdim)}
+.ux-statusbar{display:flex;align-items:center;gap:8px;padding:7px 13px;border-top:1px solid var(--u-tborder);background:rgba(255,255,255,.02);font-family:var(--mono);font-size:10.5px;color:var(--u-tdim)}
+.ux-sb-state{color:var(--u-taccent)}
+.ux-sb-state.ok{color:var(--u-success)}
+.ux-sb-sep{color:var(--u-tborder)}
+.ux-sb-agent{margin-left:auto;color:var(--u-tsoft)}
 
 /* ── section chrome (tmux window headers) ── */
 section{padding:64px 0 8px}
@@ -207,8 +233,7 @@ td{font-variant-numeric:tabular-nums}
 }
 @media (max-width:600px){
 	.cards3,.feat,.steps,.mech{grid-template-columns:1fr}
-	.panes{grid-template-columns:1fr}
-	.pane.chat{grid-row:auto;grid-column:auto;border-right:0}
+	.uiwin-body{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -241,30 +266,36 @@ td{font-variant-numeric:tabular-nums}
 		<p class="fineprint"><span>MIT</span><span>Node 20+</span><span>tmux</span><span>your model, your keys</span></p>
 	</div>
 
-	<div class="term" id="term" aria-label="Animated demo of an omux session">
-		<div class="term-bar">
-			<span class="dot"></span><span class="dot"></span><span class="dot"></span>
-			<span class="term-title">tmux — omux-session</span>
+	<div class="uiwin" id="uiwin" aria-label="Illustration of the omux web app: a chat conversation driving coding agents in a live terminal panel">
+		<div class="uiwin-bar">
+			<span class="tl"></span><span class="tl"></span><span class="tl"></span>
+			<span class="uiwin-brand">Omux</span>
+			<span class="uiwin-sep">|</span>
+			<span class="uiwin-status"><span class="uiwin-dot executing" id="ux-dot"></span><span id="ux-state">executing</span></span>
+			<span class="uiwin-spacer"></span>
+			<span class="uiwin-host">localhost:3120</span>
 		</div>
-		<div class="panes">
-			<div class="pane chat">
-				<div class="pane-label">omux · chat</div>
-				<div class="lines" id="pn-chat"></div>
+		<div class="uiwin-body">
+			<div class="ux-chat">
+				<div class="ux-overline">Conversation</div>
+				<div class="ux-msgs" id="ux-msgs"></div>
+				<div class="ux-input">
+					<span class="ux-input-ph">Type a message or /command…</span>
+					<span class="ux-send">Send</span>
+				</div>
 			</div>
-			<div class="pane p-claude">
-				<div class="pane-label">claude-code · ~/api</div>
-				<div class="lines" id="pn-claude"></div>
+			<div class="ux-term">
+				<div class="ux-tabs">
+					<span class="ux-tab active" data-tab="claude"><span class="ux-tdot status-active"></span>claude-code</span>
+					<span class="ux-tab" data-tab="codex"><span class="ux-tdot status-idle"></span>codex</span>
+				</div>
+				<div class="ux-termbody" id="ux-term"></div>
+				<div class="ux-statusbar">
+					<span class="ux-sb-state" id="ux-sb-state">active</span><span class="ux-sb-sep">·</span>
+					<span>~/api</span>
+					<span class="ux-sb-agent"><span id="ux-sb-adapter">claude-code</span> · <span id="ux-sb-model">sonnet</span></span>
+				</div>
 			</div>
-			<div class="pane p-codex">
-				<div class="pane-label">codex · review</div>
-				<div class="lines" id="pn-codex"></div>
-			</div>
-		</div>
-		<div class="term-status">
-			<span class="sess">[omux-session]</span>
-			<span>0:chat</span><span>1:claude*</span><span>2:codex</span>
-			<span class="spacer"></span>
-			<span id="st-line">state: <span class="st-ok">idle</span></span>
 		</div>
 	</div>
 </div>
@@ -419,53 +450,64 @@ document.getElementById('copybtn').addEventListener('click',function(){
 	document.querySelectorAll('main section').forEach(s=>io.observe(s));
 })();
 
-/* choreographed terminal demo */
+/* choreographed product-UI demo — mirrors the real omux web app */
 (function(){
 	var reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-	var P={chat:document.getElementById('pn-chat'),claude:document.getElementById('pn-claude'),codex:document.getElementById('pn-codex')};
-	var st=document.getElementById('st-line');
-	if(!P.chat)return;
-	/* [pane, html, delayBeforeMs, typewriter?] */
+	var msgs=document.getElementById('ux-msgs'),term=document.getElementById('ux-term');
+	if(!msgs)return;
+	var hdot=document.getElementById('ux-dot'),hstate=document.getElementById('ux-state');
+	var sbState=document.getElementById('ux-sb-state'),sbAdapter=document.getElementById('ux-sb-adapter'),sbModel=document.getElementById('ux-sb-model');
+	var tabC=document.querySelector('.ux-tab[data-tab="claude"]'),tabX=document.querySelector('.ux-tab[data-tab="codex"]');
+	var dotC=tabC.querySelector('.ux-tdot'),dotX=tabX.querySelector('.ux-tdot');
+
+	function chat(cls,html){var d=document.createElement('div');d.className=cls;d.innerHTML=html;msgs.appendChild(d);while(msgs.children.length>5)msgs.removeChild(msgs.firstChild);}
+	function line(html){var d=document.createElement('div');d.className='ln';d.innerHTML=html;term.appendChild(d);while(term.children.length>7)term.removeChild(term.firstChild);}
+	function header(exec){hdot.className='uiwin-dot'+(exec?' executing':'');hstate.textContent=exec?'executing':'idle';}
+	function state(txt,ok){sbState.textContent=txt;sbState.className='ux-sb-state'+(ok?' ok':'');}
+	function tab(which){var x=which==='codex';tabC.classList.toggle('active',!x);tabX.classList.toggle('active',x);
+		dotC.className='ux-tdot '+(x?'status-idle':'status-active');dotX.className='ux-tdot '+(x?'status-active':'status-idle');
+		sbAdapter.textContent=x?'codex':'claude-code';sbModel.textContent=x?'gpt-5.1-codex':'sonnet';term.innerHTML='';}
+
+	/* [op, payload, delayBeforeMs] */
 	var SCRIPT=[
-		['chat','<span class="you">you ❯</span> fix the flaky auth test, cover token expiry',400,true],
-		['chat','<span class="om">omux ❯</span> spawning <span class="spin">claude-code</span> in ~/api…',900],
-		['status','state: <span>launching</span>',200],
-		['claude','❯ npx vitest run test/auth',700],
-		['claude','<span class="err">FAIL</span> token expiry — expected 401, got 200',900],
-		['chat','<span class="om">omux ❯</span> flake reproduced → briefing fix, test-first',800],
-		['claude','<span class="spin">⠋</span> editing src/auth/token.ts…',900],
-		['status','state: <span>active</span>',100],
-		['claude','❯ npx vitest run <span class="dim">(rerun)</span>',1400],
-		['claude','<span class="ok">✓ 42 passed</span> <span class="dim">(42)</span>',900],
-		['chat','<span class="om">omux ❯</span> green. spawning <span class="spin">codex</span> for independent review',700],
+		['header',1,300],
+		['user','fix the flaky auth test, cover token expiry',300],
+		['au','spawning <span class="c">claude-code</span> in ~/api',800],
+		['state','launching',150],
+		['claude','<span class="p">❯</span> npx vitest run test/auth',650],
+		['claude','<span class="err">FAIL</span> token expiry — expected 401, got 200',850],
+		['state','active',100],
+		['au','flake reproduced → briefing the fix, test-first',800],
+		['claude','<span class="dim">⠙</span> editing src/auth/token.ts…',850],
+		['claude','<span class="p">❯</span> npx vitest run <span class="dim">(rerun)</span>',1200],
+		['claude','<span class="ok">✓ 42 passed</span> <span class="dim">(42)</span>',850],
+		['au','green — handing the diff to <span class="c">codex</span> for an independent review',700],
+		['tab','codex',350],
 		['codex','› reviewing diff — correctness, edge cases…',800],
-		['codex','edge case: clock skew — <span class="ok">handled ✓</span>',1200],
-		['codex','<span class="ok">LGTM</span> <span class="dim">— no regressions found</span>',800],
-		['chat','<span class="om">omux ❯</span> <span class="ok">✓ done &amp; verified</span> — 42/42 pass, cross-reviewed, 2 files changed',600],
-		['status','state: <span class="st-ok">completed ✓</span>',200]
+		['codex','edge case: clock skew — <span class="ok">handled ✓</span>',1100],
+		['codex','<span class="ok">LGTM</span> <span class="dim">— no regressions</span>',800],
+		['auok','<b>✓ done &amp; verified</b> — 42/42 pass, cross-reviewed, 2 files changed',500],
+		['statedone','completed ✓',150],
+		['idle',1,200]
 	];
-	function addLine(pane,html){var d=document.createElement('div');d.className='line';d.innerHTML=html;P[pane].appendChild(d);
-		while(P[pane].children.length>6)P[pane].removeChild(P[pane].firstChild);return d;}
-	function typeInto(el,html,done){ /* typewriter for plain tail text only */
-		var tmp=document.createElement('div');tmp.innerHTML=html;var full=tmp.textContent;
-		var pre=html.slice(0,html.indexOf('</span>')+7),tail=full.slice(full.indexOf('❯')+2);
-		el.innerHTML=pre+' ';var i=0;
-		(function tick(){if(i<=tail.length){el.innerHTML=pre+' '+tail.slice(0,i)+'<span class="dim">▌</span>';i++;setTimeout(tick,28);}
-		else{el.innerHTML=html;done&&done();}})();
+	function apply(s){var op=s[0],v=s[1];
+		if(op==='header')header(true);
+		else if(op==='user')chat('ux-user',v);
+		else if(op==='au')chat('ux-au',v);
+		else if(op==='auok')chat('ux-au ok',v);
+		else if(op==='claude'||op==='codex')line(v);
+		else if(op==='state')state(v,false);
+		else if(op==='statedone')state(v,true);
+		else if(op==='tab')tab(v);
+		else if(op==='idle')header(false);
 	}
-	function finalFrame(){
-		SCRIPT.forEach(function(s){if(s[0]==='status'){st.innerHTML=s[1];}else{addLine(s[0],s[1]);}});
-	}
-	if(reduced){finalFrame();return;}
+	function reset(){msgs.innerHTML='';tab('claude');state('active',false);header(false);}
+	if(reduced){SCRIPT.forEach(apply);return;}
 	var idx=0;
 	function next(){
-		if(idx>=SCRIPT.length){setTimeout(function(){P.chat.innerHTML='';P.claude.innerHTML='';P.codex.innerHTML='';st.innerHTML='state: <span>idle</span>';idx=0;setTimeout(next,900);},7000);return;}
+		if(idx>=SCRIPT.length){setTimeout(function(){reset();idx=0;setTimeout(next,1000);},6500);return;}
 		var s=SCRIPT[idx++];
-		setTimeout(function(){
-			if(s[0]==='status'){st.innerHTML=s[1];next();}
-			else if(s[3]){var el=addLine(s[0],'');typeInto(el,s[1],next);}
-			else{addLine(s[0],s[1]);next();}
-		},s[2]);
+		setTimeout(function(){apply(s);next();},s[2]);
 	}
 	next();
 })();
