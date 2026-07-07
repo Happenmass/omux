@@ -191,7 +191,98 @@ function searchVectorBruteForce(
 // ─── Keyword Search (FTS5) ──────────────────────────────
 
 /**
- * Execute FTS5 keyword search on chunks_fts.
+ * Flat relevance score for LIKE-only keyword hits.
+ *
+ * When every query term is a short (2-char) CJK word, the trigram index cannot
+ * match it, so we fall back to a substring `LIKE` scan that has no bm25 signal
+ * to rank by. A `LIKE` hit is an exact substring match (high precision), and
+ * the value must clear the merged `minScore` (0.1) even at the default 0.3
+ * keyword weight (0.3 * 0.6 = 0.18 ≥ 0.1).
+ */
+const LIKE_ONLY_SCORE = 0.6;
+
+/** Detect CJK (Han / Kana / Hangul) so segmentation is only paid for when needed. */
+function isCjkText(s: string): boolean {
+	return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(s);
+}
+
+let cachedSegmenter: Intl.Segmenter | null | undefined;
+/**
+ * Word-granularity segmenter for CJK queries. `Intl.Segmenter` (Node 16+) does
+ * dictionary-based CJK word splitting with zero dependencies. Memoized; returns
+ * null if the runtime lacks ICU word data, in which case callers treat each
+ * whitespace-free CJK run as a single term (degraded but still functional).
+ */
+function cjkSegmenter(): Intl.Segmenter | null {
+	if (cachedSegmenter === undefined) {
+		try {
+			cachedSegmenter = new Intl.Segmenter("zh", { granularity: "word" });
+		} catch {
+			cachedSegmenter = null;
+		}
+	}
+	return cachedSegmenter;
+}
+
+/** Escape SQLite LIKE metacharacters (%, _, \) for use with `ESCAPE '\'`. */
+function escapeLikePattern(term: string): string {
+	return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+export interface QueryAnalysis {
+	/** FTS5 MATCH expression for terms >= 3 chars (trigram-indexable), or null. */
+	match: string | null;
+	/** 2-char terms the trigram index can't match; handled via LIKE substring scan. */
+	likeTerms: string[];
+}
+
+/**
+ * Split a raw query into keyword terms, CJK-aware.
+ *
+ * The chunks_fts trigram tokenizer only indexes 3-character windows, so it
+ * cannot match 1-2 char terms and treats a whitespace-free CJK run as one rigid
+ * phrase (e.g. it misses "中文" + "处理" when they are non-adjacent). We segment
+ * CJK runs into words via Intl.Segmenter, then route each term:
+ *   - >= 3 chars → an FTS5 MATCH phrase (keeps bm25 ranking)
+ *   - == 2 chars → a LIKE substring fallback (common Chinese words / names)
+ *   - 1 char     → dropped (particles; too noisy to AND as a hard filter)
+ */
+export function analyzeQuery(raw: string): QueryAnalysis {
+	const runs = raw.match(/[\p{L}\p{N}_]+/gu) ?? [];
+	const matchTerms: string[] = [];
+	const likeTerms: string[] = [];
+	const seen = new Set<string>();
+
+	const addTerm = (term: string): void => {
+		const t = term.trim();
+		if (!t) return;
+		const len = [...t].length; // code points: one per Han char
+		if (len < 2) return;
+		const key = t.toLowerCase();
+		if (seen.has(key)) return;
+		seen.add(key);
+		if (len >= 3) matchTerms.push(t);
+		else likeTerms.push(t);
+	};
+
+	for (const run of runs) {
+		const segmenter = isCjkText(run) ? cjkSegmenter() : null;
+		if (segmenter) {
+			for (const seg of segmenter.segment(run)) {
+				if (seg.isWordLike) addTerm(seg.segment);
+			}
+		} else {
+			addTerm(run);
+		}
+	}
+
+	const match = matchTerms.length > 0 ? matchTerms.map((t) => `"${t.replaceAll('"', "")}"`).join(" AND ") : null;
+	return { match, likeTerms };
+}
+
+/**
+ * Execute FTS5 keyword search on chunks_fts, with a CJK-aware LIKE fallback for
+ * short terms the trigram index cannot reach.
  */
 export function searchKeyword(
 	store: MemoryStore,
@@ -199,30 +290,54 @@ export function searchKeyword(
 	limit: number,
 	categoryPathFilter?: string[],
 ): HybridKeywordResult[] {
-	const ftsQuery = buildFtsQuery(query);
-	if (!ftsQuery) return [];
+	const { match, likeTerms } = analyzeQuery(query);
+	if (!match && likeTerms.length === 0) return [];
 
 	const db = store.getDb();
+	const catFilter = categoryPathFilter && categoryPathFilter.length > 0 ? categoryPathFilter : null;
+	const catClause = catFilter ? ` AND path IN (${catFilter.map(() => "?").join(",")})` : "";
 
 	try {
-		let sql = `SELECT id, path, source, start_line, end_line, text,
-						 bm25(chunks_fts) AS rank
-					FROM chunks_fts
-					WHERE chunks_fts MATCH ?`;
+		if (match) {
+			// bm25-ranked MATCH; short CJK terms narrow it as LIKE filters.
+			let sql = `SELECT id, path, source, start_line, end_line, text,
+							 bm25(chunks_fts) AS rank
+						FROM chunks_fts
+						WHERE chunks_fts MATCH ?`;
+			const params: any[] = [match];
+			for (const t of likeTerms) {
+				sql += ` AND text LIKE ? ESCAPE '\\'`;
+				params.push(`%${escapeLikePattern(t)}%`);
+			}
+			sql += catClause;
+			if (catFilter) params.push(...catFilter);
+			sql += ` ORDER BY rank ASC LIMIT ?`;
+			params.push(limit);
 
-		const params: any[] = [ftsQuery];
-
-		if (categoryPathFilter && categoryPathFilter.length > 0) {
-			const placeholders = categoryPathFilter.map(() => "?").join(",");
-			sql += ` AND path IN (${placeholders})`;
-			params.push(...categoryPathFilter);
+			const rows = db.prepare(sql).all(...params) as any[];
+			return rows.map((r) => ({
+				id: r.id as string,
+				path: r.path as string,
+				startLine: r.start_line as number,
+				endLine: r.end_line as number,
+				snippet: r.text as string,
+				source: r.source as string,
+				textScore: bm25RankToScore(r.rank as number),
+			}));
 		}
 
-		sql += ` ORDER BY rank ASC LIMIT ?`;
+		// LIKE-only: every term is a short CJK word the trigram index can't match.
+		// No bm25 signal, so surface shorter (denser) chunks first at a flat score.
+		let sql = `SELECT id, path, source, start_line, end_line, text
+					FROM chunks_fts
+					WHERE ${likeTerms.map(() => "text LIKE ? ESCAPE '\\'").join(" AND ")}`;
+		const params: any[] = likeTerms.map((t) => `%${escapeLikePattern(t)}%`);
+		sql += catClause;
+		if (catFilter) params.push(...catFilter);
+		sql += ` ORDER BY length(text) ASC LIMIT ?`;
 		params.push(limit);
 
 		const rows = db.prepare(sql).all(...params) as any[];
-
 		return rows.map((r) => ({
 			id: r.id as string,
 			path: r.path as string,
@@ -230,7 +345,7 @@ export function searchKeyword(
 			endLine: r.end_line as number,
 			snippet: r.text as string,
 			source: r.source as string,
-			textScore: bm25RankToScore(r.rank as number),
+			textScore: LIKE_ONLY_SCORE,
 		}));
 	} catch (err: any) {
 		logger.warn("memory-search", `FTS search failed: ${err.message}`);
@@ -239,20 +354,13 @@ export function searchKeyword(
 }
 
 /**
- * Convert natural language query to FTS5 MATCH expression.
- * Extracts word tokens and joins with AND.
+ * Convert a natural-language query to an FTS5 MATCH expression.
+ *
+ * Back-compat wrapper over {@link analyzeQuery}: returns only the MATCH part
+ * (terms >= 3 chars). The short-term LIKE fallback lives in {@link searchKeyword}.
  */
 export function buildFtsQuery(raw: string): string | null {
-	const tokens =
-		raw
-			.match(/[\p{L}\p{N}_]+/gu)
-			?.map((t) => t.trim())
-			.filter(Boolean) ?? [];
-
-	if (tokens.length === 0) return null;
-
-	// Wrap each token in quotes, join with AND
-	return tokens.map((t) => `"${t.replaceAll('"', "")}"`).join(" AND ");
+	return analyzeQuery(raw).match;
 }
 
 /**
