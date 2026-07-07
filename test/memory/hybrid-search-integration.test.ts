@@ -170,6 +170,42 @@ describe("Memory Hybrid Search Integration", () => {
 		});
 	});
 
+	// ─── CJK keyword search (trigram + LIKE fallback) ────
+
+	describe("keyword search (CJK)", () => {
+		beforeEach(() => {
+			store.insertChunk({
+				id: "cjk-001",
+				path: "memory/notes.md",
+				startLine: 1,
+				endLine: 3,
+				hash: "hash-cjk-001",
+				model: "mock-embed-v1",
+				text: "老王负责北京的服务器部署，中文的日志处理由脚本完成。",
+				embedding: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+			});
+		});
+
+		it("finds a 2-char name the trigram index alone cannot match", () => {
+			// Before the LIKE fallback, searchKeyword("北京") returned [] (2 chars < trigram window).
+			const results = searchKeyword(store, "北京", 10);
+			expect(results.some((r) => r.id === "cjk-001")).toBe(true);
+		});
+
+		it("finds non-adjacent Chinese words via segmentation (中文 … 处理)", () => {
+			// "中文处理" as one trigram phrase misses this doc (中文 and 处理 are non-contiguous);
+			// segmenting into 中文 AND 处理 recovers it.
+			const results = searchKeyword(store, "中文处理", 10);
+			expect(results.some((r) => r.id === "cjk-001")).toBe(true);
+		});
+
+		it("excludes docs missing a segmented term (AND semantics)", () => {
+			// 上海 never appears → the AND filter drops the doc even though 部署 is present.
+			const results = searchKeyword(store, "上海部署", 10);
+			expect(results.some((r) => r.id === "cjk-001")).toBe(false);
+		});
+	});
+
 	// ─── Vector search (brute-force) ─────────────────────
 
 	describe("vector search (brute-force)", () => {

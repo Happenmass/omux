@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	analyzeQuery,
 	applyTemporalDecay,
 	bm25RankToScore,
 	buildFtsQuery,
@@ -32,6 +33,56 @@ describe("buildFtsQuery", () => {
 
 	it("should strip quotes from tokens", () => {
 		expect(buildFtsQuery('"quoted"')).toBe('"quoted"');
+	});
+});
+
+describe("analyzeQuery (CJK-aware routing)", () => {
+	it("routes latin words >=3 chars to MATCH, none to LIKE", () => {
+		expect(analyzeQuery("deploy staging config")).toEqual({
+			match: '"deploy" AND "staging" AND "config"',
+			likeTerms: [],
+		});
+	});
+
+	it("routes a bare 2-char Chinese term (name) to LIKE only", () => {
+		// Trigram can't index <3 chars, so 北京 was previously invisible to keyword search.
+		expect(analyzeQuery("北京")).toEqual({ match: null, likeTerms: ["北京"] });
+	});
+
+	it("segments a Chinese run so non-adjacent words each become LIKE terms", () => {
+		// "中文处理" → 中文 + 处理; ANDing them as substrings matches docs where the
+		// two words are non-contiguous — the case a single trigram phrase misses.
+		expect(analyzeQuery("中文处理")).toEqual({ match: null, likeTerms: ["中文", "处理"] });
+	});
+
+	it("keeps a >=3-char Chinese word as MATCH and a 2-char word as LIKE", () => {
+		// "巧克力蛋糕" → 巧克力 (3, MATCH) + 蛋糕 (2, LIKE)
+		expect(analyzeQuery("巧克力蛋糕")).toEqual({ match: '"巧克力"', likeTerms: ["蛋糕"] });
+	});
+
+	it("routes multiple >=3-char Chinese words into one AND MATCH", () => {
+		expect(analyzeQuery("北京市麦当劳")).toEqual({ match: '"北京市" AND "麦当劳"', likeTerms: [] });
+	});
+
+	it("recovers 2-char latin tokens via LIKE (trigram can't match them either)", () => {
+		expect(analyzeQuery("ui layout")).toEqual({ match: '"layout"', likeTerms: ["ui"] });
+	});
+
+	it("mixes Chinese and English across whitespace-separated runs", () => {
+		expect(analyzeQuery("部署 deployment 脚本")).toEqual({
+			match: '"deployment"',
+			likeTerms: ["部署", "脚本"],
+		});
+	});
+
+	it("drops 1-char terms as too noisy to AND", () => {
+		expect(analyzeQuery("我")).toEqual({ match: null, likeTerms: [] });
+		expect(analyzeQuery("a")).toEqual({ match: null, likeTerms: [] });
+	});
+
+	it("returns no terms for empty or punctuation-only input", () => {
+		expect(analyzeQuery("")).toEqual({ match: null, likeTerms: [] });
+		expect(analyzeQuery("!@#$%")).toEqual({ match: null, likeTerms: [] });
 	});
 });
 
