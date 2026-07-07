@@ -18,15 +18,19 @@ omux is a meta-agent that orchestrates the CLI coding agent of your choice — C
 
 ## The problem
 
-Claude Code and Codex are great at writing code. They are less great at the parts around writing code:
+Claude Code and Codex are honestly some of the best products of this era. But if you use them daily, you know this moment.
 
-- You can't walk away. They pause on every destructive action, ask you to confirm, ask you to pick between two approaches.
-- You can run one at a time per task. Want one agent on the backend, another on the frontend? You open two terminals and babysit both.
-- They don't coordinate. Finishing a task, running tests, filing a PR, posting in Slack — that's your job, again, by hand.
-- They don't learn across sessions. Every run starts fresh.
-- Every agent sees every tool. Once you've installed 6 MCPs, every agent — even one writing docs — pays for the system-prompt bloat and risks tripping over tool name collisions.
+You sit down. Fingers on the keyboard. You think for a while… and then you type `implement this feature @somefile.md` and hit enter.
 
-I tried solving this with the Anthropic SDK and a bash script. It didn't work. The CLI agents have rich TUIs — step-by-step reasoning, interactive confirmations, live progress — and wrapping the API throws all of that away.
+You know better. The prompt *should* carry the background, the boundaries, the tasks broken out, a clear definition of done — maybe a test-first plan. You send the one-liner anyway.
+
+I used to think that was a discipline problem. It isn't — it's a **bandwidth** problem. The intent in your head is high-dimensional; a one-line prompt is a lossy compression of it. Working memory holds a handful of chunks, you type at conversational speed, and you're juggling three projects at once. The bits you drop don't vanish — the model quietly fills them from its own prior, bakes those guesses into the code, and hands them back at review time, with interest. In a single chat turn that's a small loss. In an hours-long agent run, a wrong assumption at step 1 conditions every step after it.
+
+So we compensate with harnesses — hooks, MCP servers, skills, elaborate `CLAUDE.md` files. It works, but you're paying for human limits with complexity, and it's a power-user game.
+
+And that's before the operational tax. You still can't walk away: the agent pauses on every destructive action to make you confirm. You still run one at a time per task — want one agent on the backend and another on the frontend? Two terminals, both babysat. They don't coordinate the work *around* the code — running the tests, filing the PR, posting to Slack stays your job, by hand, again. They forget everything between sessions. And every agent sees every tool you've installed, so a docs agent still pays for your Postgres MCP in prompt bloat and tripped-over name collisions.
+
+I tried solving this with the Anthropic SDK and a bash script. It didn't work: the CLI agents have rich TUIs — step-by-step reasoning, interactive confirmations, live progress — and wrapping the API throws all of that away.
 
 So I built omux instead.
 
@@ -107,13 +111,13 @@ Claude Code has subagents, hooks, and plugins now. The fair question: why build 
 
 Because supervision only works when the supervisor **isn't inside the thing it supervises**.
 
-**Context isolation.** A plugin shares the worker's context window and process. The supervisor's judgment, the worker's step-by-step reasoning, and a growing transcript of edit→test→rerun churn all draw on one attention budget and one failure domain — so when the worker wedges, loops, or blows its context, it takes the supervisor with it. omux runs the MainAgent in its own process with its own context, reading the worker's pane from the outside the way you would. Its judgment never gets diluted by the worker's churn, and a sub-agent that crashes is an event to handle, not a shared death.
+**Context isolation.** A plugin shares the worker's context window and process. The supervisor's judgment, the worker's step-by-step reasoning, and a growing transcript of edit→test→rerun churn all draw on one attention budget and one failure domain — so when the worker wedges, loops, or blows its context, it takes the supervisor with it. omux runs the MainAgent in its own process with a management-focused context: the goals and state, plus pane snapshots pulled on demand, not the worker's entire running transcript. Its judgment never gets diluted by the churn, and a sub-agent that crashes is an event to handle, not a shared death.
 
 **Fresh eyes can't come from the same head.** A model that just wrote 400 lines is conditioned by its own output — it generated that code, so its next tokens are primed to find it correct. Reviewing its own diff in the same session inherits that bias. A *different* model, in a context that never saw the reasoning behind the code, reads the artifact cold. That's why cross-vendor execute-then-review (Claude implements, Codex reviews, or the reverse) isn't a gimmick — independent verification is the one check a same-context plugin structurally cannot run.
 
 **Scheduling belongs in code; judgment belongs in the model.** Waiting for a pane to settle, capping runaway auto-continues, fanning three independent tasks across three panes — that's control flow, and control flow in code costs zero tokens and never hallucinates. The model's turns get spent only where judgment is actually required. A plugin inside one agent's turn loop can't park for free, and can't schedule a second agent it isn't the one running.
 
-And a quieter reason the outside layer earns its keep: **a prompt is a lossy snapshot of what you actually want.** Your intent is high-dimensional — the background, the constraints, the things you'd obviously never do — but working memory holds only a handful of chunks and you type at conversational speed, so no single prompt carries all of it. The model fills the gaps from its prior, silently, and across a long unattended loop those quiet guesses compound. A supervisor that *persists* — memory as the shared vocabulary you stop re-specifying, plus a review pass and real tests pinning what prose leaves ambiguous — is how you claw those bits back. A stateless plugin turn has nowhere to hold them.
+And a quieter reason the outside layer earns its keep: recovering the intent a one-line prompt drops (the bandwidth problem up top) takes **persistence**. A supervisor that lives across turns makes memory the shared vocabulary you stop re-specifying, and lets a review pass and real tests pin what prose left ambiguous. A stateless plugin turn has nowhere to hold any of that.
 
 ## How it works
 
@@ -144,7 +148,7 @@ The pieces worth talking about:
 
 **Adapter abstraction.** Adding support for a new CLI agent is a thin adapter (a couple hundred lines): the four regex patterns, the launch command, the confirm/abort keystrokes. `src/agents/adapter.ts` is the contract.
 
-**Hybrid memory, two-tier.** SQLite-backed store with two indexes — `sqlite-vec` for dense retrieval, `FTS5` for BM25, configurable weighted combination. Five embedding providers including a local `node-llama-cpp` path (Qwen3-Embedding) for fully-offline operation. Memory lives in two layers that are indexed and searched together: a **global** store (your coding style, your tone, your team's people, things that don't change when you switch repos) and a **per-project** store (this codebase's conventions, its architecture decisions, its open todos). The same editing, search, and `/tidy` machinery applies to both. Markdown files are the source of truth; the DB is the index. Killed sub-agents leave a resume id behind (persisted to memory), so a later session can revive their full conversation via `claude --resume` / `codex resume` instead of starting cold.
+**Hybrid memory, two-tier.** SQLite-backed store with two indexes — `sqlite-vec` for dense vector retrieval and `FTS5` for keyword search (ranked by its built-in BM25), merged in a configurable weighted combination. Five embedding providers including a local `node-llama-cpp` path (Qwen3-Embedding) for fully-offline operation. Memory lives in two layers that are indexed and searched together: a **global** store (your coding style, your tone, your team's people, things that don't change when you switch repos) and a **per-project** store (this codebase's conventions, its architecture decisions, its open todos). The same editing, search, and `/tidy` machinery applies to both. Markdown files are the source of truth; the DB is the index. Killed sub-agents leave a resume id behind (persisted to memory), so a later session can revive their full conversation via `claude --resume` / `codex resume` instead of starting cold.
 
 **Skill system.** Markdown files with frontmatter, discovered from two places: skills bundled with each adapter, and per-project `.omux/skills/`. A skill is loaded on demand via conditional activation — the MainAgent decides when a skill is relevant from its description, then reads the full instructions. Project-local skills are **opt-in by design** (`skills.trustedWorkspaceDirs` in config, default deny), so cloning a repo can never silently inject instructions into your orchestrator. Modeled after Claude's skills.
 
@@ -242,7 +246,7 @@ To lock it down: `omux --host 127.0.0.1 --no-mdns` binds loopback-only with no d
 
 ## Status & roadmap
 
-**Today (v4.0.0):** works for me, daily, against Claude Code and Codex. Cross-vendor **execute-then-review** (Claude implements, Codex reviews), the **auto-continue loop**, and the loop-shaped MainAgent prompt landed in v3.0; v3.1–v3.2 hardened the execution loop (race fixes, tool-handler extraction) and realigned prompts with code. Memory + skills + hybrid search shipped. The web chat UI is the primary interface (a legacy TUI dashboard still runs). Not battle-tested against production team workflows yet.
+**Today (v4.0.0):** works for me, daily, against Claude Code and Codex. Cross-vendor **execute-then-review** (Claude implements, Codex reviews), the **auto-continue loop**, and the loop-shaped MainAgent prompt landed in v3.0; v3.1–v3.2 hardened the execution loop (race fixes, tool-handler extraction) and realigned prompts with code. Memory + skills + hybrid search shipped. The web chat UI is the primary interface (a legacy TUI dashboard still runs). Not battle-tested against production team workflows yet. Honest about the ceiling: in my own daily use it reliably gets me to about an **80/100 first framework** — the 80 that convention and accumulated memory can cover. The last 20, the taste calls and the business decisions, is the part of your intent only you can supply, so it asks instead of guessing.
 
 **Next:**
 - [ ] Per-agent skill scoping (MCP scoping already shipped)
