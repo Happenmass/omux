@@ -101,6 +101,20 @@ This is the honest landscape. omux is not the only thing in this space.
 
 omux is for you if: you already live inside a CLI coding agent, you want to run more than one instance at once, and you don't want to give up the rich TUI output by wrapping the agent in an API.
 
+## Why a layer above, not a plugin inside
+
+Claude Code has subagents, hooks, and plugins now. The fair question: why build a *separate* process that drives it from the outside, instead of living inside it as a plugin?
+
+Because supervision only works when the supervisor **isn't inside the thing it supervises**.
+
+**Context isolation.** A plugin shares the worker's context window and process. The supervisor's judgment, the worker's step-by-step reasoning, and a growing transcript of edit→test→rerun churn all draw on one attention budget and one failure domain — so when the worker wedges, loops, or blows its context, it takes the supervisor with it. omux runs the MainAgent in its own process with its own context, reading the worker's pane from the outside the way you would. Its judgment never gets diluted by the worker's churn, and a sub-agent that crashes is an event to handle, not a shared death.
+
+**Fresh eyes can't come from the same head.** A model that just wrote 400 lines is conditioned by its own output — it generated that code, so its next tokens are primed to find it correct. Reviewing its own diff in the same session inherits that bias. A *different* model, in a context that never saw the reasoning behind the code, reads the artifact cold. That's why cross-vendor execute-then-review (Claude implements, Codex reviews, or the reverse) isn't a gimmick — independent verification is the one check a same-context plugin structurally cannot run.
+
+**Scheduling belongs in code; judgment belongs in the model.** Waiting for a pane to settle, capping runaway auto-continues, fanning three independent tasks across three panes — that's control flow, and control flow in code costs zero tokens and never hallucinates. The model's turns get spent only where judgment is actually required. A plugin inside one agent's turn loop can't park for free, and can't schedule a second agent it isn't the one running.
+
+And a quieter reason the outside layer earns its keep: **a prompt is a lossy snapshot of what you actually want.** Your intent is high-dimensional — the background, the constraints, the things you'd obviously never do — but working memory holds only a handful of chunks and you type at conversational speed, so no single prompt carries all of it. The model fills the gaps from its prior, silently, and across a long unattended loop those quiet guesses compound. A supervisor that *persists* — memory as the shared vocabulary you stop re-specifying, plus a review pass and real tests pinning what prose leaves ambiguous — is how you claw those bits back. A stateless plugin turn has nowhere to hold them.
+
 ## How it works
 
 ```
