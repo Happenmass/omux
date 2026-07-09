@@ -18,6 +18,7 @@ export interface PersistedAgent {
 	takenOver: boolean;
 	model?: string;
 	adapter?: string;
+	worktree?: { path: string; branch: string; sourceRepo: string };
 }
 
 export class AgentStore {
@@ -50,6 +51,15 @@ export class AgentStore {
 		} catch {
 			// Column already exists — ignore
 		}
+		// Migrate: add worktree columns if missing (backward-compatible). Present only
+		// for agents launched with `isolation: "worktree"`; NULL for shared-checkout agents.
+		for (const col of ["worktree_path", "worktree_branch", "worktree_source"]) {
+			try {
+				this.db.exec(`ALTER TABLE chat_agents ADD COLUMN ${col} TEXT`);
+			} catch {
+				// Column already exists — ignore
+			}
+		}
 		logger.info("agent-store", "Table initialized");
 	}
 
@@ -58,13 +68,28 @@ export class AgentStore {
 	 */
 	saveAgent(
 		agentId: string,
-		entry: { paneTarget: string; workingDir: string; model?: string; adapter?: string },
+		entry: {
+			paneTarget: string;
+			workingDir: string;
+			model?: string;
+			adapter?: string;
+			worktree?: { path: string; branch: string; sourceRepo: string };
+		},
 	): void {
 		this.db
 			.prepare(
-				"INSERT OR REPLACE INTO chat_agents (session_id, pane_target, working_dir, model, adapter) VALUES (?, ?, ?, ?, ?)",
+				"INSERT OR REPLACE INTO chat_agents (session_id, pane_target, working_dir, model, adapter, worktree_path, worktree_branch, worktree_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			)
-			.run(agentId, entry.paneTarget, entry.workingDir, entry.model ?? null, entry.adapter ?? null);
+			.run(
+				agentId,
+				entry.paneTarget,
+				entry.workingDir,
+				entry.model ?? null,
+				entry.adapter ?? null,
+				entry.worktree?.path ?? null,
+				entry.worktree?.branch ?? null,
+				entry.worktree?.sourceRepo ?? null,
+			);
 	}
 
 	/**
@@ -87,7 +112,7 @@ export class AgentStore {
 	loadAgents(): PersistedAgent[] {
 		const rows = this.db
 			.prepare(
-				"SELECT session_id, pane_target, working_dir, created_at, taken_over, model, adapter FROM chat_agents ORDER BY created_at ASC",
+				"SELECT session_id, pane_target, working_dir, created_at, taken_over, model, adapter, worktree_path, worktree_branch, worktree_source FROM chat_agents ORDER BY created_at ASC",
 			)
 			.all() as Array<{
 			session_id: string;
@@ -97,6 +122,9 @@ export class AgentStore {
 			taken_over: number;
 			model: string | null;
 			adapter: string | null;
+			worktree_path: string | null;
+			worktree_branch: string | null;
+			worktree_source: string | null;
 		}>;
 
 		return rows.map((row) => ({
@@ -107,6 +135,10 @@ export class AgentStore {
 			takenOver: row.taken_over === 1,
 			model: row.model ?? undefined,
 			adapter: row.adapter ?? undefined,
+			worktree:
+				row.worktree_path && row.worktree_branch && row.worktree_source
+					? { path: row.worktree_path, branch: row.worktree_branch, sourceRepo: row.worktree_source }
+					: undefined,
 		}));
 	}
 }

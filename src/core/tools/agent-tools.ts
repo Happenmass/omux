@@ -1,8 +1,18 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { readPersistentMemory } from "../../memory/persistent.js";
 import { t } from "../../server/messages.js";
 import { loadConfig, projectDotDir } from "../../utils/config.js";
+import {
+	addWorktree,
+	deleteBranch,
+	ensureExcluded,
+	hasUnmergedCommits,
+	isGitRepo,
+	isWorktreeDirty,
+	removeWorktree,
+	repoRoot,
+} from "../../utils/git.js";
 import { logger } from "../../utils/logger.js";
 import { cleanupMcpConfigFile, generateMcpConfigFile, selectMcpServers } from "../../utils/mcp-config.js";
 import type { ToolContext, ToolHandler } from "./types.js";
@@ -302,6 +312,12 @@ export const createAgent: ToolHandler = {
 					type: "string",
 					description: "Working directory for the agent. Defaults to process.cwd() if omitted.",
 				},
+				isolation: {
+					type: "string",
+					enum: ["shared", "worktree"],
+					description:
+						'Filesystem isolation for the agent. "shared" (default) launches the agent directly in working_dir — pick this when the task depends on other in-flight work or shares files with another agent; concurrent edits then serialize on the one checkout. "worktree" launches the agent in a dedicated git worktree on a fresh `omux/<name>` branch cut from working_dir\'s HEAD, so it can edit in parallel without colliding with other agents. Use it ONLY for independent, edit-heavy tasks. Requires working_dir to be a git repo. To integrate the result you MUST have the agent COMMIT its work to the branch, then dispatch a separate merge agent (in the main checkout) to `git merge omux/<name>`. kill_agent removes the worktree afterward and refuses if it still has uncommitted or unmerged changes.',
+				},
 				model: {
 					type: "string",
 					description:
@@ -422,8 +438,74 @@ export const createAgent: ToolHandler = {
 				logger.info("main-agent", `Generated MCP config for ${agentName}: ${mcpConfigPath}`);
 			}
 
+			// Resolve filesystem isolation. "shared" launches in working_dir directly;
+			// "worktree" cuts a dedicated git worktree so parallel edit-heavy agents don't
+			// collide. `launchDir` is where the agent actually runs (worktree path when
+			// isolated); `worktreeMeta` is persisted so kill_agent can clean it up later.
+			let launchDir = workingDir;
+			let worktreeMeta: { path: string; branch: string; sourceRepo: string } | undefined;
+			const rawIsolation = (args.isolation as string | undefined)?.trim() || "shared";
+			if (rawIsolation !== "shared" && rawIsolation !== "worktree") {
+				return {
+					output: `Error: isolation must be "shared" or "worktree" (got "${rawIsolation}").`,
+					terminal: false,
+				};
+			}
+			if (rawIsolation === "worktree") {
+				if (!(await isGitRepo(workingDir))) {
+					return {
+						output: `Error: isolation "worktree" requires working_dir to be inside a git repository, but "${workingDir}" is not one.`,
+						terminal: false,
+					};
+				}
+				const sourceRepo = await repoRoot(workingDir);
+				const branch = `omux/${agentName.replace(/^(omux|cliclaw)-/, "")}`;
+				// Worktrees live under the target project's dot dir (<repo>/.omux/worktrees/<agent>).
+				// Because that path is inside the main working tree, add it to the repo's local
+				// info/exclude first so the checkout doesn't pollute the main checkout's git status.
+				const dotDir = projectDotDir(sourceRepo);
+				const worktreePath = join(dotDir, "worktrees", agentName);
+				try {
+					await ensureExcluded(sourceRepo, `${basename(dotDir)}/worktrees/`);
+				} catch (err: any) {
+					logger.warn("main-agent", `ensureExcluded failed for ${sourceRepo}: ${err?.message ?? err}`);
+				}
+				const pathExists = await import("node:fs/promises").then((m) =>
+					m.stat(worktreePath).then(
+						() => true,
+						() => false,
+					),
+				);
+				if (pathExists) {
+					// Only tolerated on resume (reuse the prior worktree/branch); otherwise it's a
+					// stale/colliding checkout the agent would silently inherit.
+					if (!resumeId) {
+						return {
+							output: `Error: worktree path "${worktreePath}" already exists. Kill the previous agent (or remove the worktree) before reusing this name.`,
+							terminal: false,
+						};
+					}
+					logger.info("main-agent", `Reusing existing worktree for ${agentName}: ${worktreePath}`);
+				} else {
+					try {
+						await addWorktree(sourceRepo, worktreePath, branch);
+					} catch (err: any) {
+						return {
+							output: `Error: git worktree add failed: ${err?.stderr?.trim() || err?.message || err}`,
+							terminal: false,
+						};
+					}
+				}
+				launchDir = worktreePath;
+				worktreeMeta = { path: worktreePath, branch, sourceRepo };
+				logger.info(
+					"main-agent",
+					`Worktree isolation for ${agentName}: ${worktreePath} on branch ${branch} (source ${sourceRepo})`,
+				);
+			}
+
 			const paneTarget = await adapter.launch(ctx.bridge, {
-				workingDir,
+				workingDir: launchDir,
 				sessionName: agentName,
 				resumeId,
 				model,
@@ -431,13 +513,20 @@ export const createAgent: ToolHandler = {
 				mcpConfigPath,
 			});
 			const resolvedModel = model ?? adapter.defaultModel;
-			ctx.agents.set(agentName, { paneTarget, workingDir, model: resolvedModel, adapter: adapterName });
-			await ctx.changeTracker?.registerAgent(agentName, workingDir);
-			ctx.agentStore?.saveAgent(agentName, {
+			ctx.agents.set(agentName, {
 				paneTarget,
-				workingDir,
+				workingDir: launchDir,
 				model: resolvedModel,
 				adapter: adapterName,
+				worktree: worktreeMeta,
+			});
+			await ctx.changeTracker?.registerAgent(agentName, launchDir);
+			ctx.agentStore?.saveAgent(agentName, {
+				paneTarget,
+				workingDir: launchDir,
+				model: resolvedModel,
+				adapter: adapterName,
+				worktree: worktreeMeta,
 			});
 			ctx.activeAgentId = agentName;
 			// Per-pane characteristics are passed explicitly at dispatch time
@@ -474,8 +563,12 @@ export const createAgent: ToolHandler = {
 				initialPaneSection = `\n\n[Initial pane capture failed: ${err?.message ?? err}]`;
 			}
 
+			const worktreeSection = worktreeMeta
+				? `\n\n--- Worktree isolation ---\nThis agent runs in an ISOLATED git worktree at ${worktreeMeta.path} on branch ${worktreeMeta.branch} (cut from ${worktreeMeta.sourceRepo}). Its edits do NOT touch the main checkout. To integrate the result: (1) instruct the agent to COMMIT its work to the branch, (2) then create/reuse a separate agent in ${worktreeMeta.sourceRepo} and have it \`git merge ${worktreeMeta.branch}\` (resolving conflicts). kill_agent will remove the worktree afterward — and will REFUSE if the worktree is still dirty or the branch is unmerged (pass force:true to override and discard).\n--- end worktree ---`
+				: "";
+
 			return {
-				output: `Agent "${agentName}" (${adapter.displayName}) created in ${workingDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${memorySection}${initialPaneSection}`,
+				output: `Agent "${agentName}" (${adapter.displayName}) created in ${launchDir}. Agent launched in ${paneTarget}.${mcpNote} You can now use send_to_agent.${worktreeSection}${memorySection}${initialPaneSection}`,
 				terminal: false,
 			};
 		} catch (err: any) {
@@ -539,11 +632,70 @@ export const listAgents: ToolHandler = {
 	},
 };
 
+/**
+ * Remove a worktree-isolated agent's git worktree and branch after its tmux session is
+ * gone. Returns a human-readable status line, or null when the agent had no worktree.
+ *
+ * Without `force`, refuses to remove a worktree that still has uncommitted changes or
+ * unmerged commits — the worktree and branch are left in place and the returned message
+ * explains how to recover, so a sub-agent's work is never silently discarded.
+ */
+async function cleanupAgentWorktree(
+	entry: { worktree?: { path: string; branch: string; sourceRepo: string } },
+	force: boolean,
+): Promise<string | null> {
+	const wt = entry.worktree;
+	if (!wt) return null;
+	const { path, branch, sourceRepo } = wt;
+
+	const pathExists = await import("node:fs/promises").then((m) =>
+		m.stat(path).then(
+			() => true,
+			() => false,
+		),
+	);
+
+	if (!force && pathExists) {
+		const reasons: string[] = [];
+		try {
+			if (await isWorktreeDirty(path)) reasons.push("uncommitted changes");
+		} catch {
+			/* `git status` failed — fall through and let removal decide */
+		}
+		try {
+			if (await hasUnmergedCommits(sourceRepo, branch)) reasons.push("unmerged commits");
+		} catch {
+			/* rev-list failed (branch already gone?) — ignore */
+		}
+		if (reasons.length > 0) {
+			return `Worktree preserved (not removed): ${path} on branch ${branch} still has ${reasons.join(
+				" + ",
+			)}. Merge it via a sub-agent (\`git merge ${branch}\` in ${sourceRepo}), then kill again — or kill with force:true to discard.`;
+		}
+	}
+
+	try {
+		if (pathExists) await removeWorktree(sourceRepo, path, force);
+	} catch (err: any) {
+		return `Worktree removal failed for ${path}: ${
+			err?.stderr?.trim() || err?.message || err
+		}. Remove it manually with \`git worktree remove${force ? " --force" : ""} ${path}\`.`;
+	}
+	// Branch delete is best-effort: `-d` already refuses unmerged branches, and a stray
+	// branch is harmless. Only surface the worktree removal.
+	try {
+		await deleteBranch(sourceRepo, branch, force);
+	} catch {
+		/* unmerged (non-force) or already gone — leave the branch in place */
+	}
+	return `Worktree removed: ${path}; branch ${branch} ${force ? "force-deleted" : "cleaned up"}.`;
+}
+
 export const killAgent: ToolHandler = {
 	definition: {
 		name: "kill_agent",
 		description:
-			'Gracefully exit a coding agent and destroy its tmux session. Returns captured output and a resume id (if available) for resuming later with --resume. If agent_id is omitted, targets the active agent. Set agent_id to "all" to kill all agents.',
+			'Gracefully exit a coding agent and destroy its tmux session. Returns captured output and a resume id (if available) for resuming later with --resume. If agent_id is omitted, targets the active agent. Set agent_id to "all" to kill all agents.\n\nFor worktree-isolated agents this also removes the git worktree and deletes its branch — but REFUSES (preserving the worktree and reporting its path) when the worktree still has uncommitted changes or unmerged commits, so work is never silently lost. Merge the branch via a sub-agent first, or pass force:true to remove it anyway and discard the changes.',
 		parameters: {
 			type: "object",
 			properties: {
@@ -556,6 +708,11 @@ export const killAgent: ToolHandler = {
 					type: "string",
 					description: "A brief human-readable summary (e.g., 'Cleaning up agent after task complete')",
 				},
+				force: {
+					type: "boolean",
+					description:
+						"For worktree-isolated agents: remove the worktree and delete its branch even when there are uncommitted or unmerged changes, discarding them. Ignored for shared-checkout agents. Default false.",
+				},
 			},
 			required: ["summary"],
 		},
@@ -563,6 +720,7 @@ export const killAgent: ToolHandler = {
 	async execute(args: Record<string, any>, ctx: ToolContext) {
 		const killAgentId = args.agent_id as string | undefined;
 		const killSummary = args.summary as string;
+		const killForce = args.force === true;
 		ctx.emitUiEvent("agent_update", killSummary);
 
 		try {
@@ -615,9 +773,10 @@ export const killAgent: ToolHandler = {
 				}
 
 				// Cleanup registered agents that were actually killed
+				const worktreeNotes: string[] = [];
 				for (const id of killableIds) {
+					const entry = ctx.agents.get(id);
 					if (ctx.learningPipeline && ctx.changeTracker) {
-						const entry = ctx.agents.get(id);
 						if (entry) {
 							try {
 								await ctx.learningPipeline.ingestAgentKill({
@@ -632,6 +791,15 @@ export const killAgent: ToolHandler = {
 						}
 						ctx.changeTracker.releaseAgent(id);
 					}
+					// Remove the git worktree (if any) before dropping the registry entry.
+					if (entry) {
+						try {
+							const note = await cleanupAgentWorktree(entry, killForce);
+							if (note) worktreeNotes.push(`${id}: ${note}`);
+						} catch (err) {
+							worktreeNotes.push(`${id}: worktree cleanup errored: ${(err as Error).message}`);
+						}
+					}
 					// Always release prompt tracker, independent of learning pipeline
 					ctx.promptTracker?.release(id);
 					// Cleanup MCP config temp file (best-effort)
@@ -641,6 +809,9 @@ export const killAgent: ToolHandler = {
 				ctx.notifyAgentChange();
 
 				const parts = [`Killed ${killed.length} agent(s): ${killed.join(", ") || "(none)"}`];
+				if (worktreeNotes.length > 0) {
+					parts.push(`\nWorktrees:\n${worktreeNotes.join("\n")}`);
+				}
 				if (resumeIds.length > 0) {
 					parts.push(`\nResume IDs:\n${resumeIds.join("\n")}`);
 				}
@@ -695,6 +866,13 @@ export const killAgent: ToolHandler = {
 				}
 				ctx.changeTracker.releaseAgent(agentId);
 			}
+			// Remove the git worktree (if any) before dropping the registry entry.
+			let worktreeNote: string | null = null;
+			try {
+				worktreeNote = await cleanupAgentWorktree(agentEntry, killForce);
+			} catch (err) {
+				worktreeNote = `worktree cleanup errored: ${(err as Error).message}`;
+			}
 			// Always release prompt tracker, independent of learning pipeline
 			ctx.promptTracker?.release(agentId);
 			// Cleanup MCP config temp file (best-effort)
@@ -708,6 +886,9 @@ export const killAgent: ToolHandler = {
 			if (resumeId) {
 				parts.push(`\nResume ID: ${resumeId}`);
 				parts.push(`Working directory: ${agentEntry.workingDir}`);
+			}
+			if (worktreeNote) {
+				parts.push(`\n${worktreeNote}`);
 			}
 			return { output: parts.join("\n"), terminal: false };
 		} catch (err: any) {

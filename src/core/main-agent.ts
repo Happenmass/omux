@@ -36,6 +36,19 @@ export interface AgentEntry {
 	model?: string;
 	/** Adapter name this agent was launched with (e.g. "claude-code"). Undefined → resolves to the default adapter. */
 	adapter?: string;
+	/**
+	 * Set when the agent runs in an isolated git worktree (`create_agent isolation: "worktree"`).
+	 * `workingDir` above points at `path`; `sourceRepo` is the main checkout the branch merges back
+	 * into. kill_agent uses this to remove the worktree (refusing when dirty/unmerged).
+	 */
+	worktree?: {
+		/** Absolute path of the worktree checkout (== workingDir). */
+		path: string;
+		/** Branch created for this worktree (e.g. "omux/foo"). */
+		branch: string;
+		/** Absolute path of the source repo root the branch is merged back into. */
+		sourceRepo: string;
+	};
 }
 
 export interface MainAgentEvents {

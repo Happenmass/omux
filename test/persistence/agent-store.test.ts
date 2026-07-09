@@ -143,6 +143,34 @@ describe("AgentStore", () => {
 			expect(agents).toHaveLength(1);
 			expect(agents[0].adapter).toBeUndefined();
 		});
+
+		it("should persist and load worktree metadata", () => {
+			store.saveAgent("omux-wt", {
+				paneTarget: "omux-wt:0.0",
+				workingDir: "/home/u/.omux/worktrees/omux-wt",
+				worktree: {
+					path: "/home/u/.omux/worktrees/omux-wt",
+					branch: "omux/wt",
+					sourceRepo: "/home/u/proj",
+				},
+			});
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].worktree).toEqual({
+				path: "/home/u/.omux/worktrees/omux-wt",
+				branch: "omux/wt",
+				sourceRepo: "/home/u/proj",
+			});
+		});
+
+		it("should default worktree to undefined for shared-checkout agents", () => {
+			store.saveAgent("omux-shared", { paneTarget: "omux-shared:0.0", workingDir: "/s" });
+
+			const agents = store.loadAgents();
+			expect(agents).toHaveLength(1);
+			expect(agents[0].worktree).toBeUndefined();
+		});
 	});
 
 	describe("deleteAgent", () => {

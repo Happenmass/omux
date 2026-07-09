@@ -867,7 +867,13 @@ async function main(): Promise<void> {
 			if (alive) {
 				mainAgent.restoreAgent(
 					a.agentId,
-					{ paneTarget: a.paneTarget, workingDir: a.workingDir, model: a.model, adapter: a.adapter },
+					{
+						paneTarget: a.paneTarget,
+						workingDir: a.workingDir,
+						model: a.model,
+						adapter: a.adapter,
+						worktree: a.worktree,
+					},
 					a.takenOver,
 				);
 				restoredAgentIds.add(a.agentId);
