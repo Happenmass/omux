@@ -1,6 +1,6 @@
 {
 	"name": "@happenmass/omux",
-	"version": "4.0.0",
+	"version": "4.1.0",
 	"description": "Chat-based meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"license": "MIT",
