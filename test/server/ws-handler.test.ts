@@ -23,6 +23,7 @@ function createMockMainAgent(state: "idle" | "executing" = "idle") {
 		getPendingUserMessageCount: vi.fn().mockReturnValue(0),
 		getContextUsage: vi.fn().mockReturnValue({ tokens: 0, limit: 200000 }),
 		setTakenOver: vi.fn(),
+		resumeMonitoringAfterRelease: vi.fn().mockResolvedValue(undefined),
 	} as any;
 }
 

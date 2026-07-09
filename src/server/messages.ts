@@ -19,8 +19,11 @@ const EN: Record<string, MessageValue> = {
 	command_error: (p) => `Command failed: ${p.error}`,
 	agent_taken_over: (p) => `Session ${p.agentId} has been taken over by a human`,
 	agent_released: (p) => `Session ${p.agentId} has been returned to MainAgent control`,
+	agent_active_after_release: (p) =>
+		`Session ${p.agentId} is still working after release — resuming monitoring, MainAgent will report when it settles`,
 
 	// main-agent.ts
+	agent_release_task_summary: "Task the human started while the session was taken over (detected active on release)",
 	execution_error: (p) => `Execution failed: ${p.error} — the current turn was aborted, please retry`,
 	context_compacted_divider: "— context compacted · earlier turns summarized —",
 	message_queued: "Message queued; it will be handled after the current operation completes",
@@ -79,8 +82,10 @@ const ZH: Record<string, MessageValue> = {
 	command_error: (p) => `指令执行出错: ${p.error}`,
 	agent_taken_over: (p) => `会话 ${p.agentId} 已被人工接管`,
 	agent_released: (p) => `会话 ${p.agentId} 已恢复 MainAgent 控制`,
+	agent_active_after_release: (p) => `会话 ${p.agentId} 释放后仍在运行 — 已恢复监控，任务结束时 MainAgent 会收到回调`,
 
 	// main-agent.ts
+	agent_release_task_summary: "人工接管期间发起的任务（释放时检测到仍在运行）",
 	execution_error: (p) => `执行出错: ${p.error} — 本轮已中止，请重试`,
 	context_compacted_divider: "— 上下文已压缩 · 较早的对话已被摘要 —",
 	message_queued: "消息已排队，将在当前操作完成后处理",

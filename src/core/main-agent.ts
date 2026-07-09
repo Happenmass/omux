@@ -97,6 +97,9 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private globalDir: string;
 	private workspaceDir: string;
 	private createAgentSettleMs: number;
+	// Gap between the two pane-hash samples used to decide whether a just-released agent is
+	// actively working (see resumeMonitoringAfterRelease). Tests set this to 0.
+	private releaseActivitySampleMs: number;
 	private promptLoader: PromptLoader | null = null;
 	private locale: SupportedLocale = "en-US";
 	private autoContinueEnabled = false;
@@ -134,14 +137,23 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	// responsibility, so it lives here now, next to the loop that consumes it.
 	private stopRequested = false;
 
+	// Aborts the in-flight LLM stream so /stop takes effect *during* model
+	// streaming, not only at the next between-round latch check. Recreated at the
+	// start of every turn (processUserMessage / processAgentEventItem); the stream
+	// is the only safely-interruptible phase — we can't break between tools within a
+	// round without leaving unpaired tool_calls in context (see executeToolLoop).
+	private abortController: AbortController | null = null;
+
 	/**
-	 * Request stop: the EXECUTING self-loop checks this after the current tool
-	 * round completes and returns to idle when set.
+	 * Request stop: aborts the in-flight LLM stream (interrupts model streaming
+	 * immediately) AND latches `stopRequested` so the EXECUTING self-loop returns
+	 * to idle at the next between-round check even if no stream is active.
 	 */
 	requestStop(): void {
 		this.stopRequested = true;
-		logger.info("main-agent", "Stop requested — will pause after current tool round");
-		this.emit("log", "Stop requested — will pause after current tool round");
+		this.abortController?.abort();
+		logger.info("main-agent", "Stop requested — aborting in-flight stream; will pause after current tool round");
+		this.emit("log", "Stop requested — aborting in-flight stream; will pause after current tool round");
 	}
 
 	/** Clear the stop flag and allow execution to continue. */
@@ -152,6 +164,20 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	/** Check whether a stop has been requested. */
 	isStopRequested(): boolean {
 		return this.stopRequested;
+	}
+
+	/**
+	 * Finalize a stop that aborted the in-flight LLM stream: clear the latch, return
+	 * to idle, and notify the UI. Mirrors the between-round stop branch in
+	 * executeToolLoop so both interruption points behave identically.
+	 */
+	private finishStopped(): void {
+		this.clearStopRequest();
+		this.setState("idle");
+		this.broadcaster.broadcast({
+			type: "system",
+			message: t("execution_stopped", this.locale),
+		});
 	}
 
 	getPendingUserMessageCount(): number {
@@ -185,6 +211,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		changeTracker?: ChangeTracker;
 		thinking?: ThinkingLevel;
 		createAgentSettleMs?: number;
+		releaseActivitySampleMs?: number;
 		promptLoader?: PromptLoader;
 		locale?: SupportedLocale;
 		autoContinue?: { enabled: boolean; maxConsecutive: number };
@@ -220,6 +247,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		this.learningPipeline = opts.learningPipeline;
 		this.changeTracker = opts.changeTracker;
 		this.createAgentSettleMs = opts.createAgentSettleMs ?? 10_000;
+		this.releaseActivitySampleMs = opts.releaseActivitySampleMs ?? 1_500;
 		this.promptLoader = opts.promptLoader ?? null;
 		this.locale = opts.locale ?? "en-US";
 		this.autoContinueEnabled = opts.autoContinue?.enabled ?? false;
@@ -364,6 +392,66 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	/** Check if an agent is human-taken-over. */
 	isTakenOver(agentId: string): boolean {
 		return this.takenOverAgents.has(agentId);
+	}
+
+	/**
+	 * After a human releases a taken-over agent, decide whether it needs monitoring.
+	 *
+	 * While taken over, the human may have driven the agent with a prompt, so it can be
+	 * mid-task at release time — but MainAgent holds no AgentMonitor task for it and would
+	 * therefore never learn when that work finishes. Sample the pane twice: if the content
+	 * changed between samples the agent is actively working, so register a monitor task
+	 * (preHash = the latest sample) whose eventual settle enqueues an agent event that wakes
+	 * MainAgent. If the pane is static, the agent is idle and no monitoring is needed.
+	 *
+	 * Fire-and-forget: called from the release path, errors are swallowed (best-effort).
+	 */
+	async resumeMonitoringAfterRelease(agentId: string): Promise<void> {
+		if (!this.agentMonitor) return;
+		const entry = this.agents.get(agentId);
+		if (!entry) return;
+		// Released back to MainAgent already? If it's still flagged taken-over, the release
+		// didn't happen (or it was re-taken-over) — don't monitor a human-controlled pane.
+		if (this.takenOverAgents.has(agentId)) return;
+		if (this.agentMonitor.isBusy(agentId)) return; // already monitored
+
+		const paneTarget = entry.paneTarget;
+		let firstHash: string;
+		let secondHash: string;
+		try {
+			firstHash = await this.stateDetector.captureHash(paneTarget);
+			if (this.releaseActivitySampleMs > 0) {
+				await new Promise((resolve) => setTimeout(resolve, this.releaseActivitySampleMs));
+			}
+			secondHash = await this.stateDetector.captureHash(paneTarget);
+		} catch (err: any) {
+			logger.warn("main-agent", `resumeMonitoringAfterRelease: pane sample failed for ${agentId}: ${err?.message}`);
+			return;
+		}
+
+		if (firstHash === secondHash) {
+			logger.info("main-agent", `Released agent ${agentId} is idle — no monitoring resumed`);
+			return;
+		}
+
+		// The sample window is async: re-check the guards in case the agent was re-taken-over,
+		// killed, or already picked up by a monitor while we sampled.
+		if (this.takenOverAgents.has(agentId) || !this.agents.has(agentId) || this.agentMonitor.isBusy(agentId)) return;
+
+		const adapter = this.adapterFor(entry);
+		const result = this.agentMonitor.dispatch(agentId, paneTarget, {
+			preHash: secondHash,
+			summary: t("agent_release_task_summary", this.locale),
+			characteristics: adapter.getCharacteristics(),
+		});
+		if (result.dispatched) {
+			logger.info("main-agent", `Resumed monitoring released agent ${agentId} (active after release)`);
+			this.broadcaster.broadcast({
+				type: "system",
+				message: t("agent_active_after_release", this.locale, { agentId }),
+			});
+			this.onAgentChange?.();
+		}
 	}
 
 	/** Get the pane target for an agent (used by ws-handler for terminal input). */
@@ -595,6 +683,7 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 	private async streamLLMResponse(): Promise<{
 		toolCalls: ToolCallContent[];
 		textContent: string;
+		aborted?: boolean;
 	}> {
 		// Flush-before-compress ordering
 		if (this.contextManager.shouldRunMemoryFlush()) {
@@ -636,43 +725,57 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 		// Codex `state.conversation_id`.
 		const promptCacheKey = this.contextManager.getConversationId();
 
+		const signal = this.abortController?.signal;
 		const stream = this.llmClient.stream(messages, {
 			systemPrompt: system,
 			tools: TOOL_DEFINITIONS,
 			temperature: 0.2,
 			thinking: this.thinking,
 			promptCacheKey,
+			signal,
 		});
 
 		let finalResponse: any = null;
 
-		for await (const event of stream) {
-			switch (event.type) {
-				case "text_delta":
-					textContent += event.delta;
-					this.broadcaster.broadcast({ type: "assistant_delta", delta: event.delta });
-					break;
+		try {
+			for await (const event of stream) {
+				switch (event.type) {
+					case "text_delta":
+						textContent += event.delta;
+						this.broadcaster.broadcast({ type: "assistant_delta", delta: event.delta });
+						break;
 
-				case "tool_call_delta": {
-					let acc = toolCallAccumulator.get(event.index);
-					if (!acc) {
-						acc = { id: event.id ?? "", name: event.name ?? "", args: "" };
-						toolCallAccumulator.set(event.index, acc);
+					case "tool_call_delta": {
+						let acc = toolCallAccumulator.get(event.index);
+						if (!acc) {
+							acc = { id: event.id ?? "", name: event.name ?? "", args: "" };
+							toolCallAccumulator.set(event.index, acc);
+						}
+						if (event.id) acc.id = event.id;
+						if (event.name) acc.name = event.name;
+						acc.args += event.argumentsDelta;
+						break;
 					}
-					if (event.id) acc.id = event.id;
-					if (event.name) acc.name = event.name;
-					acc.args += event.argumentsDelta;
-					break;
+
+					case "thinking_delta":
+						// Ignore thinking deltas in chat mode
+						break;
+
+					case "done":
+						finalResponse = event.response;
+						break;
 				}
-
-				case "thinking_delta":
-					// Ignore thinking deltas in chat mode
-					break;
-
-				case "done":
-					finalResponse = event.response;
-					break;
 			}
+		} catch (err: any) {
+			// A stop aborts the in-flight stream. Because no assistant message has been
+			// committed to context yet, dropping the partial response keeps context
+			// consistent (no unpaired tool_calls). Signal an abort so callers return to
+			// idle without persisting a truncated turn. Any non-abort error propagates.
+			if (signal?.aborted || err?.name === "AbortError") {
+				logger.info("main-agent", "LLM stream aborted by stop request");
+				return { toolCalls: [], textContent: "", aborted: true };
+			}
+			throw err;
 		}
 
 		// Report usage
@@ -784,7 +887,11 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			}
 
 			// 4. Next LLM call
-			const { toolCalls: nextToolCalls, textContent } = await this.streamLLMResponse();
+			const { toolCalls: nextToolCalls, textContent, aborted } = await this.streamLLMResponse();
+			if (aborted) {
+				this.finishStopped();
+				return;
+			}
 
 			if (nextToolCalls.length === 0) {
 				// No more tool calls — add text response and back to IDLE
@@ -848,12 +955,18 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			logger.info("main-agent", "Clearing stale stop request — superseded by a new user message");
 			this.stopRequested = false;
 		}
+		// Fresh abort scope for this turn so /stop can interrupt the LLM stream.
+		this.abortController = new AbortController();
 		// Optimistic state: show "executing" immediately so the UI responds fast
 		this.setState("executing");
 		this.contextManager.addMessage({ role: "user", content });
 
 		// Stream LLM response
-		const { toolCalls, textContent } = await this.streamLLMResponse();
+		const { toolCalls, textContent, aborted } = await this.streamLLMResponse();
+		if (aborted) {
+			this.finishStopped();
+			return;
+		}
 
 		if (toolCalls.length > 0) {
 			// Add assistant message to conversation
@@ -884,11 +997,17 @@ export class MainAgent extends EventEmitter<MainAgentEvents> {
 			lines.push(event.paneContent);
 		}
 
+		// Fresh abort scope for this turn so /stop can interrupt the LLM stream.
+		this.abortController = new AbortController();
 		// Optimistic state: show "executing" immediately so the UI responds fast
 		this.setState("executing");
 		this.contextManager.addMessage({ role: "user", content: lines.join("\n") });
 
-		const { toolCalls, textContent } = await this.streamLLMResponse();
+		const { toolCalls, textContent, aborted } = await this.streamLLMResponse();
+		if (aborted) {
+			this.finishStopped();
+			return;
+		}
 
 		if (toolCalls.length > 0) {
 			const assistantBlocks = this.buildAssistantBlocks(textContent, toolCalls);

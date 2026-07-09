@@ -110,6 +110,12 @@ export function handleWebSocket(
 				}
 				mainAgent.setTakenOver(agentId, false);
 				broadcaster.broadcast({ type: "system", message: t("agent_released", locale, { agentId }) });
+				// The human may have driven the agent with a prompt while in control; if the pane
+				// is still changing, resume monitoring so MainAgent is notified when it settles.
+				// Best-effort and async — don't block the release ack on the pane sample.
+				mainAgent.resumeMonitoringAfterRelease(agentId).catch((err) => {
+					logger.warn("ws-handler", `resumeMonitoringAfterRelease failed for ${agentId}: ${err?.message}`);
+				});
 				break;
 			}
 

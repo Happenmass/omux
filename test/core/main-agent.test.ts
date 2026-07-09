@@ -444,6 +444,47 @@ describe("MainAgent State Machine", () => {
 				}),
 			);
 		});
+
+		it("requestStop aborts the in-flight LLM stream and returns to idle immediately", async () => {
+			// A stream that hangs mid-response until aborted. Yields one delta, then parks on a
+			// promise that only rejects with an AbortError when the caller's signal fires —
+			// modeling a long model response that /stop should cut off before completion.
+			const streamStarted = createDeferred();
+			const llm = {
+				stream: vi.fn().mockImplementation((_messages: any, opts: any) => {
+					const signal: AbortSignal | undefined = opts?.signal;
+					return (async function* () {
+						yield { type: "text_delta", delta: "thinking" } as LLMStreamEvent;
+						streamStarted.resolve();
+						await new Promise<void>((_res, rej) => {
+							signal?.addEventListener("abort", () => {
+								const e = new Error("aborted");
+								e.name = "AbortError";
+								rej(e);
+							});
+						});
+					})();
+				}),
+				complete: vi.fn(),
+			} as any;
+
+			const agent = setupAgent([], { llmClient: llm });
+
+			const done = agent.handleMessage("do a long task");
+			await streamStarted.promise; // stream is now parked mid-response
+			expect(agent.state).toBe("executing");
+
+			agent.requestStop();
+			await done;
+
+			// Aborted cleanly: back to idle, latch cleared, no partial assistant message persisted.
+			expect(agent.state).toBe("idle");
+			expect(agent.isStopRequested()).toBe(false);
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: "Execution stopped" }),
+			);
+			expect(mockCtx.addMessage).not.toHaveBeenCalledWith(expect.objectContaining({ role: "assistant" }));
+		});
 	});
 
 	describe("execution control (stop latch)", () => {
@@ -2430,6 +2471,78 @@ describe("MainAgent State Machine", () => {
 		it("getAgentPaneTarget should return undefined for non-existent agent", () => {
 			const agent = setupAgent([]);
 			expect(agent.getAgentPaneTarget("omux-none")).toBeUndefined();
+		});
+	});
+
+	describe("resumeMonitoringAfterRelease", () => {
+		it("resumes monitoring when the released pane is still changing (human drove it via prompt)", async () => {
+			const agent = setupAgent([], { releaseActivitySampleMs: 0 }, { withMonitor: true });
+			agent.restoreAgent("omux-a", { paneTarget: "a:0.0", workingDir: "/a" });
+
+			// Two different hashes across the sample window → content changed → agent is active.
+			mockDetector.captureHash = vi.fn().mockResolvedValueOnce("h1").mockResolvedValueOnce("h2");
+			const dispatchSpy = vi
+				.spyOn((agent as any).agentMonitor, "dispatch")
+				.mockReturnValue({ dispatched: true, task: { taskId: "task_x" } } as any);
+
+			await agent.resumeMonitoringAfterRelease("omux-a");
+
+			// A monitor task is registered with the latest hash as its baseline.
+			expect(dispatchSpy).toHaveBeenCalledWith("omux-a", "a:0.0", expect.objectContaining({ preHash: "h2" }));
+			// The UI is told monitoring resumed.
+			expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+				expect.objectContaining({ type: "system", message: expect.stringContaining("omux-a") }),
+			);
+		});
+
+		it("does nothing when the released pane is static (agent idle)", async () => {
+			const agent = setupAgent([], { releaseActivitySampleMs: 0 }, { withMonitor: true });
+			agent.restoreAgent("omux-a", { paneTarget: "a:0.0", workingDir: "/a" });
+
+			mockDetector.captureHash = vi.fn().mockResolvedValue("same");
+			const dispatchSpy = vi.spyOn((agent as any).agentMonitor, "dispatch");
+
+			await agent.resumeMonitoringAfterRelease("omux-a");
+
+			expect(dispatchSpy).not.toHaveBeenCalled();
+		});
+
+		it("does not sample or dispatch when the agent is still taken over", async () => {
+			const agent = setupAgent([], { releaseActivitySampleMs: 0 }, { withMonitor: true });
+			agent.restoreAgent("omux-a", { paneTarget: "a:0.0", workingDir: "/a" });
+			agent.setTakenOver("omux-a", true);
+
+			mockDetector.captureHash = vi.fn().mockResolvedValueOnce("h1").mockResolvedValueOnce("h2");
+			const dispatchSpy = vi.spyOn((agent as any).agentMonitor, "dispatch");
+
+			await agent.resumeMonitoringAfterRelease("omux-a");
+
+			expect(dispatchSpy).not.toHaveBeenCalled();
+			expect(mockDetector.captureHash).not.toHaveBeenCalled();
+		});
+
+		it("does nothing when the agent is already being monitored", async () => {
+			const agent = setupAgent([], { releaseActivitySampleMs: 0 }, { withMonitor: true });
+			agent.restoreAgent("omux-a", { paneTarget: "a:0.0", workingDir: "/a" });
+			// Pretend a monitor task already exists for this agent.
+			vi.spyOn((agent as any).agentMonitor, "isBusy").mockReturnValue(true);
+
+			mockDetector.captureHash = vi.fn().mockResolvedValueOnce("h1").mockResolvedValueOnce("h2");
+			const dispatchSpy = vi.spyOn((agent as any).agentMonitor, "dispatch");
+
+			await agent.resumeMonitoringAfterRelease("omux-a");
+
+			expect(dispatchSpy).not.toHaveBeenCalled();
+			expect(mockDetector.captureHash).not.toHaveBeenCalled();
+		});
+
+		it("is a no-op for an unknown agent", async () => {
+			const agent = setupAgent([], { releaseActivitySampleMs: 0 }, { withMonitor: true });
+			const dispatchSpy = vi.spyOn((agent as any).agentMonitor, "dispatch");
+
+			await agent.resumeMonitoringAfterRelease("omux-missing");
+
+			expect(dispatchSpy).not.toHaveBeenCalled();
 		});
 	});
 
