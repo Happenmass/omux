@@ -40,7 +40,7 @@ export interface AgentAdapter {
 	/** Human-readable display name */
 	readonly displayName: string;
 
-	/** Model used when LaunchOptions.model is omitted (e.g. "opus", "gpt-5.5") */
+	/** Model used when LaunchOptions.model is omitted (e.g. "opus", "gpt-5.6-sol") */
 	readonly defaultModel: string;
 
 	/**

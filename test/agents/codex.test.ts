@@ -28,7 +28,7 @@ describe("CodexAdapter.launch", () => {
 		vi.useRealTimers();
 	});
 
-	it("should launch with the default gpt-5.5 model for fresh session", async () => {
+	it("should launch with the default gpt-5.6-sol model for fresh session", async () => {
 		const bridge = createMockBridge("");
 		const launchPromise = adapter.launch(bridge, {
 			workingDir: "/tmp/test",
@@ -40,7 +40,7 @@ describe("CodexAdapter.launch", () => {
 		expect(bridge.createSession).toHaveBeenCalledWith("omux-test", { cwd: "/tmp/test" });
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"omux-test:0.0",
-			`codex --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.5`,
+			`codex --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.6-sol`,
 		);
 		expect(bridge.sendEnter).toHaveBeenCalledWith("omux-test:0.0");
 	});
@@ -73,7 +73,7 @@ describe("CodexAdapter.launch", () => {
 
 		expect(bridge.sendText).toHaveBeenCalledWith(
 			"omux-test:0.0",
-			`codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.5`,
+			`codex resume 019d41a7-3a10-7b73-90a6-62ee8fa056f6 --sandbox workspace-write --ask-for-approval never -c 'projects."/tmp/test".trust_level="trusted"' -c check_for_update_on_startup=false --model gpt-5.6-sol`,
 		);
 	});
 });

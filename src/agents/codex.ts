@@ -8,7 +8,7 @@ import { BaseTuiAdapter, pollForExit } from "./base-tui-adapter.js";
 export class CodexAdapter extends BaseTuiAdapter {
 	readonly name = "codex";
 	readonly displayName = "Codex";
-	readonly defaultModel = "gpt-5.5";
+	readonly defaultModel = "gpt-5.6-sol";
 
 	constructor(opts?: { command?: string }) {
 		super("codex", opts);
