@@ -321,7 +321,7 @@ export const createAgent: ToolHandler = {
 				model: {
 					type: "string",
 					description:
-						"Model to launch the agent with, passed through to the underlying CLI via --model. When omitted, the adapter's default is used (Claude Code: opus, Codex: gpt-5.5). Must not contain whitespace.",
+						"Model to launch the agent with, passed through to the underlying CLI via --model. When omitted, the adapter's default is used (Claude Code: opus, Codex: gpt-5.6-sol). Must not contain whitespace.",
 				},
 				resume_id: {
 					type: "string",

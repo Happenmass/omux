@@ -9,27 +9,27 @@ The coding agent you control is **Codex**, an OpenAI CLI-based AI coding assista
 
 ## Model Selection — match the model to the task
 
-`create_agent` accepts an optional `model` parameter, passed through to the CLI via `--model`. When omitted, the sub-agent launches on **`gpt-5.5`**. The value must not contain whitespace.
+`create_agent` accepts an optional `model` parameter, passed through to the CLI via `--model`. When omitted, the sub-agent launches on **`gpt-5.6-sol`**. The value must not contain whitespace.
 
 ```
-create_agent({ agent_name: "...", working_dir: "...", model: "gpt-5.4-mini" })
+create_agent({ agent_name: "...", working_dir: "...", model: "gpt-5.6-terra" })
 ```
 
 Pick the model per task by complexity, stakes, and how fast you need the turnaround:
 
 | Model | Best for | Trade-off |
 | --- | --- | --- |
-| **`gpt-5.5`** (default) | Complex coding, long-running tasks, architecture analysis, research-style investigation | Officially recommended, strongest general Codex model — the safe default under uncertainty |
-| **`gpt-5.4`** | Substantial-but-well-scoped coding tasks | A notch lighter than `gpt-5.5` — faster, cheaper turnaround |
-| **`gpt-5.4-mini`** | Light tasks, narrow sub-agent jobs, low-cost / high-frequency work | Faster and cheaper, but weaker reasoning |
-| **`gpt-5.3-codex-spark`** | Everyday small edits, near-real-time iteration, quick Q&A-style coding | Research preview: fastest but weakest reasoning, and subject to its own usage limits |
+| **`gpt-5.6-sol`** (default) | Complex coding, long-running tasks, architecture analysis, research-style investigation | Strongest current Codex model — the safe default under uncertainty |
+| **`gpt-5.6-terra`** | Everyday implementation, substantial-but-well-scoped coding tasks, normal edit/test loops | Balanced tier for speed and reasoning depth; use when the task is clear and bounded |
+| **`gpt-5.6-luna`** | Light edits, narrow sub-agent jobs, quick Q&A-style coding, low-cost / high-frequency work | Fastest and most affordable tier, but weaker for ambiguous or high-stakes reasoning |
 
 Routing principles:
 
-- **When in doubt, route up.** Anything judgment-heavy, risky (auth/crypto/security, concurrency, irreversible migrations), or cross-cutting (~4+ files, a public/serialized contract) → `gpt-5.5`. The costly misroute is a subtly complex task handed to a lighter model.
-- **Don't overspend on routine work.** Downshift clear, well-specified changes to `gpt-5.4` / `gpt-5.4-mini` — and reach for `gpt-5.3-codex-spark` for trivial, near-real-time edits — to keep execution cheap and fast.
-- **Escalate on a block.** If a lighter model stalls, loops, or produces questionable work, don't keep nudging it — `kill_agent` it and relaunch one tier up (capped at `gpt-5.5`) with its `resume_id` to preserve context.
-- You can also pass any other model slug the Codex CLI accepts (e.g. `gpt-5-codex`).
+- **When in doubt, route up.** Anything judgment-heavy, risky (auth/crypto/security, concurrency, irreversible migrations), or cross-cutting (~4+ files, a public/serialized contract) → `gpt-5.6-sol`. The costly misroute is a subtly complex task handed to a lighter model.
+- **Use Terra for the normal middle.** Clear implementation work that still benefits from agentic coding judgment should usually use `gpt-5.6-terra` instead of jumping straight to Sol.
+- **Don't overspend on routine work.** Downshift trivial, well-specified, low-risk work to `gpt-5.6-luna` to keep execution cheap and fast.
+- **Escalate on a block.** If a lighter model stalls, loops, or produces questionable work, don't keep nudging it — `kill_agent` it and relaunch one tier up (`luna` → `terra` → `sol`) with its `resume_id` to preserve context.
+- Pick from these three Codex tiers unless the user explicitly requests another Codex CLI model slug.
 
 ## Interaction Commands
 

@@ -1,6 +1,6 @@
 {
 	"name": "@happenmass/omux",
-	"version": "4.1.0",
+	"version": "4.1.1",
 	"description": "Chat-based meta-orchestrator that commands coding agents via tmux",
 	"type": "module",
 	"license": "MIT",
@@ -21,8 +21,8 @@
 		"omux"
 	],
 	"bin": {
-		"omux": "./dist/main.js",
-		"cliclaw": "./dist/main.js"
+		"omux": "dist/main.js",
+		"cliclaw": "dist/main.js"
 	},
 	"files": [
 		"dist",
